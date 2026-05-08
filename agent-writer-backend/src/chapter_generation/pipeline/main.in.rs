@@ -330,7 +330,7 @@ where
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    let mut quality_report_before = evaluate_chapter_quality(
+    let quality_report_before = evaluate_chapter_quality(
         &draft.content,
         &context.target.title,
         &scene_craft_plan,
@@ -341,6 +341,8 @@ where
 
     // Targeted revision: if quality report has major/fatal issues, attempt
     // a single revision pass with the ChapterTargetedRevision profile.
+    
+    let mut quality_report_after_revision: Option<ChapterQualityReport> = None;
     if !quality_report_before.fatal_issues.is_empty() || !quality_report_before.major_issues.is_empty() {
         let revision_prompt = build_revision_prompt(
             &draft.content,
@@ -359,6 +361,13 @@ where
             ));
             let revision_messages =
                 vec![serde_json::json!({"role": "user", "content": revision_prompt})];
+            // Record revision provider budget
+            let revision_budget = chapter_generation_provider_budget_for_profile(
+                &config.settings,
+                &revision_messages,
+                crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
+            );
+            record_provider_budget(&context, &revision_budget);
             let revision_result = crate::llm_runtime::chat_text_profile(
                 &config.settings,
                 revision_messages,
@@ -367,23 +376,36 @@ where
             )
             .await;
             if let Ok(revised) = revision_result {
-                let after = evaluate_chapter_quality(
+                // Length validation after revision
+                let length_ok = match chapter_contract_outcome(
                     &revised,
-                    &context.target.title,
-                    &scene_craft_plan,
-                    &[],
-                    context.chapter_contract.min_chars,
-                    context.chapter_contract.max_chars,
-                );
-                if after.overall_score > quality_report_before.overall_score {
-                    draft.content = revised;
-                    draft.output_chars = char_count(&draft.content);
-                    quality_report_before = after;
+                    &context.chapter_contract,
+                    ChapterContractPhase::ModelOutput,
+                ) {
+                    ChapterContractOutcome::Valid => true,
+                    _ => revised.chars().count() >= context.chapter_contract.save_hard_floor_chars
+                        && revised.chars().count() <= context.chapter_contract.save_hard_ceiling_chars,
+                };
+                if length_ok {
+                    let after = evaluate_chapter_quality(
+                        &revised,
+                        &context.target.title,
+                        &scene_craft_plan,
+                        &[],
+                        context.chapter_contract.min_chars,
+                        context.chapter_contract.max_chars,
+                    );
+                    if after.overall_score > quality_report_before.overall_score {
+                        draft.content = revised;
+                        draft.output_chars = char_count(&draft.content);
+                        quality_report_after_revision = Some(after);
+                        
+                    }
                 }
             }
         }
     }
-    let quality_report = quality_report_before;
+    let final_quality = quality_report_after_revision.unwrap_or(quality_report_before.clone());
 
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
@@ -525,11 +547,18 @@ where
                         .filter(|c| c.is_alphanumeric() || *c == '-')
                         .collect::<String>()
                 );
-                let quality_path =
-                    runtime_dir.join(format!("{}.quality_report.json", stem));
+                // Write before/after quality reports
+                let before_path =
+                    runtime_dir.join(format!("{}.quality_report.before.json", stem));
+                let after_path =
+                    runtime_dir.join(format!("{}.quality_report.after.json", stem));
                 let _ = std::fs::write(
-                    &quality_path,
-                    serde_json::to_string_pretty(&quality_report).unwrap_or_default(),
+                    &before_path,
+                    serde_json::to_string_pretty(&quality_report_before).unwrap_or_default(),
+                );
+                let _ = std::fs::write(
+                    &after_path,
+                    serde_json::to_string_pretty(&final_quality).unwrap_or_default(),
                 );
                 Some(artifacts.artifact_refs)
             }
@@ -565,7 +594,7 @@ where
         conflict: None,
         error: None,
         generation_strategy: Some(context.generation_strategy.clone()),
-        quality_report: Some(quality_report.clone()),
+        quality_report: Some(final_quality.clone()),
         warnings,
     });
 
@@ -583,7 +612,7 @@ where
         saved,
         generated_content: draft.content,
         settlement_delta: Box::new(settlement_delta),
-        quality_report: Some(quality_report),
+        quality_report: Some(final_quality),
     }
 }
 

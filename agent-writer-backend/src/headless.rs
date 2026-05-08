@@ -2616,12 +2616,30 @@ Output ONLY the JSON object, no explanation outside. Example:
                 )
             }
             "craft_memory_stats" => {
-                // TODO(craft-memory): wire rusqlite stats when memory connection
-                // is accessible from HeadlessBackend.
+                let memory_path = writer_memory_path(&self.config.data_dir, &self.project.id)?;
+                let conn = rusqlite::Connection::open_with_flags(
+                    &memory_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )
+                .map_err(|e| format!("craft_memory_stats: {}", e))?;
+                let rule_id = params.get("ruleId").and_then(|v| v.as_str());
+                let library = crate::chapter_generation::craft_library_for_stats();
+                let stats: Vec<serde_json::Value> = library
+                    .iter()
+                    .filter(|r| rule_id.is_none_or(|id| r.id == id))
+                    .filter_map(|r| {
+                        crate::writer_agent::memory::get_craft_rule_stats(&conn, &r.id)
+                            .map(|s| serde_json::json!({
+                                "ruleId": s.rule_id,
+                                "acceptedCount": s.accepted_count,
+                                "rejectedCount": s.rejected_count,
+                                "acceptanceRate": s.acceptance_rate(),
+                            }))
+                    })
+                    .collect();
                 to_value(serde_json::json!({
-                    "rules": [],
-                    "total_rules": 0,
-                    "note": "craft_memory_stats requires SQLite connection; not yet wired"
+                    "rules": stats,
+                    "totalRules": library.len(),
                 }))
             }
             "chapter_quality_report" => {
@@ -2651,10 +2669,16 @@ Output ONLY the JSON object, no explanation outside. Example:
             }
             "context_quality_report" => {
                 let chapter_title = required_string(&params, "chapterTitle")?;
+                // Context quality reports are persisted as artifacts during generation.
+                // Check chapter_runtime/{chapter}-*.quality_report.before.json
+                let runtime_dir = project_data_dir(&self.config.data_dir, &self.project.id)
+                    .map(|p| p.join("chapter_runtime"))
+                    .map(|p| p.join("chapter_runtime"))
+                    .unwrap_or_default();
                 to_value(serde_json::json!({
                     "chapterTitle": chapter_title,
-                    "status": "not_yet_runnable",
-                    "note": "context_quality_report requires built chapter context; use from pipeline events"
+                    "artifactPath": runtime_dir.to_string_lossy(),
+                    "note": "Context quality reports are in chapter_runtime artifacts as quality_report.before.json and quality_report.after.json"
                 }))
             }
             "budget_calibration" => {
