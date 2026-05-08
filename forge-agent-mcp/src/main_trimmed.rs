@@ -1,7 +1,10 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use agent_writer_lib::headless::HeadlessBackend;
+use agent_writer_lib::headless::{
+    AnalyzeChapterRequest, AskAgentRequest, AskProjectBrainRequest, BatchGenerateChapterRequest,
+    HeadlessBackend, MetacognitiveRecoveryRequest, ParallelDraftRequest,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -9,8 +12,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 mod dispatch;
 mod tools;
 
-use dispatch::call_tool;
-use tools::tools;
+use dispatch::{classify_error, call_tool, call_backend_action};
 
 const SERVER_NAME: &str = "forge-writer-agent";
 const SERVER_TITLE: &str = "Forge Writer Agent";
@@ -124,7 +126,7 @@ struct JsonRpcMessage {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ToolCallParams {
+struct ToolCallParams {
     name: String,
     #[serde(default)]
     arguments: Value,
@@ -333,7 +335,7 @@ fn initialize_result(params: &Value) -> Value {
     })
 }
 
-pub(crate) fn server_manifest() -> Value {
+fn server_manifest() -> Value {
     json!({
         "serverName": SERVER_NAME,
         "serverTitle": SERVER_TITLE,
@@ -439,8 +441,7 @@ fn write_message(message: &Value) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::tools::{is_read_only_tool, is_destructive_tool, is_open_world_tool};
-    use super::dispatch::classify_error;
+    use super::classify_error;
     use super::*;
 
     fn tool_names() -> Vec<String> {
