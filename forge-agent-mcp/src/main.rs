@@ -1465,59 +1465,98 @@ fn tool_output_schema() -> Value {
 }
 
 fn is_read_only_tool(name: &str) -> bool {
-    name == "forge_manifest"
-        || name.contains("status")
-        || name.contains("list")
-        || name.contains("load")
-        || name.contains("get")
-        || name.contains("check")
-        || name.contains("ledger")
-        || name.contains("trace")
-        || name.contains("timeline")
-        || name.contains("diagnostic")
-        || name.contains("graph")
-        || name.contains("inventory")
-        || name.contains("domain_profile")
-        || name.contains("kernel_status")
-        || name.contains("project_manifest")
-        || name.contains("project_paths")
-        || name.contains("pending")
-        || name.contains("review_queue")
-        || name.contains("story_debt")
-        || name.contains("today_five")
-        || name.contains("reader_compensation")
-        || name.contains("companion")
-        || name.contains("ask_project_brain")
-        || name.contains("analyze")
-        || name.contains("generate_parallel_drafts")
-        || name.contains("agent_tools")
+    matches!(
+        name,
+        "forge_manifest"
+            | "forge_project_manifest"
+            | "forge_project_paths"
+            | "forge_agent_tools"
+            | "forge_effective_tool_inventory"
+            | "forge_agent_kernel_status"
+            | "forge_agent_domain_profile"
+            | "forge_status"
+            | "forge_list_chapters"
+            | "forge_load_chapter"
+            | "forge_chapter_revision"
+            | "forge_lorebook"
+            | "forge_outline"
+            | "forge_list_volumes"
+            | "forge_get_volume_snapshot"
+            | "forge_get_book_state"
+            | "forge_ledger"
+            | "forge_today_five"
+            | "forge_pending_proposals"
+            | "forge_story_review_queue"
+            | "forge_story_debt"
+            | "forge_reader_compensation_review_chain"
+            | "forge_trace"
+            | "forge_inspector_timeline"
+            | "forge_companion_timeline_summary"
+            | "forge_analyze_chapter"
+            | "forge_generate_parallel_drafts"
+            | "forge_analyze_pacing"
+            | "forge_ask_project_brain"
+            | "forge_sprint_plan"
+            | "forge_sprint_progress"
+            | "forge_project_graph_data"
+            | "forge_project_storage_diagnostics"
+            | "forge_list_file_backups"
+            | "forge_check_api_key"
+    )
 }
 
 fn is_destructive_tool(name: &str) -> bool {
-    name == "forge_backend_call"
-        || name.contains("delete")
-        || name.contains("restore_file_backup")
-        || name.contains("restore_project_brain_source_revision")
-        || name.contains("rename")
-        || name.contains("cancel_sprint")
+    matches!(
+        name,
+        "forge_backend_call"
+            | "forge_delete_lore_entry"
+            | "forge_delete_outline_node"
+            | "forge_delete_volume"
+            | "forge_restore_project_brain_source_revision"
+            | "forge_cancel_sprint"
+            | "forge_restore_file_backup"
+            | "forge_rename_chapter_file"
+    )
 }
 
 fn is_idempotent_tool(name: &str) -> bool {
     is_read_only_tool(name)
-        || name.contains("save")
-        || name.contains("set_api_key")
-        || name.contains("pause_sprint")
-        || name.contains("resume_sprint")
+        || matches!(
+            name,
+            "forge_create_chapter"
+                | "forge_save_chapter"
+                | "forge_save_lore_entry"
+                | "forge_save_outline_node"
+                | "forge_update_outline_status"
+                | "forge_reorder_outline_nodes"
+                | "forge_save_volume"
+                | "forge_save_volume_snapshot"
+                | "forge_save_book_state"
+                | "forge_record_writer_operation_durable_save"
+                | "forge_pause_sprint"
+                | "forge_resume_sprint"
+                | "forge_set_api_key"
+        )
 }
 
 fn is_open_world_tool(name: &str) -> bool {
-    name == "forge_backend_call"
-        || name.contains("ask_agent")
-        || name.contains("generate")
-        || name.contains("analyze")
-        || name.contains("metacognitive")
-        || name.contains("project_brain")
-        || name.contains("ingest_external_research")
+    matches!(
+        name,
+        "forge_backend_call"
+            | "forge_ask_agent"
+            | "forge_batch_generate_chapter"
+            | "forge_generate_chapter_autonomous"
+            | "forge_analyze_chapter"
+            | "forge_generate_parallel_drafts"
+            | "forge_analyze_pacing"
+            | "forge_ask_project_brain"
+            | "forge_project_brain_knowledge_graph"
+            | "forge_compare_project_brain_source_revisions"
+            | "forge_restore_project_brain_source_revision"
+            | "forge_cross_reference_brain_nodes"
+            | "forge_ingest_external_research"
+            | "forge_run_metacognitive_recovery"
+    )
 }
 
 fn empty_schema() -> Value {
@@ -1599,4 +1638,139 @@ fn backup_target_schema() -> Value {
             }
         ]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_names() -> Vec<String> {
+        tools()
+            .into_iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn backend_actions_match_specific_tool_surface() {
+        let tool_names = tool_names();
+        for action in BACKEND_ACTIONS {
+            if *action == "manifest" {
+                assert!(
+                    tool_names.iter().any(|name| name == "forge_manifest"),
+                    "manifest must be exposed as forge_manifest"
+                );
+                continue;
+            }
+            let expected = match *action {
+                "load_lorebook" => "forge_lorebook".to_string(),
+                "load_outline" => "forge_outline".to_string(),
+                "effective_agent_tool_inventory" => "forge_effective_tool_inventory".to_string(),
+                "get_project_brain_knowledge_graph" => {
+                    "forge_project_brain_knowledge_graph".to_string()
+                }
+                other => format!("forge_{other}"),
+            };
+            assert!(
+                tool_names.iter().any(|name| name == &expected),
+                "backend action '{action}' is missing specific MCP tool '{expected}'"
+            );
+        }
+    }
+
+    #[test]
+    fn every_specific_tool_has_backend_action_or_manifest_exception() {
+        for name in tool_names() {
+            if name == "forge_backend_call" || name == "forge_manifest" {
+                continue;
+            }
+            let action = match name.as_str() {
+                "forge_lorebook" => "load_lorebook",
+                "forge_outline" => "load_outline",
+                "forge_effective_tool_inventory" => "effective_agent_tool_inventory",
+                "forge_project_brain_knowledge_graph" => "get_project_brain_knowledge_graph",
+                other => other.strip_prefix("forge_").unwrap(),
+            };
+            assert!(
+                BACKEND_ACTIONS.contains(&action),
+                "MCP tool '{name}' is not backed by BACKEND_ACTIONS"
+            );
+        }
+    }
+
+    #[test]
+    fn write_tools_are_not_marked_read_only() {
+        for name in [
+            "forge_create_chapter",
+            "forge_save_chapter",
+            "forge_rename_chapter_file",
+            "forge_save_lore_entry",
+            "forge_delete_lore_entry",
+            "forge_save_outline_node",
+            "forge_delete_outline_node",
+            "forge_update_outline_status",
+            "forge_reorder_outline_nodes",
+            "forge_save_volume",
+            "forge_delete_volume",
+            "forge_save_volume_snapshot",
+            "forge_save_book_state",
+            "forge_observe",
+            "forge_apply_feedback",
+            "forge_record_implicit_ghost_rejection",
+            "forge_approve_writer_operation",
+            "forge_record_writer_operation_durable_save",
+            "forge_start_sprint",
+            "forge_pause_sprint",
+            "forge_resume_sprint",
+            "forge_cancel_sprint",
+            "forge_checkpoint_sprint",
+            "forge_record_sprint_budget_usage",
+            "forge_ingest_external_research",
+            "forge_restore_file_backup",
+            "forge_set_api_key",
+        ] {
+            assert!(!is_read_only_tool(name), "{name} must not be read-only");
+        }
+    }
+
+    #[test]
+    fn tool_annotations_cover_known_destructive_and_open_world_cases() {
+        for name in [
+            "forge_backend_call",
+            "forge_delete_lore_entry",
+            "forge_delete_outline_node",
+            "forge_delete_volume",
+            "forge_restore_project_brain_source_revision",
+            "forge_cancel_sprint",
+            "forge_restore_file_backup",
+            "forge_rename_chapter_file",
+        ] {
+            assert!(is_destructive_tool(name), "{name} must be destructive");
+        }
+
+        for name in [
+            "forge_ask_agent",
+            "forge_generate_chapter_autonomous",
+            "forge_project_brain_knowledge_graph",
+            "forge_ingest_external_research",
+            "forge_run_metacognitive_recovery",
+        ] {
+            assert!(is_open_world_tool(name), "{name} must be open-world");
+        }
+    }
+
+    #[test]
+    fn tool_result_uses_structured_content_envelope() {
+        let result = tool_result(json!({ "value": 1 }), false);
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["structuredContent"]["ok"], true);
+        assert_eq!(result["structuredContent"]["data"]["value"], 1);
+        assert!(result["structuredContent"]["error"].is_null());
+
+        let error = tool_error_result("failed".to_string());
+        assert_eq!(error["isError"], true);
+        assert_eq!(error["structuredContent"]["ok"], false);
+        assert_eq!(error["structuredContent"]["error"]["kind"], "backend");
+        assert_eq!(error["structuredContent"]["error"]["message"], "failed");
+    }
 }

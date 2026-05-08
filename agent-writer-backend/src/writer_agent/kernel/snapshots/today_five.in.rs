@@ -270,16 +270,12 @@ impl WriterAgentKernel {
                 .iter()
                 .filter(|f| matches!(f.action, crate::writer_agent::feedback::FeedbackAction::Snoozed))
                 .count();
-            let accept_pct = if total_feedback > 0 {
-                (accepted_count * 100) / total_feedback
-            } else {
-                0
-            };
-            let ignore_pct = if total_feedback > 0 {
-                (ignored_count * 100) / total_feedback
-            } else {
-                0
-            };
+            let accept_pct = (accepted_count * 100)
+                .checked_div(total_feedback)
+                .unwrap_or(0);
+            let ignore_pct = (ignored_count * 100)
+                .checked_div(total_feedback)
+                .unwrap_or(0);
             format!(
                 "{} | 你的写作习惯: 接受建议 {}%, 忽略提醒 {}%",
                 guard_detail, accept_pct, ignore_pct

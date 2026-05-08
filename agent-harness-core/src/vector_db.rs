@@ -452,13 +452,13 @@ fn approx_hash(embedding: &[f32], table: usize) -> u64 {
     let mut hash = 0u64;
     for bit in 0..APPROX_BITS_PER_TABLE {
         let mut acc = 0.0f32;
-        for dim in 0..dims {
+        for (dim, value) in embedding.iter().take(dims).enumerate() {
             let coeff = if pseudo_sign(table, bit, dim) {
                 1.0
             } else {
                 -1.0
             };
-            acc += embedding[dim] * coeff;
+            acc += value * coeff;
         }
         if acc >= 0.0 {
             hash |= 1u64 << bit;

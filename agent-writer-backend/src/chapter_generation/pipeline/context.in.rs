@@ -213,8 +213,7 @@ fn extract_closing_image(text: &str) -> Option<String> {
     let last = text
         .split(['。', '！', '？', '!', '?', '\n'])
         .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .last()?;
+        .rfind(|line| !line.is_empty())?;
     Some(compact_line(last, 90))
 }
 

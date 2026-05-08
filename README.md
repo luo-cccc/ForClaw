@@ -1,6 +1,6 @@
 # Forge Agent
 
-This folder is the headless backend-only Forge writer agent. It keeps the original backend/kernel capabilities from `C:\Users\Msi\Desktop\Forge` and adds a stdio MCP server so the agent can be scheduled as a plugin by MCP-capable hosts.
+This folder is the headless backend-only Forge writer agent. It keeps the original Forge backend/kernel capabilities and adds a stdio MCP server so the agent can be scheduled as a plugin by MCP-capable hosts.
 
 ## What Is Kept
 
@@ -34,7 +34,7 @@ $env:OPENAI_MODEL="deepseek/deepseek-v4-flash"
 
 ## MCP Tools
 
-The stdio entrypoint is `scripts\forge-agent-mcp.cmd`. It runs the compiled `forge-agent-mcp.exe` in stdio mode, keeps logs on stderr, and leaves stdout for newline-delimited JSON-RPC responses only.
+The stdio entrypoint is `scripts\forge-agent-mcp.cmd`. It runs the compiled `forge-agent-mcp.exe` in stdio mode, keeps logs on stderr, and leaves stdout for newline-delimited JSON-RPC responses only. The bundled plugin starts it as `cmd /c scripts\forge-agent-mcp.cmd stdio` with `cwd` at the repository root, so the command and default data directory stay relative to the checked-out project.
 
 `forge_backend_call` is the stable generic dispatcher for backend actions. Specific tools are also exposed for client discovery and plugin scheduling:
 
@@ -84,5 +84,7 @@ What is intentionally not kept is the original Tauri/React desktop UI and render
 ```powershell
 cargo check -p forge-agent-mcp
 cargo test -p agent-harness-core
-cargo test -p agent-writer
+cargo test -p agent-writer --lib
 ```
+
+The desktop/Tauri shell is available only when explicitly built with `cargo test -p agent-writer --features desktop` or `cargo build -p agent-writer --features desktop`. The default MCP/headless build path does not require local Tauri config, icons, or generated desktop assets.

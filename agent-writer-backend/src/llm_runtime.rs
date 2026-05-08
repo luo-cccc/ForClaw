@@ -352,8 +352,7 @@ fn json_retry_options(first: LlmRequestOptions) -> Option<LlmRequestOptions> {
     let retry_max_tokens = first
         .max_tokens
         .saturating_mul(2)
-        .max(DEFAULT_JSON_MAX_TOKENS)
-        .min(JSON_RETRY_MAX_TOKENS_CAP);
+        .clamp(DEFAULT_JSON_MAX_TOKENS, JSON_RETRY_MAX_TOKENS_CAP);
     if retry_max_tokens <= first.max_tokens && first.temperature <= 0.0 {
         return None;
     }

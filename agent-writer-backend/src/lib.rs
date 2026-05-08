@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "desktop"), allow(dead_code, unused_imports))]
+
 mod agent_runtime;
 mod agent_status;
 mod ambient_agents;
@@ -57,15 +59,21 @@ pub(crate) use writer_observer::{
     refresh_kernel_canon_from_lorebook, render_writer_context_pack,
 };
 
+#[cfg(feature = "desktop")]
 use tauri::Manager;
 
+#[cfg(feature = "desktop")]
 use commands::backups::{get_project_storage_diagnostics, list_file_backups, restore_file_backup};
+#[cfg(feature = "desktop")]
 use commands::chapters::{
     create_chapter, get_chapter_revision, load_chapter, read_project_dir, rename_chapter_file,
     save_chapter,
 };
+#[cfg(feature = "desktop")]
 use commands::diagnostics::{export_diagnostic_logs, export_writer_agent_trajectory};
+#[cfg(feature = "desktop")]
 use commands::editor::{abort_editor_prediction, report_editor_state, report_semantic_lint_state};
+#[cfg(feature = "desktop")]
 use commands::generation::{
     analyze_chapter, analyze_pacing, ask_project_brain, batch_generate_chapter,
     cancel_supervised_sprint, checkpoint_supervised_sprint, generate_chapter_autonomous,
@@ -73,20 +81,27 @@ use commands::generation::{
     pause_supervised_sprint, record_supervised_sprint_budget_usage, repair_chapter_state,
     resume_supervised_sprint, start_supervised_sprint,
 };
+#[cfg(feature = "desktop")]
 use commands::graph::{
     compare_project_brain_source_revisions, cross_reference_brain_nodes,
     get_project_brain_knowledge_graph, get_project_graph_data, ingest_external_research,
     restore_project_brain_source_revision,
 };
+#[cfg(feature = "desktop")]
 use commands::lore::{delete_lore_entry, get_lorebook, save_lore_entry};
+#[cfg(feature = "desktop")]
 use commands::manual_agent::ask_agent;
+#[cfg(feature = "desktop")]
 use commands::metacognitive_recovery::run_metacognitive_recovery;
+#[cfg(feature = "desktop")]
 use commands::outline::{
     delete_outline_node, delete_volume, get_book_state, get_outline, get_volume_snapshot,
     list_volumes, reorder_outline_nodes, save_book_state, save_outline_node, save_volume,
     save_volume_snapshot, update_outline_status,
 };
+#[cfg(feature = "desktop")]
 use commands::settings::{check_api_key, set_api_key};
+#[cfg(feature = "desktop")]
 use commands::writer_agent::{
     agent_observe, apply_proposal_feedback, approve_writer_operation, get_agent_domain_profile,
     get_agent_kernel_status, get_agent_tools, get_ambient_entity_hints,
@@ -98,6 +113,7 @@ use commands::writer_agent::{
 };
 pub(crate) use manual_agent::ManualAgentTurn;
 
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenvy::dotenv().ok();
@@ -235,4 +251,9 @@ pub fn run() {
         tracing::error!("{}", message);
         let _ = msgbox::create("Agent-Writer Error", &message, msgbox::IconType::Error);
     }
+}
+
+#[cfg(not(feature = "desktop"))]
+pub fn run() {
+    panic!("agent-writer desktop runner is unavailable without the `desktop` feature");
 }

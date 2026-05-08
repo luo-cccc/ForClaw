@@ -155,7 +155,7 @@ Use the exact `task` and `model` reported by Forge. A smaller approval does not 
 
 ## Stable Response Contract
 
-All MCP tool results use:
+All successful `tools/call` JSON-RPC responses return a standard MCP tool result. The stable Forge business envelope is in `result.structuredContent`:
 
 ```json
 {
@@ -179,6 +179,10 @@ For backend failures:
 ```
 
 JSON-RPC parse, invalid request, and unknown method failures use JSON-RPC error responses rather than this tool envelope.
+
+The MCP result also includes human-readable `result.content` and `result.isError`. Callers that need machine-readable state should read `result.structuredContent.ok`, `result.structuredContent.data`, and `result.structuredContent.error`.
+
+Tool annotations in `tools/list` are scheduling hints only. Callers must still use the context and approval rules in this document for write-sensitive actions.
 
 ## Caller Rules
 

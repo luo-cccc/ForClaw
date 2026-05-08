@@ -498,7 +498,7 @@ where
     PipelineTerminal::Completed {
         saved,
         generated_content: draft.content,
-        settlement_delta,
+        settlement_delta: Box::new(settlement_delta),
     }
 }
 

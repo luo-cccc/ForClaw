@@ -5,12 +5,16 @@ description = "AI Novel Writing Desktop App"
 authors = ["luo-cccc"]
 edition = "2021"
 
+[features]
+default = []
+desktop = ["dep:tauri-build"]
+
 [lib]
 name = "agent_writer_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
 agent-harness-core = { path = "../agent-harness-core" }

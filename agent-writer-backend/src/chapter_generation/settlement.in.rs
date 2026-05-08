@@ -119,7 +119,6 @@ pub fn build_basic_chapter_settlement_delta(
         repairable: true,
         reader_takeaway: Some(reader_takeaway),
         emotional_debt_cues,
-        ..Default::default()
     }
 }
 
@@ -713,7 +712,7 @@ pub fn replay_settlement_extraction(
     memory: &WriterMemory,
 ) -> SettlementReplayResult {
     let replayed = build_basic_chapter_settlement_delta(
-        &String::new(),
+        "",
         &original.chapter_title,
         &original.chapter_revision,
         generated_content,

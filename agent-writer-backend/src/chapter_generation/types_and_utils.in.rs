@@ -977,7 +977,7 @@ pub enum PipelineTerminal {
     Completed {
         saved: SaveGeneratedChapterOutput,
         generated_content: String,
-        settlement_delta: ChapterSettlementDelta,
+        settlement_delta: Box<ChapterSettlementDelta>,
     },
     Conflict(SaveConflict),
     Failed(ChapterGenerationError),
@@ -1008,19 +1008,14 @@ pub enum ChapterContractOutcome {
     OverSaveCeiling,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationStrategy {
     InteractiveFastDraft,
+    #[default]
     InteractiveSafeDraft,
     BackgroundLongChapter,
     RepairHeavyMode,
-}
-
-impl Default for GenerationStrategy {
-    fn default() -> Self {
-        Self::InteractiveSafeDraft
-    }
 }
 
 pub fn char_count(text: &str) -> usize {

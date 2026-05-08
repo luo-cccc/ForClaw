@@ -957,12 +957,13 @@ pub fn build_chapter_generation_spine(
     compiled_input: Option<&CompiledInput>,
     _memory: &crate::writer_agent::memory::WriterMemory,
 ) -> ChapterContextSpine {
-    let mut spine = ChapterContextSpine::default();
-
-    spine.frozen_prefix = format!(
-        "Chapter generation contract for '{}'. Output: chapter text only.",
-        target.title
-    );
+    let mut spine = ChapterContextSpine {
+        frozen_prefix: format!(
+            "Chapter generation contract for '{}'. Output: chapter text only.",
+            target.title
+        ),
+        ..Default::default()
+    };
 
     if let Some(c) = contract {
         spine.project_stable = format!(

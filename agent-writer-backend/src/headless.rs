@@ -2860,7 +2860,7 @@ Output ONLY the JSON object, no explanation outside. Example:
                     events,
                     saved: Some(saved),
                     generated_content: Some(generated_content),
-                    settlement_delta: Some(settlement_delta),
+                    settlement_delta: Some(*settlement_delta),
                     conflict: None,
                     error: None,
                 })
@@ -2932,7 +2932,7 @@ Output ONLY the JSON object, no explanation outside. Example:
         settlement_delta: &crate::chapter_generation::ChapterSettlementDelta,
     ) {
         let project_id = self.project.id.clone();
-        let precomputed_result = self.lock_kernel().ok().and_then(|kernel| {
+        let precomputed_result = self.lock_kernel().ok().map(|kernel| {
             let created_at = kernel
                 .memory
                 .latest_chapter_result(&project_id, &settlement_delta.chapter_title)
@@ -2941,7 +2941,7 @@ Output ONLY the JSON object, no explanation outside. Example:
                 .filter(|result| result.chapter_revision == settlement_delta.chapter_revision)
                 .map(|result| result.created_at)
                 .unwrap_or_else(now_ms);
-            Some(crate::writer_agent::memory::ChapterResultSummary {
+            crate::writer_agent::memory::ChapterResultSummary {
                 id: 0,
                 project_id: project_id.clone(),
                 chapter_title: settlement_delta.chapter_title.clone(),
@@ -2958,7 +2958,7 @@ Output ONLY the JSON object, no explanation outside. Example:
                     settlement_delta.chapter_title, settlement_delta.chapter_revision
                 ),
                 created_at,
-            })
+            }
         });
         let observation = chapter_save_observation(
             &self.project.id,
@@ -5263,7 +5263,7 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0) as u64
+        .unwrap_or(0)
 }
 
 fn required_string(params: &serde_json::Value, key: &str) -> Result<String, String> {

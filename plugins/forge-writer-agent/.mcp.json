@@ -1,14 +1,13 @@
 {
   "mcpServers": {
     "forge-writer-agent": {
-      "command": "C:\\Users\\Msi\\Desktop\\Forge-agent\\scripts\\forge-agent-mcp.cmd",
+      "command": "cmd",
       "args": [
+        "/c",
+        "scripts\\forge-agent-mcp.cmd",
         "stdio"
       ],
-      "cwd": "C:\\Users\\Msi\\Desktop\\Forge-agent",
-      "env": {
-        "FORGE_AGENT_DATA_DIR": "C:\\Users\\Msi\\Desktop\\Forge-agent\\.forge-agent-data"
-      }
+      "cwd": "..\\.."
     }
   }
 }

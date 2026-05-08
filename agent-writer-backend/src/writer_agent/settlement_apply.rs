@@ -288,8 +288,9 @@ pub fn apply_chapter_settlement_delta(
             for entity_name in &known_entities {
                 if fact_line.contains(entity_name.as_str()) {
                     let fact_key = format!("fact-{}", crate::storage::content_revision(fact_line));
-                    if let Ok(_) =
-                        memory.update_canon_attribute(entity_name, &fact_key, fact_line, 0.5)
+                    if memory
+                        .update_canon_attribute(entity_name, &fact_key, fact_line, 0.5)
+                        .is_ok()
                     {
                         inserted = true;
                     }

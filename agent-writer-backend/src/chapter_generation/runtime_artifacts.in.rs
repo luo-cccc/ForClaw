@@ -66,17 +66,17 @@ pub fn persist_chapter_runtime_artifacts(
     write_json_file(&replay_path, &replay)?;
 
     let mut artifact_refs = vec![
-        path_ref(&project_dir, &intent_path),
-        path_ref(&project_dir, &evidence_path),
-        path_ref(&project_dir, &rule_stack_path),
-        path_ref(&project_dir, &trace_path),
-        path_ref(&project_dir, &scene_plan_path),
-        path_ref(&project_dir, &settlement_path),
-        path_ref(&project_dir, &length_path),
-        path_ref(&project_dir, &replay_path),
+        path_ref(project_dir, &intent_path),
+        path_ref(project_dir, &evidence_path),
+        path_ref(project_dir, &rule_stack_path),
+        path_ref(project_dir, &trace_path),
+        path_ref(project_dir, &scene_plan_path),
+        path_ref(project_dir, &settlement_path),
+        path_ref(project_dir, &length_path),
+        path_ref(project_dir, &replay_path),
     ];
     if context.compiled_input.is_some() {
-        artifact_refs.push(path_ref(&project_dir, &compiled_input_path));
+        artifact_refs.push(path_ref(project_dir, &compiled_input_path));
     }
 
     Ok(PersistedChapterRuntimeArtifacts {

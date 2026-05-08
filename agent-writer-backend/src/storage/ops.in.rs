@@ -352,13 +352,13 @@ mod tests {
 
     #[test]
     fn generated_local_project_id_is_stable_and_path_safe() {
-        let id = generated_local_project_id(std::path::Path::new("C:/Users/Msi/AppData/Forge"));
+        let id = generated_local_project_id(std::path::Path::new("C:/Example/AppData/Forge"));
 
         assert!(id.starts_with("local-"));
         assert!(valid_project_id(&id));
         assert_eq!(
             id,
-            generated_local_project_id(std::path::Path::new("C:/Users/Msi/AppData/Forge"))
+            generated_local_project_id(std::path::Path::new("C:/Example/AppData/Forge"))
         );
     }
 

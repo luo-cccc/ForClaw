@@ -380,8 +380,6 @@ fn populate_memory_from_report(
     for ch in &report.identified_characters {
         let role = if ch.kind.contains("主角") || ch.kind.contains("protagonist") {
             "protagonist"
-        } else if ch.kind.contains("反派") || ch.kind.contains("antagonist") {
-            "supporting"
         } else {
             "supporting"
         };
@@ -453,9 +451,7 @@ fn build_project_intake_report_from_text(text: &str) -> ProjectIntakeReport {
     let mut evidence_refs = Vec::new();
 
     // Extract character candidates: look for name patterns (2-3 Chinese chars followed by descriptors)
-    let sentences: Vec<&str> = text
-        .split(|c| c == '。' || c == '！' || c == '？' || c == '\n')
-        .collect();
+    let sentences: Vec<&str> = text.split(['。', '！', '？', '\n']).collect();
     let mut seen_names = std::collections::HashSet::new();
     for sentence in &sentences {
         let chars: Vec<char> = sentence.chars().collect();
@@ -554,10 +550,7 @@ fn build_project_intake_report_from_text(text: &str) -> ProjectIntakeReport {
         open_promises: promise_candidates,
         style_fingerprint: IntakeStyleFingerprint {
             avg_sentence_length: text.chars().count() as f64 / sentences.len().max(1) as f64,
-            dialogue_ratio: text
-                .chars()
-                .filter(|c| *c == '"' || *c == '\"' || *c == '「')
-                .count() as f64
+            dialogue_ratio: text.chars().filter(|c| *c == '"' || *c == '「').count() as f64
                 / text.chars().count().max(1) as f64,
             pov_type: "unknown".into(),
             common_phrases: Vec::new(),

@@ -1,4 +1,5 @@
 impl WriterMemory {
+    #[allow(clippy::too_many_arguments)]
     pub fn add_promise(
         &self,
         kind: &str,
@@ -18,6 +19,7 @@ impl WriterMemory {
         Ok(self.conn.last_insert_rowid())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_promise_with_status_flags(
         &self,
         kind: &str,
