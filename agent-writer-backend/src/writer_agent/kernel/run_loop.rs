@@ -401,8 +401,11 @@ impl WriterAgentKernel {
         Ok(result)
     }
 
-    #[allow(dead_code)]
-    fn compile_execution_plan(task: &TaskPacket, run_id: &str, now_ms: u64) -> ExecutionPlan {
+    pub(crate) fn compile_execution_plan(
+        task: &TaskPacket,
+        run_id: &str,
+        now_ms: u64,
+    ) -> ExecutionPlan {
         let mut plan = compile_plan(task, &format!("plan-{}", run_id), now_ms);
         for step in &mut plan.steps {
             if step.goal.contains("draft") {

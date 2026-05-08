@@ -214,13 +214,14 @@ where
     pub async fn run(mut self) -> Result<WriterAgentRunResult, String> {
         self.agent
             .add_user_message(self.request.user_instruction.clone());
+        let mut plan = super::WriterAgentKernel::compile_execution_plan(
+            &self.task_packet,
+            &self.task_packet.id,
+            crate::agent_runtime::now_ms(),
+        );
         let answer = self
             .agent
-            .run(
-                &self.request.user_instruction,
-                self.request.frontend_state.has_lore,
-                self.request.frontend_state.has_outline,
-            )
+            .run_with_plan(&mut plan, &self.request.user_instruction)
             .await?;
         self.trace_refs.push(self.task_packet.id.clone());
         Ok(WriterAgentRunResult {
