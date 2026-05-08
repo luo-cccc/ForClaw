@@ -1,4 +1,5 @@
 pub mod agent_loop;
+pub mod budget_calibration;
 pub mod compaction;
 pub mod context_pack;
 pub mod context_quality;
@@ -18,6 +19,9 @@ pub mod tool_registry;
 pub mod vector_db;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
+pub use budget_calibration::{
+    estimate_tokens, record_usage, BudgetCalibration, CalibrationStore,
+};
 pub use compaction::{
     anchor_latest_user_message, compact_messages, compact_messages_with_trigger,
     estimate_message_tokens, find_safe_boundary, should_compact, CompactionConfig,
