@@ -69,7 +69,9 @@ static CALIBRATION: std::sync::LazyLock<Mutex<CalibrationStore>> =
 
 pub fn record_usage(model: &str, actual_input_tokens: u64, total_chars: usize) {
     if let Ok(mut store) = CALIBRATION.lock() {
-        store.get_or_create(model).record(actual_input_tokens, total_chars);
+        store
+            .get_or_create(model)
+            .record(actual_input_tokens, total_chars);
     }
 }
 

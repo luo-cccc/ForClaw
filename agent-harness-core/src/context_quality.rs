@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::context_pack::PackedContext;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,8 +52,7 @@ pub fn evaluate_context_quality(
     let truncation_risk = if packed.sources.is_empty() {
         0.0
     } else {
-        packed.sources.iter().filter(|s| s.truncated).count() as f32
-            / packed.sources.len() as f32
+        packed.sources.iter().filter(|s| s.truncated).count() as f32 / packed.sources.len() as f32
     };
 
     let core_types = ["outline", "lorebook", "chapter", "project_brain"];
@@ -63,9 +62,8 @@ pub fn evaluate_context_quality(
         .count();
     let grounding_quality = diverse_count as f32 / core_types.len() as f32;
 
-    let overall_score = source_coverage * 0.4
-        + (1.0 - truncation_risk) * 0.35
-        + grounding_quality * 0.25;
+    let overall_score =
+        source_coverage * 0.4 + (1.0 - truncation_risk) * 0.35 + grounding_quality * 0.25;
 
     let mut warnings = Vec::new();
     if truncation_risk > 0.3 {
@@ -107,7 +105,7 @@ pub fn evaluate_context_quality(
 #[cfg(test)]
 mod context_quality_tests {
     use super::*;
-    use crate::context_pack::{ContextSourceReport, PackedContext, ContextBudgetReport};
+    use crate::context_pack::{ContextBudgetReport, ContextSourceReport, PackedContext};
 
     fn make_packed(types: &[&str], truncated_mask: &[bool]) -> PackedContext {
         PackedContext {
@@ -139,14 +137,18 @@ mod context_quality_tests {
     fn empty_input_returns_sufficient() {
         let packed = make_packed(&[], &[]);
         let report = evaluate_context_quality("r1", &packed, &[]);
-        assert_eq!(report.recommendation, ContextQualityRecommendation::Sufficient);
+        assert_eq!(
+            report.recommendation,
+            ContextQualityRecommendation::Sufficient
+        );
         assert!((report.overall_score - 0.75).abs() < 0.01);
     }
 
     #[test]
     fn missing_required_source_detected() {
         let packed = make_packed(&["outline"], &[false]);
-        let report = evaluate_context_quality("r2", &packed, &["outline".into(), "lorebook".into()]);
+        let report =
+            evaluate_context_quality("r2", &packed, &["outline".into(), "lorebook".into()]);
         assert_eq!(report.source_coverage, 0.5);
         assert!(report.missing_evidence.contains(&"lorebook".to_string()));
     }
@@ -161,9 +163,14 @@ mod context_quality_tests {
 
     #[test]
     fn all_sources_present_all_clean() {
-        let packed = make_packed(&["outline", "lorebook", "chapter", "project_brain"], &[false; 4]);
+        let packed = make_packed(
+            &["outline", "lorebook", "chapter", "project_brain"],
+            &[false; 4],
+        );
         let required: Vec<String> = ["outline", "lorebook", "chapter"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let report = evaluate_context_quality("r4", &packed, &required);
         assert_eq!(report.source_coverage, 1.0);
         assert_eq!(report.grounding_quality, 1.0);
@@ -173,7 +180,14 @@ mod context_quality_tests {
     #[test]
     fn critical_when_score_below_threshold() {
         let packed = make_packed(&[], &[]);
-        let report = evaluate_context_quality("r5", &packed, &["outline".into(), "lorebook".into(), "chapter".into()]);
-        assert!(matches!(report.recommendation, ContextQualityRecommendation::Critical { .. }));
+        let report = evaluate_context_quality(
+            "r5",
+            &packed,
+            &["outline".into(), "lorebook".into(), "chapter".into()],
+        );
+        assert!(matches!(
+            report.recommendation,
+            ContextQualityRecommendation::Critical { .. }
+        ));
     }
 }

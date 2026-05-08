@@ -116,7 +116,12 @@ mod recovery_tests {
 
     #[test]
     fn context_overflow_suggests_shrink() {
-        let bundle = classify_failure("r2", "context_length_exceeded: context overflow", "step-2", &[]);
+        let bundle = classify_failure(
+            "r2",
+            "context_length_exceeded: context overflow",
+            "step-2",
+            &[],
+        );
         assert_eq!(
             bundle.suggested_action,
             RecoveryAction::ShrinkContext { max_chars: 16000 }

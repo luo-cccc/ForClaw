@@ -58,9 +58,15 @@ pub enum StepStatus {
     #[default]
     Pending,
     Active,
-    Completed { evidence: Vec<String> },
-    Failed { reason: String },
-    Skipped { reason: String },
+    Completed {
+        evidence: Vec<String>,
+    },
+    Failed {
+        reason: String,
+    },
+    Skipped {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
