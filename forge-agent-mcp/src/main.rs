@@ -436,11 +436,10 @@ fn write_message(message: &Value) -> Result<(), String> {
         .map_err(|error| format!("stdout flush failed: {}", error))
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::tools::{is_read_only_tool, is_destructive_tool, is_open_world_tool};
     use super::dispatch::classify_error;
+    use super::tools::{is_destructive_tool, is_open_world_tool, is_read_only_tool};
     use super::*;
 
     fn tool_names() -> Vec<String> {

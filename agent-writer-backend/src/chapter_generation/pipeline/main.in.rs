@@ -69,7 +69,7 @@ where
         open_promise_count,
     };
 
-    let mut context = match build_chapter_context(&config.project, build_input) {
+    let mut context = match build_chapter_context(&config.project, build_input).await {
         Ok(context) => context,
         Err(error) => {
             emit(ChapterGenerationEvent::failed(&request_id, error.clone()));

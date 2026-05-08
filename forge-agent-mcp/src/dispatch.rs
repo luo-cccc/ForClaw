@@ -4,9 +4,7 @@ use agent_writer_lib::headless::{
 };
 use serde_json::{json, Value};
 
-use crate::{
-    tool_result, tool_error_result, ErrorKind, ToolCallParams, server_manifest,
-};
+use crate::{server_manifest, tool_error_result, tool_result, ErrorKind, ToolCallParams};
 
 pub(crate) fn classify_error(_tool_name: &str, error: &str) -> ErrorKind {
     let lower = error.to_ascii_lowercase();
@@ -317,4 +315,3 @@ pub(crate) async fn call_backend_action(
         _ => backend.dispatch(action, params),
     }
 }
-

@@ -78,7 +78,7 @@ pub fn curated_context_summary(memory: &crate::writer_agent::memory::WriterMemor
     format!("## 关键信息\n{}", lines.join("\n"))
 }
 
-pub fn build_chapter_context(
+pub async fn build_chapter_context(
     project: &dyn ChapterGenerationProject,
     input: BuildChapterContextInput,
 ) -> Result<BuiltChapterContext, ChapterGenerationError> {
@@ -255,11 +255,8 @@ pub fn build_chapter_context(
         }
     }
 
-    // TODO(parallel): load_lorebook, select_rag_chunks, and load_chapter are
-    // independent read-only operations that could run in parallel via
-    // tokio::try_join!. Blocked because build_chapter_context is sync, and
-    // making it async requires converting ChapterGenerationProject trait
-    // methods and all callers in pipeline/main.in.rs and headless.rs.
+    // Read-only sources: now parallelizable since build_chapter_context is async.
+    // Future: wrap load_lorebook, brain queries, and chapter loads in tokio::join!.
     let lore_entries = project
         .load_lorebook()
         .map_err(|e| ChapterGenerationError::new("lorebook_load_failed", e, true))?;
