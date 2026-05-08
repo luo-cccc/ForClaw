@@ -1,0 +1,90 @@
+[
+  {
+    "id": "scene_objective",
+    "category": "structure",
+    "name": "场景目标",
+    "appliesWhen": ["chapter_draft", "scene_transition"],
+    "instruction": "每场戏必须有即时目标和阻力。角色想要什么 + 什么阻碍 = 戏剧张力。没有这对矛盾的段落不是戏，是说明文。",
+    "antiPatterns": ["角色被动跟随事件", "只描述环境氛围无行动意图"],
+    "diagnosticSignals": ["scene_causality", "character_choice"],
+    "revisionHint": "找出场景中最想要某物的角色，给目标加一个当前场景内可感知的阻碍。",
+    "tokenCostHint": 80
+  },
+  {
+    "id": "conflict_pressure",
+    "category": "structure",
+    "name": "冲突压力",
+    "appliesWhen": ["chapter_draft", "scene_transition", "climax"],
+    "instruction": "冲突必须改变局面——选择、代价、信息三者至少变化其一。解决了冲突却没改变这三者中的任何一个，冲突是装饰。",
+    "antiPatterns": ["冲突后一切照旧", "角色做了选择但没有付出代价"],
+    "diagnosticSignals": ["scene_causality", "character_choice"],
+    "revisionHint": "在冲突结束后加一个具体代价：失去信任、消耗资源、暴露弱点、做出无法撤回的选择。",
+    "tokenCostHint": 85
+  },
+  {
+    "id": "dialogue_function",
+    "category": "dialogue",
+    "name": "对话功能",
+    "appliesWhen": ["chapter_draft", "dialogue_scene"],
+    "instruction": "对话必须改变权力、关系、信息或选择。角色不能说只是解释背景——台词要试探、回避、威胁、隐瞒或带代价地承认。",
+    "antiPatterns": ["角色轮流讲背景资料", "对话结束局面完全不变"],
+    "diagnosticSignals": ["dialogue_function"],
+    "revisionHint": "检查每段对话：它改变了什么？什么都没改的，删掉或改成角色在回避/试探。",
+    "tokenCostHint": 90
+  },
+  {
+    "id": "setting_in_scene",
+    "category": "worldbuilding",
+    "name": "设定入戏",
+    "appliesWhen": ["chapter_draft", "worldbuilding_reveal"],
+    "instruction": "世界观设定通过行动、误解、代价和后果进入正文。不要用旁白解释设定——让它成为角色的阻碍、误解来源或交易筹码。",
+    "antiPatterns": ["旁白/叙述者大段解释世界规则", "设定信息脱离当前场景张力独立存在"],
+    "diagnosticSignals": ["exposition_ratio"],
+    "revisionHint": "把解释性段落中50%的信息改成角色因不了解规则而犯错、或因利用规则而付出代价。",
+    "tokenCostHint": 85
+  },
+  {
+    "id": "emotion_externalized",
+    "category": "prose",
+    "name": "情绪外化",
+    "appliesWhen": ["chapter_draft", "emotional_beat"],
+    "instruction": "少直接命名情绪，多用动作、停顿、身体反应和环境选择来传递。'他很愤怒'不如'他把杯子放回桌上——太轻了，没发出声音'。",
+    "antiPatterns": ["直接命名情绪状态", "叙述者告诉读者角色感觉如何"],
+    "diagnosticSignals": ["exposition_ratio"],
+    "revisionHint": "搜索情绪词（愤怒/悲伤/恐惧/喜悦/紧张），替换为身体动作或环境互动。",
+    "tokenCostHint": 75
+  },
+  {
+    "id": "promise_advance",
+    "category": "plot",
+    "name": "伏笔推进",
+    "appliesWhen": ["chapter_draft", "mid_volume"],
+    "instruction": "伏笔必须被推进、误导、兑现或明确延后。伏笔只被提到但状态不变 = 读者开始遗忘。每章至少推进一条 open promise。",
+    "antiPatterns": ["伏笔被提及但不改变状态", "所有伏笔留到最后一章一次性兑现"],
+    "diagnosticSignals": ["promise_progress"],
+    "revisionHint": "找出本章最相关的 open promise，给一个微小的推进——新线索、新障碍、或角色做出影响该伏笔的决定。",
+    "tokenCostHint": 75
+  },
+  {
+    "id": "ending_hook",
+    "category": "structure",
+    "name": "章末钩子",
+    "appliesWhen": ["chapter_draft", "chapter_end"],
+    "instruction": "章末必须有已发生后果和未解决问题。'他们继续赶路'是日记结尾，不是钩子。钩子是'她看了他一眼——他刚才说谎了，两个人都知道'。",
+    "antiPatterns": ["章节在平淡中自然结束", "只有设置悬念没有兑现本事件的后果"],
+    "diagnosticSignals": ["ending_hook"],
+    "revisionHint": "加一个刚发生的后果（不是大事件，是一个具体变化）和一个未解决的问题（不是谜语，是一个角色面临的选择）。",
+    "tokenCostHint": 70
+  },
+  {
+    "id": "genre_pleasure",
+    "category": "genre",
+    "name": "类型快感",
+    "appliesWhen": ["chapter_draft"],
+    "instruction": "不同小说类型满足不同读者期待。悬疑要信息差和误导后的揭示。仙侠要代价和境界压力。言情要关系位移和试探。每章至少有一个类型快感时刻。",
+    "antiPatterns": ["写了战斗但没有代价", "写了悬疑但没有新信息或新误导"],
+    "diagnosticSignals": ["scene_causality", "promise_progress"],
+    "revisionHint": "确认本章的小说类型，在合适位置插入一个该类型的标志性快感时刻。",
+    "tokenCostHint": 80
+  }
+]

@@ -1,4 +1,5 @@
 include!("types_and_utils.in.rs");
+include!("craft_types.rs");
 include!("context.in.rs");
 include!("runtime_artifacts.in.rs");
 include!("settlement.in.rs");
