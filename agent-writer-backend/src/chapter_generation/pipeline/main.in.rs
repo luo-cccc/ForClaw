@@ -330,7 +330,7 @@ where
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    let quality_report = evaluate_chapter_quality(
+    let mut quality_report_before = evaluate_chapter_quality(
         &draft.content,
         &context.target.title,
         &scene_craft_plan,
@@ -341,10 +341,10 @@ where
 
     // Targeted revision: if quality report has major/fatal issues, attempt
     // a single revision pass with the ChapterTargetedRevision profile.
-    if !quality_report.fatal_issues.is_empty() || !quality_report.major_issues.is_empty() {
+    if !quality_report_before.fatal_issues.is_empty() || !quality_report_before.major_issues.is_empty() {
         let revision_prompt = build_revision_prompt(
             &draft.content,
-            &quality_report,
+            &quality_report_before,
             3,
         );
         if !revision_prompt.is_empty() {
@@ -357,9 +357,11 @@ where
                 65,
                 Some(context.target.title.clone()),
             ));
+            let revision_messages =
+                vec![serde_json::json!({"role": "user", "content": revision_prompt})];
             let revision_result = crate::llm_runtime::chat_text_profile(
                 &config.settings,
-                vec![serde_json::json!({"role": "user", "content": revision_prompt})],
+                revision_messages,
                 crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
                 300,
             )
@@ -373,13 +375,15 @@ where
                     context.chapter_contract.min_chars,
                     context.chapter_contract.max_chars,
                 );
-                if after.overall_score > quality_report.overall_score {
+                if after.overall_score > quality_report_before.overall_score {
                     draft.content = revised;
                     draft.output_chars = char_count(&draft.content);
+                    quality_report_before = after;
                 }
             }
         }
     }
+    let quality_report = quality_report_before;
 
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
@@ -507,7 +511,28 @@ where
             &length_telemetry,
             &draft.content,
         ) {
-            Ok(artifacts) => Some(artifacts.artifact_refs),
+            Ok(artifacts) => {
+                // Also persist quality report alongside other artifacts
+                let runtime_dir = config
+                    .project
+                    .project_data_dir()
+                    .join("chapter_runtime");
+                let stem = format!(
+                    "{}-{}",
+                    context.target.title,
+                    request_id
+                        .chars()
+                        .filter(|c| c.is_alphanumeric() || *c == '-')
+                        .collect::<String>()
+                );
+                let quality_path =
+                    runtime_dir.join(format!("{}.quality_report.json", stem));
+                let _ = std::fs::write(
+                    &quality_path,
+                    serde_json::to_string_pretty(&quality_report).unwrap_or_default(),
+                );
+                Some(artifacts.artifact_refs)
+            }
             Err(error) => {
                 warnings.push(format!("Runtime artifacts skipped: {}", error));
                 None
