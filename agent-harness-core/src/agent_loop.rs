@@ -16,7 +16,13 @@ use crate::tool_registry::{ToolFilter, ToolRegistry, ToolSideEffectLevel};
 #[serde(tag = "kind")]
 pub enum AgentLoopEvent {
     #[serde(rename = "intent")]
-    Intent { intent: String },
+    Intent {
+        intent: String,
+        #[serde(default)]
+        confidence: f32,
+        #[serde(default)]
+        evidence: Vec<String>,
+    },
     #[serde(rename = "thinking")]
     Thinking,
     #[serde(rename = "text_chunk")]
@@ -253,10 +259,14 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         has_outline: bool,
     ) -> Result<String, String> {
         // Phase 1: Classify intent
-        let intent = classify_intent(user_message, has_lorebook, has_outline);
+        let classification = classify_intent(user_message, has_lorebook, has_outline);
         self.emit(AgentLoopEvent::Intent {
-            intent: format!("{:?}", intent),
+            intent: format!("{:?}", classification.intent),
+            confidence: classification.confidence,
+            evidence: classification.evidence.clone(),
         });
+        // Emit classification detail as metadata
+        let intent = classification.intent.clone();
 
         // Phase 2: Build tools for this intent
         let tools = self.build_tools_async(&intent).await;

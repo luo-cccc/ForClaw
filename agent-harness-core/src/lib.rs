@@ -45,7 +45,9 @@ pub use execution_plan::{
 pub use permission::{PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule};
 pub use prompt_cache::{PromptCache, PromptCacheConfig, PromptCacheStats};
 pub use recovery::{classify_failure, FailureBundle, RecoveryAction, RetryParams};
-pub use router::{classify_intent, Intent};
+pub use router::{
+    classify_intent, classify_intent_simple, ClassificationSource, Intent, IntentClassification,
+};
 pub use run_trace::{AgentRunEvent, AgentRunEventKind, AgentRunStatus, AgentRunTrace};
 pub use task_packet::{
     FeedbackContract, FoundationCoverage, RequiredContext, TaskBelief, TaskPacket,
