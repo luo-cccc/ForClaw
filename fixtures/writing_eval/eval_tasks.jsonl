@@ -1,0 +1,3 @@
+{"task":"chapter_generation","chapter":"第一章","instruction":"继续第二章——散修追杀，主角被逼使用古剑","expected":{"min_chars":1500,"max_chars":3500,"mission_hit":true,"must_contain":["寒影","代价","选择"]}}
+{"task":"continuity_diagnostic","chapter":"第一章","check":"古剑设定一致性","expected":{"canon_conflict":false,"lore_entities":["寒影剑","林墨","青云宗"]}}
+{"task":"quality_evaluation","chapter":"第一章","metrics":["dialogue_function","ending_hook","exposition_ratio"],"expected":{"overall_score_min":0.4}}
