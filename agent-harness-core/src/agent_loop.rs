@@ -52,6 +52,8 @@ pub enum AgentLoopEvent {
         output_tokens: Option<u64>,
         ttft_ms: Option<u64>,
         total_provider_duration_ms: u64,
+        first_provider_call_ms: u64,
+        last_provider_call_ms: u64,
     },
 }
 
@@ -105,6 +107,8 @@ pub struct AgentLoop<P: Provider, H: ToolHandler> {
     pub last_usage: Option<crate::provider::UsageInfo>,
     pub ttft_ms: Option<u64>,
     pub total_provider_duration_ms: u64,
+    pub first_provider_call_ms: u64,
+    pub last_provider_call_ms: u64,
 }
 
 impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
@@ -124,6 +128,8 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             last_usage: None,
             ttft_ms: None,
             total_provider_duration_ms: 0,
+            first_provider_call_ms: 0,
+            last_provider_call_ms: 0,
         }
     }
 
@@ -289,16 +295,23 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             // Call LLM with streaming — forward text chunks to UI
             let event_cb = self.on_event.clone();
             let call_start = std::time::Instant::now();
+            let ttft_cell = std::sync::Arc::new(std::sync::Mutex::new(None::<u64>));
+            let ttft_clone = ttft_cell.clone();
             let response = self
                 .provider
                 .stream_call(
                     request,
                     Box::new(move |ev| {
-                        if let (StreamEvent::TextDelta { content }, Some(ref cb)) = (&ev, &event_cb)
-                        {
-                            cb(AgentLoopEvent::TextChunk {
-                                content: content.clone(),
-                            });
+                        if let StreamEvent::TextDelta { content } = &ev {
+                            let mut ttft = ttft_clone.lock().unwrap();
+                            if ttft.is_none() {
+                                *ttft = Some(call_start.elapsed().as_millis() as u64);
+                            }
+                            if let Some(ref cb) = &event_cb {
+                                cb(AgentLoopEvent::TextChunk {
+                                    content: content.clone(),
+                                });
+                            }
                         }
                     }),
                 )
@@ -307,8 +320,13 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                     self.emit(AgentLoopEvent::Error { message: e.clone() });
                 })?;
             let call_duration_ms = call_start.elapsed().as_millis() as u64;
+            let ttft_ms = *ttft_cell.lock().unwrap();
             self.total_provider_duration_ms += call_duration_ms;
-            self.ttft_ms = Some(call_duration_ms);
+            self.ttft_ms = ttft_ms.or(Some(call_duration_ms));
+            if self.first_provider_call_ms == 0 {
+                self.first_provider_call_ms = call_duration_ms;
+            }
+            self.last_provider_call_ms = call_duration_ms;
             self.last_usage = response.usage.clone();
 
             let response_tool_calls = response.tool_calls.unwrap_or_default();
@@ -432,6 +450,8 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             output_tokens: usage.as_ref().map(|u| u.output_tokens),
             ttft_ms: self.ttft_ms,
             total_provider_duration_ms: self.total_provider_duration_ms,
+            first_provider_call_ms: self.first_provider_call_ms,
+            last_provider_call_ms: self.last_provider_call_ms,
         });
 
         Ok(final_text)
@@ -627,5 +647,26 @@ mod tests {
         agent.emit(AgentLoopEvent::Thinking);
         let events = emitted.lock().unwrap();
         assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn complete_event_serializes_ttft_fields() {
+        let event = AgentLoopEvent::Complete {
+            rounds: 3,
+            tool_calls: 5,
+            tokens_used: 12000,
+            cached_tokens: Some(8000),
+            input_tokens: Some(10000),
+            output_tokens: Some(2000),
+            ttft_ms: Some(320),
+            total_provider_duration_ms: 4500,
+            first_provider_call_ms: 1500,
+            last_provider_call_ms: 3000,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "complete");
+        assert_eq!(json["ttft_ms"], 320);
+        assert_eq!(json["first_provider_call_ms"], 1500);
+        assert_eq!(json["last_provider_call_ms"], 3000);
     }
 }
