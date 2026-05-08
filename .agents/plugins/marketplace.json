@@ -1,0 +1,20 @@
+{
+  "name": "forge-agent-local",
+  "interface": {
+    "displayName": "Forge Agent Local"
+  },
+  "plugins": [
+    {
+      "name": "forge-writer-agent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/forge-writer-agent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

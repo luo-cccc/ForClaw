@@ -1,0 +1,37 @@
+[package]
+name = "agent-writer"
+version = "0.1.0"
+description = "AI Novel Writing Desktop App"
+authors = ["luo-cccc"]
+edition = "2021"
+
+[lib]
+name = "agent_writer_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+agent-harness-core = { path = "../agent-harness-core" }
+async-trait = "0.1"
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["stream", "json", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+dotenvy = "0.15"
+futures-util = "0.3"
+rusqlite = { version = "0.31", features = ["bundled"] }
+keyring = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+zip = "2"
+msgbox = "0.6"
+sha2 = "0.10"
+
+[lints]
+workspace = true

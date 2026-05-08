@@ -1,0 +1,57 @@
+{
+  "general_chat": {
+    "temperature": 0.7,
+    "maxTokens": 4096,
+    "disableReasoning": false
+  },
+  "json": {
+    "temperature": 0.0,
+    "maxTokens": 1024,
+    "disableReasoning": true
+  },
+  "chapter_draft": {
+    "temperature": 0.75,
+    "maxTokens": 5200,
+    "disableReasoning": true
+  },
+  "chapter_continuation": {
+    "temperature": 0.72,
+    "maxTokens": 2200,
+    "disableReasoning": true
+  },
+  "chapter_compress": {
+    "temperature": 0.35,
+    "maxTokens": 5200,
+    "disableReasoning": true
+  },
+  "ghost_preview": {
+    "temperature": 0.55,
+    "maxTokens": 160,
+    "disableReasoning": true
+  },
+  "analysis": {
+    "temperature": 0.2,
+    "maxTokens": 384,
+    "disableReasoning": true
+  },
+  "parallel_draft": {
+    "temperature": 0.85,
+    "maxTokens": 512,
+    "disableReasoning": true
+  },
+  "manual_rewrite": {
+    "temperature": 0.6,
+    "maxTokens": 512,
+    "disableReasoning": true
+  },
+  "tool_continuation": {
+    "temperature": 0.7,
+    "maxTokens": 2048,
+    "disableReasoning": true
+  },
+  "project_brain_stream": {
+    "temperature": 0.3,
+    "maxTokens": 4096,
+    "disableReasoning": true
+  }
+}

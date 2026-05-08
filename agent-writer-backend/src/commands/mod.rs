@@ -1,0 +1,12 @@
+pub mod backups;
+pub mod chapters;
+pub mod diagnostics;
+pub mod editor;
+pub mod generation;
+pub mod graph;
+pub mod lore;
+pub mod manual_agent;
+pub mod metacognitive_recovery;
+pub mod outline;
+pub mod settings;
+pub mod writer_agent;

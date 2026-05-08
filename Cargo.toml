@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "agent-harness-core",
+    "agent-writer-backend",
+    "forge-agent-mcp",
+]
+resolver = "2"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[profile.dev.package.agent-harness-core]
+opt-level = 2
+
+[profile.dev.package.agent-writer]
+opt-level = 2
+
+[profile.dev.package.forge-agent-mcp]
+opt-level = 2

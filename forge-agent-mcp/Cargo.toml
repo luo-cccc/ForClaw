@@ -1,0 +1,17 @@
+[package]
+name = "forge-agent-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Headless MCP server for the Forge writer agent backend"
+
+[dependencies]
+agent_writer_lib = { package = "agent-writer", path = "../agent-writer-backend" }
+dotenvy = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

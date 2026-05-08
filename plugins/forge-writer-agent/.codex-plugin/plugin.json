@@ -1,0 +1,43 @@
+{
+  "name": "forge-writer-agent",
+  "version": "0.1.0",
+  "description": "Backend-only Forge writer agent exposed through a stable stdio MCP plugin.",
+  "author": {
+    "name": "Local Forge",
+    "email": "local@example.invalid",
+    "url": "https://example.invalid/forge-writer-agent"
+  },
+  "homepage": "https://example.invalid/forge-writer-agent",
+  "repository": "https://example.invalid/forge-writer-agent",
+  "license": "UNLICENSED",
+  "keywords": [
+    "forge",
+    "writer-agent",
+    "mcp",
+    "fiction"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Forge Writer Agent",
+    "shortDescription": "Schedule the full Forge backend writer agent through MCP.",
+    "longDescription": "Runs the backend-only Forge writer agent as a clean stdio MCP server with stable manifest, project path, chapter generation, memory, ledger, proposal, Project Brain, diagnostics, and supervised sprint tools.",
+    "developerName": "Local Forge",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write",
+      "MCP"
+    ],
+    "websiteURL": "https://example.invalid/forge-writer-agent",
+    "privacyPolicyURL": "https://example.invalid/privacy",
+    "termsOfServiceURL": "https://example.invalid/terms",
+    "defaultPrompt": [
+      "Show the Forge writer agent ledger.",
+      "Save this chapter through Forge.",
+      "Generate a chapter through Forge.",
+      "Start a supervised chapter sprint."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
