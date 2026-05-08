@@ -28,6 +28,23 @@ pub enum AgentLoopEvent {
     ToolCallEnd { tool: String, result: ToolExecution },
     #[serde(rename = "doom_loop_warning")]
     DoomLoopWarning { tool: String },
+    #[serde(rename = "tool_inventory")]
+    ToolInventory { tools: Vec<String>, generation: u64 },
+    #[serde(rename = "provider_guard")]
+    ProviderGuard {
+        allowed: bool,
+        model: String,
+        estimated_input_tokens: u64,
+        requested_output_tokens: u64,
+    },
+    #[serde(rename = "context_window")]
+    ContextWindow {
+        tokens: u64,
+        estimated_input: u64,
+        requested_output: u64,
+        should_warn: bool,
+        should_block: bool,
+    },
     #[serde(rename = "compaction")]
     Compaction {
         before_tokens: u64,
@@ -210,6 +227,19 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         let tools = self.build_tools_async(&intent).await;
         let has_tools = !tools.is_empty();
 
+        let tool_names: Vec<String> = tools
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+            .collect();
+        let generation = {
+            let registry = self.executor.registry.lock().await;
+            registry.generation()
+        };
+        self.emit(AgentLoopEvent::ToolInventory {
+            tools: tool_names,
+            generation,
+        });
+
         // Phase 3: Execution rounds
         let mut rounds = 0u32;
         let mut total_tool_calls = 0u32;
@@ -244,6 +274,13 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 self.estimate_tokens(),
                 requested_output_tokens,
             );
+            self.emit(AgentLoopEvent::ContextWindow {
+                tokens: guard.tokens,
+                estimated_input: guard.estimated_input_tokens,
+                requested_output: guard.requested_output_tokens,
+                should_warn: guard.should_warn,
+                should_block: guard.should_block,
+            });
             if guard.should_block {
                 let message = guard
                     .message
@@ -275,16 +312,28 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         .as_ref()
                         .map(|tools| tools.len() as u64 * 256)
                         .unwrap_or(0);
-                if let Err(message) = provider_call_guard(ProviderCallContext {
+                let requested_output_tokens_val = requested_output_tokens;
+
+                let guard_result = provider_call_guard(ProviderCallContext {
                     round: rounds + 1,
                     provider: self.provider.name().to_string(),
-                    model,
+                    model: model.clone(),
                     estimated_input_tokens,
-                    requested_output_tokens,
+                    requested_output_tokens: requested_output_tokens_val,
                     message_count: request.messages.len(),
                     tool_count: request.tools.as_ref().map(|tools| tools.len()).unwrap_or(0),
                     stream: request.stream,
-                }) {
+                });
+
+                let allowed = guard_result.is_ok();
+                self.emit(AgentLoopEvent::ProviderGuard {
+                    allowed,
+                    model,
+                    estimated_input_tokens,
+                    requested_output_tokens: requested_output_tokens_val,
+                });
+
+                if let Err(message) = guard_result {
                     self.emit(AgentLoopEvent::Error {
                         message: message.clone(),
                     });
