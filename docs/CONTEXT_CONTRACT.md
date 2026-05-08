@@ -193,3 +193,55 @@ Tool annotations in `tools/list` are scheduling hints only. Callers must still u
 5. Do not send renderer-only state; Forge Agent's MCP contract is backend-only.
 6. Prefer specific tools for discoverability; use `forge_backend_call` for scheduler implementations that need one stable dispatch surface.
 7. Treat returned proposals and operations as pending until explicitly approved and durably saved.
+
+## Error Kinds
+
+All `tools/call` structured errors include an `error.kind` field for programmatic handling:
+
+| Kind | Meaning | Example |
+|------|---------|---------|
+| `validation` | Invalid parameters or missing required fields | `chapterTitle is required` |
+| `provider` | LLM provider failure (HTTP errors, rate limits, timeouts) | `LLM call failed (429)` |
+| `permission` | Tool denied by permission policy | `Tool requires explicit approval` |
+| `backend` | All other internal errors | `Storage read failed` |
+
+Callers should use `error.kind` (not `error.message`) for retry/recovery logic.
+
+## Observability Tools (M1-M4)
+
+Tools added for capability inspection and quality management:
+
+| Tool | Purpose |
+|------|---------|
+| `forge_craft_library` | List all 8 craft rules with categories, instructions, and diagnostic signals |
+| `forge_craft_memory_stats` | Query craft rule acceptance/rejection statistics from feedback memory |
+| `forge_chapter_quality_report` | Retrieve the most recent ChapterQualityReport for a chapter |
+| `forge_context_quality_report` | Retrieve the ContextQualityReport from the last preflight |
+| `forge_budget_calibration` | Query current token-per-char calibration for a model |
+| `forge_execution_plan` | Inspect the active ExecutionPlan step status and progress |
+| `forge_set_sprint_quality_gate` | Configure sprint quality thresholds |
+
+All follow the standard `{ok, data, error}` envelope.
+
+## Quality Pipeline (Writer Agent)
+
+Chapter generation now includes automated quality evaluation and targeted revision:
+
+1. **Quality evaluation** — After draft generation, `evaluate_chapter_quality()` runs 8 heuristic metrics (dialogue function, exposition ratio, ending hook, scene causality, anchor carry, style drift, length compliance, promise progress). Results stored in `PipelineTerminal::Completed`.
+
+2. **Targeted revision** — When major/fatal issues are detected, `build_revision_prompt()` constructs a directed revision prompt targeting the top 3 issues. The revision uses `LlmRequestProfile::ChapterTargetedRevision` (temperature 0.3, maxTokens 4096). Revised text replaces the draft only if quality score improves.
+
+3. **Craft prompt** — Each chapter draft system prompt is augmented with selected craft rules from the `craft-library.json` library (8 rules covering scene objective, conflict pressure, dialogue function, setting integration, emotional externalization, promise advancement, ending hooks, and genre pleasure).
+
+4. **SceneCraftPlan** — A pre-writing plan artifact (`craft_plan.json`) is generated and saved alongside each chapter generation.
+
+## Protocol Version
+
+```json
+{
+  "protocolVersion": "2025-11-25",
+  "supportedProtocolVersions": ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+}
+```
+
+The MCP server identifies as `forge-writer-agent` with transport `stdio-jsonrpc-lines`. All new tools respect the existing protocol version.
