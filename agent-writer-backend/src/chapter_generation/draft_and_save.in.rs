@@ -34,6 +34,31 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         context.chapter_contract.save_hard_floor_chars,
         context.chapter_contract.save_hard_ceiling_chars
     );
+
+    // Append writing craft empowerment section
+    let summary_snippet: String = context.prompt_context.chars().take(200).collect();
+    let open_promise_count = context
+        .sources
+        .iter()
+        .filter(|s| s.source_type == "promise" || s.label.contains("promise"))
+        .count();
+
+    let craft_packet = compile_empowerment_prompt(
+        &summary_snippet,
+        "",
+        open_promise_count,
+        false,
+        Some(5),
+        Some(600),
+    );
+
+    let system_prompt = if !craft_packet.chapter_discipline.is_empty() {
+        let craft_section = format_craft_prompt_section(&craft_packet);
+        format!("{}{}", system_prompt, craft_section)
+    } else {
+        system_prompt
+    };
+
     let user_prompt = format!(
         "Task: {}\n\nTarget chapter: {}\n\nProject context:\n{}",
         context
@@ -253,10 +278,13 @@ async fn compress_chapter_draft_with_mode(
             .min(context.chapter_contract.max_chars)
     };
     let target_ceiling = if hard_contract_repair {
-        context
-            .chapter_contract
-            .max_chars
-            .min(context.chapter_contract.target_chars.saturating_sub(100).max(target_floor))
+        context.chapter_contract.max_chars.min(
+            context
+                .chapter_contract
+                .target_chars
+                .saturating_sub(100)
+                .max(target_floor),
+        )
     } else {
         context
             .chapter_contract
@@ -709,8 +737,7 @@ fn remediation_for_error_code(code: &str) -> Vec<String> {
         ],
         "CONTENT_UNDER_SAVE_FLOOR" | "CONTENT_OVER_SAVE_CEILING" => vec![
             "Review the chapter contract before saving generated content.".to_string(),
-            "Regenerate, continue, or trim the chapter so it fits the save bounds."
-                .to_string(),
+            "Regenerate, continue, or trim the chapter so it fits the save bounds.".to_string(),
         ],
         "RECEIPT_MISMATCH" => {
             vec!["Rebuild the task receipt from the latest context before saving.".to_string()]
