@@ -23,6 +23,7 @@ pub enum AgentRunEventKind {
     StepCompleted,
     StepFailed,
     PlanCompleted,
+    FailureBundle,
     ToolSelected,
     ToolFinished,
     LlmDelta,

@@ -10,6 +10,7 @@ pub mod execution_plan;
 pub mod permission;
 pub mod prompt_cache;
 pub mod provider;
+pub mod recovery;
 pub mod retry;
 pub mod router;
 pub mod run_trace;
@@ -19,9 +20,7 @@ pub mod tool_registry;
 pub mod vector_db;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
-pub use budget_calibration::{
-    estimate_tokens, record_usage, BudgetCalibration, CalibrationStore,
-};
+pub use budget_calibration::{estimate_tokens, record_usage, BudgetCalibration, CalibrationStore};
 pub use compaction::{
     anchor_latest_user_message, compact_messages, compact_messages_with_trigger,
     estimate_message_tokens, find_safe_boundary, should_compact, CompactionConfig,
@@ -45,6 +44,7 @@ pub use execution_plan::{
 };
 pub use permission::{PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule};
 pub use prompt_cache::{PromptCache, PromptCacheConfig, PromptCacheStats};
+pub use recovery::{classify_failure, FailureBundle, RecoveryAction, RetryParams};
 pub use router::{classify_intent, Intent};
 pub use run_trace::{AgentRunEvent, AgentRunEventKind, AgentRunStatus, AgentRunTrace};
 pub use task_packet::{

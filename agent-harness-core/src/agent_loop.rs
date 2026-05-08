@@ -6,6 +6,7 @@ use crate::context_window_guard::{
 };
 use crate::execution_plan::{ExecutionPlan, PlanStatus, StepFailureAction, StepStatus};
 use crate::provider::{LlmMessage, LlmRequest, Provider, StreamEvent};
+use crate::recovery::classify_failure;
 use crate::router::{classify_intent, Intent};
 use crate::tool_executor::{ToolExecution, ToolExecutor, ToolHandler};
 use crate::tool_registry::{ToolFilter, ToolRegistry, ToolSideEffectLevel};
@@ -82,6 +83,14 @@ pub enum AgentLoopEvent {
         plan_id: String,
         steps_completed: usize,
         steps_failed: usize,
+    },
+    #[serde(rename = "failure_bundle")]
+    FailureBundle {
+        run_id: String,
+        failed_step: String,
+        error_kind: String,
+        completed_steps: Vec<String>,
+        suggested_action: String,
     },
     #[serde(rename = "error")]
     Error { message: String },
@@ -562,6 +571,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         let mut final_text = String::new();
         let mut steps_completed = 0usize;
         let mut steps_failed = 0usize;
+        let mut completed_step_ids: Vec<String> = Vec::new();
 
         for step in &mut plan.steps {
             step.status = StepStatus::Active;
@@ -587,6 +597,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             match step_result {
                 Ok(text) => {
                     steps_completed += 1;
+                    completed_step_ids.push(step.step_id.clone());
                     final_text = text;
                     step.status = StepStatus::Completed { evidence: vec![] };
                     self.emit(AgentLoopEvent::StepCompleted {
@@ -622,12 +633,23 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                             steps_completed,
                             steps_failed,
                         });
+                        // Emit failure bundle before returning error
+                        let bundle =
+                            classify_failure(&plan.plan_id, &e, &step.step_id, &completed_step_ids);
+                        self.emit(AgentLoopEvent::FailureBundle {
+                            run_id: bundle.run_id,
+                            failed_step: bundle.failed_step,
+                            error_kind: bundle.error_kind,
+                            completed_steps: bundle.completed_steps,
+                            suggested_action: format!("{:?}", bundle.suggested_action),
+                        });
                         return Err(e);
                     }
                     StepFailureAction::Retry { max_retries: _ } => {
                         let retry_result = self.run(user_message, true, true).await;
                         if let Ok(text) = retry_result {
                             steps_completed += 1;
+                            completed_step_ids.push(step.step_id.clone());
                             final_text = text;
                             step.status = StepStatus::Completed { evidence: vec![] };
                             self.emit(AgentLoopEvent::StepCompleted {
@@ -651,6 +673,16 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                             plan_id: plan.plan_id.clone(),
                             steps_completed,
                             steps_failed,
+                        });
+                        // Emit failure bundle before returning error
+                        let bundle =
+                            classify_failure(&plan.plan_id, &e, &step.step_id, &completed_step_ids);
+                        self.emit(AgentLoopEvent::FailureBundle {
+                            run_id: bundle.run_id,
+                            failed_step: bundle.failed_step,
+                            error_kind: bundle.error_kind,
+                            completed_steps: bundle.completed_steps,
+                            suggested_action: format!("{:?}", bundle.suggested_action),
                         });
                         return Err(e);
                     }
