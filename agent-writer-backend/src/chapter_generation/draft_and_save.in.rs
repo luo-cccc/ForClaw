@@ -43,6 +43,8 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         .filter(|s| s.source_type == "promise" || s.label.contains("promise"))
         .count();
 
+    // TODO: wire craft memory stats when DB connection is available at this call site
+    // The compiler will use default priorities until stats are wired
     let craft_packet = compile_empowerment_prompt(
         &summary_snippet,
         "",

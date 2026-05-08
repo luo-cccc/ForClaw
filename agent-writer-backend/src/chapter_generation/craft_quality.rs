@@ -12,7 +12,7 @@ const OVERALL_WEIGHTS: &[(&str, f32)] = &[
 pub fn evaluate_chapter_quality(
     chapter_text: &str,
     chapter_title: &str,
-    _scene_plan: &SceneCraftPlan,
+    scene_plan: &SceneCraftPlan,
     open_promise_keywords: &[String],
     target_min_chars: usize,
     target_max_chars: usize,
@@ -21,8 +21,8 @@ pub fn evaluate_chapter_quality(
         metric_length_compliance(chapter_text, target_min_chars, target_max_chars),
         metric_dialogue_function(chapter_text),
         metric_exposition_ratio(chapter_text),
-        metric_ending_hook(chapter_text),
-        metric_scene_causality(chapter_text),
+        metric_ending_hook(chapter_text, scene_plan),
+        metric_scene_causality(chapter_text, scene_plan),
         metric_promise_progress(chapter_text, open_promise_keywords),
         // anchor_carry and style_drift require project-level data or pre-built snapshots;
         // for MVP, emit placeholder "insufficient evidence" results
@@ -269,7 +269,7 @@ fn metric_exposition_ratio(text: &str) -> QualityMetricResult {
     )
 }
 
-fn metric_ending_hook(text: &str) -> QualityMetricResult {
+fn metric_ending_hook(text: &str, scene_plan: &SceneCraftPlan) -> QualityMetricResult {
     let tail: String = text
         .chars()
         .rev()
@@ -291,11 +291,37 @@ fn metric_ending_hook(text: &str) -> QualityMetricResult {
     let has_consequence = consequence_signals.iter().any(|s| tail.contains(s));
     let has_question = question_signals.iter().any(|s| tail.contains(s));
 
-    let score = match (has_consequence, has_question) {
+    let mut score = match (has_consequence, has_question) {
         (true, true) => 0.9,
         (true, false) | (false, true) => 0.5,
         (false, false) => 0.2,
     };
+
+    // If SceneCraftPlan provided question_left_open, check alignment
+    if !scene_plan.ending_hook.question_left_open.is_empty() {
+        let plan_question_words: Vec<&str> = scene_plan.ending_hook.question_left_open
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() >= 2)
+            .collect();
+        let any_match = plan_question_words.iter()
+            .any(|w| tail.contains(w));
+        if any_match {
+            score = f32::min(score + 0.1, 1.0);
+        }
+    }
+
+    // Bonus: if SceneCraftPlan provided expected consequences, check alignment
+    if !scene_plan.ending_hook.consequence_delivered.is_empty() {
+        let plan_consequence_words: Vec<&str> = scene_plan.ending_hook.consequence_delivered
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() >= 2)
+            .collect();
+        let any_match = plan_consequence_words.iter()
+            .any(|w| tail.contains(w));
+        if any_match {
+            score = f32::min(score + 0.1, 1.0);
+        }
+    }
 
     let evidence: String = tail.chars().rev().take(100).collect::<String>().chars().rev().collect();
 
@@ -307,7 +333,7 @@ fn metric_ending_hook(text: &str) -> QualityMetricResult {
     )
 }
 
-fn metric_scene_causality(text: &str) -> QualityMetricResult {
+fn metric_scene_causality(text: &str, scene_plan: &SceneCraftPlan) -> QualityMetricResult {
     let causality_markers = [
         "因为", "所以", "因此", "于是", "导致",
         "逼得", "只好", "不得不", "结果", "后果",
@@ -319,13 +345,35 @@ fn metric_scene_causality(text: &str) -> QualityMetricResult {
     let char_count = text.chars().count().max(1);
     let density = count as f32 / char_count as f32 * 500.0;
 
-    let score = if density >= 1.0 {
+    let mut score = if density >= 1.0 {
         0.9
     } else if density >= 0.5 {
         0.6
     } else {
         0.3
     };
+
+    // If SceneCraftPlan provided an objective, check whether the ending hook text relates to it
+    if !scene_plan.objective.is_empty() {
+        let tail: String = text
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        let objective_words: Vec<&str> = scene_plan.objective
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() >= 2)
+            .collect();
+        let any_match = objective_words.iter()
+            .any(|w| tail.contains(w));
+        if any_match {
+            score = f32::min(score + 0.1, 1.0);
+        }
+    }
+
     let evidence = if count > 0 {
         causality_markers
             .iter()
