@@ -59,10 +59,7 @@ pub enum AgentLoopEvent {
         boundary_summary: String,
     },
     #[serde(rename = "plan_started")]
-    PlanStarted {
-        plan_id: String,
-        steps: Vec<String>,
-    },
+    PlanStarted { plan_id: String, steps: Vec<String> },
     #[serde(rename = "step_started")]
     StepStarted {
         step_id: String,
@@ -519,6 +516,21 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         }
 
         let usage = self.last_usage.clone();
+        if let Some(ref usage) = usage {
+            let total_chars: usize = self
+                .messages
+                .iter()
+                .map(|m| m.content.as_ref().map(|c| c.chars().count()).unwrap_or(0))
+                .sum::<usize>()
+                + self.config.system_prompt.chars().count();
+            let model = self
+                .provider
+                .models()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| "unknown".to_string());
+            crate::budget_calibration::record_usage(&model, usage.input_tokens, total_chars);
+        }
         self.emit(AgentLoopEvent::Complete {
             rounds,
             tool_calls: total_tool_calls,

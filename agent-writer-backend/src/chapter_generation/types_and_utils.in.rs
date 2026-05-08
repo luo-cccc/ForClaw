@@ -1,3 +1,4 @@
+use agent_harness_core::context_quality::ContextQualityReport;
 use agent_harness_core::provider::LlmMessage;
 use agent_harness_core::{
     FeedbackContract, Intent, RequiredContext, TaskBelief, TaskPacket, TaskScope,
@@ -725,6 +726,8 @@ pub struct BuiltChapterContext {
     pub impact_truncated: bool,
     #[serde(default)]
     pub generation_strategy: GenerationStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_quality: Option<ContextQualityReport>,
 }
 
 #[derive(Debug, Clone)]

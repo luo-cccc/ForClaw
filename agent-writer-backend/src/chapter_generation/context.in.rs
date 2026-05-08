@@ -494,6 +494,7 @@ pub fn build_chapter_context(
         impact_filtered_count,
         impact_truncated: false,
         generation_strategy: GenerationStrategy::default(),
+        context_quality: None,
     })
 }
 
