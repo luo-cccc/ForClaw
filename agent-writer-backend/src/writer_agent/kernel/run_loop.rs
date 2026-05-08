@@ -1,4 +1,6 @@
 use super::*;
+use agent_harness_core::execution_plan::{compile_plan, ExecutionPlan};
+use agent_harness_core::task_packet::TaskPacket;
 
 impl WriterAgentKernel {
     pub fn record_manual_exchange(
@@ -397,6 +399,30 @@ impl WriterAgentKernel {
         let result = prepared.run().await?;
         self.record_run_completion(&completion_request, &result)?;
         Ok(result)
+    }
+
+    #[allow(dead_code)]
+    fn compile_execution_plan(task: &TaskPacket, run_id: &str, now_ms: u64) -> ExecutionPlan {
+        let mut plan = compile_plan(task, &format!("plan-{}", run_id), now_ms);
+        for step in &mut plan.steps {
+            if step.goal.contains("draft") {
+                step.required_context.push("craft_prompt".into());
+                step.required_context.push("chapter_mission".into());
+            }
+            if step.goal.contains("validate") {
+                step.required_context.push("scene_craft_plan".into());
+                step.required_context.push("quality_report".into());
+            }
+            if step.goal.contains("preflight") {
+                step.required_context.extend_from_slice(&[
+                    "outline".into(),
+                    "lorebook".into(),
+                    "chapter_mission".into(),
+                    "story_contract".into(),
+                ]);
+            }
+        }
+        plan
     }
 
     pub fn record_run_completion(
