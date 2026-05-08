@@ -8,24 +8,38 @@ The repository is designed as a headless backend runtime. MCP clients and schedu
 
 ## Features
 
-- Headless MCP server over newline-delimited JSON-RPC stdio.
-- Full writer-agent backend with story ledger, proposals, typed operations, memory, diagnostics, and trace history.
-- Chapter generation pipeline with context assembly, provider-budget checks, draft validation, repair/compression, revision-safe saves, settlement, runtime artifacts, and Project Brain embedding.
-- Project assets for chapters, lorebook, outline, volume snapshots, book state, backups, and storage diagnostics.
-- Project Brain tools for graph indexing, source revision comparison/restore, cross-reference suggestions, and approved external research ingest.
-- Supervised sprint tools for planning, progress, pause/resume/cancel, checkpointing, and budget accounting.
-- Codex plugin metadata under `plugins/forge-writer-agent/`.
+- **MCP Server** — 82 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
+- **Writer Agent Kernel** — Story ledger, proposals, typed operations, canon, promises, chapter missions, reader compensation, decision tracking, trace history.
+- **Chapter Generation Pipeline** — Context assembly → provider-budget checks → craft prompt injection → draft → quality evaluation → targeted revision → repair/compression → revision-safe save → settlement → artifact persistence.
+- **Writing Empowerment Engine** — 8-rule craft library, Prompt Compiler with scene-type inference, SceneCraftPlan artifact generation, 8-metric ChapterQualityReport with evidence gating, targeted revision with before/after quality comparison.
+- **Execution Plans** — Coarse-grained step plans (preflight/draft/validate/save) with Stop/Retry/Skip failure actions, wired into writer agent kernel.
+- **Observability** — Real TTFT metrics, provider latency tracking, tool inventory snapshots, provider guard decisions, context window checks, budget calibration with rolling EMA, runaway loop detection.
+- **Project Assets** — Chapters, lorebook, outline, volume snapshots, book state, backups, storage diagnostics.
+- **Project Brain** — Graph indexing, source revision comparison/restore, cross-reference suggestions, external research ingest.
+- **Supervised Sprints** — Planning, progress, pause/resume/cancel, checkpointing, quality gate thresholds, budget accounting.
+- **Craft Memory** — SQLite-backed craft rule feedback learning. Compiler adjusts rule priority by acceptance rate.
+- **Recovery Strategies** — Structured failure bundles with retry/shrink-context/approval-required/stop actions.
+- **Codex Plugin** — Plugin metadata under `plugins/forge-writer-agent/`.
 
 ## Repository Layout
 
 ```text
-agent-harness-core/       Shared agent runtime, providers, tool registry, context packing, memory utilities
-agent-writer-backend/     Forge writer backend and headless project implementation
-forge-agent-mcp/          MCP stdio server that exposes backend capabilities
+agent-harness-core/       Shared agent runtime — AgentLoop, ExecutionPlan, provider,
+                           tool registry, context quality, budget calibration, recovery,
+                           compaction, permission policy, credential pool, vector DB
+agent-writer-backend/     Forge writer backend — HeadlessBackend, chapter generation
+                           pipeline, empowerment engine (craft library, prompt compiler,
+                           quality evaluator, targeted revision), writer agent kernel,
+                           memory (canon, promises, craft feedback), brain service,
+                           supervised sprint, storage
+forge-agent-mcp/          MCP stdio server — main.rs (JSON-RPC core), dispatch.rs
+                           (tool dispatch), tools.rs (82 tool definitions), smoke tests
 plugins/forge-writer-agent/ Codex plugin bundle and skill metadata
-scripts/                  Windows launchers for the MCP server
-docs/                     Protocol and caller contracts
-config/                   Runtime configuration assets
+scripts/                  Windows launchers and eval runner
+docs/                     Protocol contract (CONTEXT_CONTRACT.md), design specs, plans
+config/                   Runtime configuration — craft library, LLM profiles,
+                           anchor heuristics, token calibration
+fixtures/writing_eval/    Regression eval fixture — project.json, eval tasks, runner
 ```
 
 ## Requirements
@@ -85,21 +99,28 @@ Use `initialize`, then `tools/list`, then `tools/call` from an MCP client. `forg
 }
 ```
 
-Specific MCP tools are exposed for discovery and scheduling:
+### Tool Categories
 
-- Protocol/project: `forge_manifest`, `forge_project_manifest`, `forge_project_paths`
-- Agent/kernel: `forge_ask_agent`, `forge_agent_tools`, `forge_effective_tool_inventory`, `forge_agent_kernel_status`, `forge_agent_domain_profile`, `forge_status`
-- Chapters/generation: `forge_list_chapters`, `forge_create_chapter`, `forge_load_chapter`, `forge_save_chapter`, `forge_chapter_revision`, `forge_rename_chapter_file`, `forge_generate_chapter_autonomous`, `forge_batch_generate_chapter`, `forge_repair_chapter_state`
-- Lore/outline/book structure: `forge_lorebook`, `forge_save_lore_entry`, `forge_delete_lore_entry`, `forge_outline`, `forge_save_outline_node`, `forge_delete_outline_node`, `forge_update_outline_status`, `forge_reorder_outline_nodes`, `forge_list_volumes`, `forge_save_volume`, `forge_delete_volume`, `forge_get_volume_snapshot`, `forge_save_volume_snapshot`, `forge_get_book_state`, `forge_save_book_state`
-- Writer memory/agent state: `forge_observe`, `forge_ledger`, `forge_today_five`, `forge_pending_proposals`, `forge_story_review_queue`, `forge_story_debt`, `forge_reader_compensation_review_chain`, `forge_trace`, `forge_inspector_timeline`, `forge_companion_timeline_summary`
-- Proposals/operations: `forge_apply_feedback`, `forge_record_implicit_ghost_rejection`, `forge_approve_writer_operation`, `forge_record_writer_operation_durable_save`, `forge_ambient_entity_hints`
-- Model-backed helpers: `forge_analyze_chapter`, `forge_generate_parallel_drafts`, `forge_analyze_pacing`, `forge_ask_project_brain`, `forge_run_metacognitive_recovery`
-- Project Brain: `forge_project_brain_knowledge_graph`, `forge_compare_project_brain_source_revisions`, `forge_restore_project_brain_source_revision`, `forge_cross_reference_brain_nodes`, `forge_ingest_external_research`
-- Supervised sprint: `forge_start_sprint`, `forge_sprint_plan`, `forge_sprint_progress`, `forge_pause_sprint`, `forge_resume_sprint`, `forge_cancel_sprint`, `forge_checkpoint_sprint`, `forge_record_sprint_budget_usage`
-- Project diagnostics: `forge_project_graph_data`, `forge_project_storage_diagnostics`, `forge_export_writer_agent_trajectory`, `forge_export_diagnostic_logs`, `forge_list_file_backups`, `forge_restore_file_backup`
-- Settings: `forge_set_api_key`, `forge_check_api_key`
+82 MCP tools across 12 categories:
 
-Machine-readable tool responses use the stable Forge envelope in `result.structuredContent`:
+| Category | Tools |
+|----------|-------|
+| Protocol/project | `forge_manifest`, `forge_project_manifest`, `forge_project_paths` |
+| Agent/kernel | `forge_ask_agent`, `forge_agent_tools`, `forge_agent_kernel_status`, `forge_agent_domain_profile`, `forge_status` |
+| Chapters/generation | `forge_list_chapters`, `forge_create_chapter`, `forge_load_chapter`, `forge_save_chapter`, `forge_chapter_revision`, `forge_rename_chapter_file`, `forge_generate_chapter_autonomous`, `forge_batch_generate_chapter`, `forge_repair_chapter_state` |
+| Lore/outline/book | `forge_lorebook`, `forge_save_lore_entry`, `forge_delete_lore_entry`, `forge_outline`, `forge_save_outline_node`, `forge_delete_outline_node`, `forge_update_outline_status`, `forge_reorder_outline_nodes`, `forge_list_volumes`, `forge_save_volume`, `forge_delete_volume`, `forge_get_volume_snapshot`, `forge_save_volume_snapshot`, `forge_get_book_state`, `forge_save_book_state` |
+| Writer memory | `forge_observe`, `forge_ledger`, `forge_today_five`, `forge_pending_proposals`, `forge_story_review_queue`, `forge_story_debt`, `forge_reader_compensation_review_chain`, `forge_trace`, `forge_inspector_timeline`, `forge_companion_timeline_summary` |
+| Proposals/operations | `forge_apply_feedback`, `forge_record_implicit_ghost_rejection`, `forge_approve_writer_operation`, `forge_record_writer_operation_durable_save`, `forge_ambient_entity_hints` |
+| Model-backed helpers | `forge_analyze_chapter`, `forge_generate_parallel_drafts`, `forge_analyze_pacing`, `forge_ask_project_brain`, `forge_run_metacognitive_recovery` |
+| Project Brain | `forge_project_brain_knowledge_graph`, `forge_compare_project_brain_source_revisions`, `forge_restore_project_brain_source_revision`, `forge_cross_reference_brain_nodes`, `forge_ingest_external_research` |
+| Supervised sprint | `forge_start_sprint`, `forge_sprint_plan`, `forge_sprint_progress`, `forge_pause_sprint`, `forge_resume_sprint`, `forge_cancel_sprint`, `forge_checkpoint_sprint`, `forge_record_sprint_budget_usage`, `forge_set_sprint_quality_gate` |
+| Quality & craft (new) | `forge_craft_library`, `forge_craft_memory_stats`, `forge_chapter_quality_report`, `forge_context_quality_report`, `forge_budget_calibration`, `forge_execution_plan` |
+| Diagnostics | `forge_project_graph_data`, `forge_project_storage_diagnostics`, `forge_export_writer_agent_trajectory`, `forge_export_diagnostic_logs`, `forge_list_file_backups`, `forge_restore_file_backup` |
+| Settings | `forge_set_api_key`, `forge_check_api_key` |
+
+### Response Envelope
+
+All `tools/call` responses use the stable Forge envelope in `result.structuredContent`:
 
 ```json
 {
@@ -109,26 +130,78 @@ Machine-readable tool responses use the stable Forge envelope in `result.structu
 }
 ```
 
-Backend failures return `ok: false` with `error.kind` and `error.message`. JSON-RPC parse, invalid request, and unknown method failures use standard JSON-RPC error responses.
+Backend failures return `ok: false` with `error.kind` (`backend` | `validation` | `provider` | `permission`) and `error.message`. JSON-RPC parse, invalid request, and unknown method failures use standard JSON-RPC error responses.
 
-For caller context requirements, budget approval rules, revision safety, and write-sensitive scheduling, see [docs/CONTEXT_CONTRACT.md](docs/CONTEXT_CONTRACT.md).
+For caller context requirements, budget approval rules, revision safety, error classification, quality pipeline details, and write-sensitive scheduling, see [docs/CONTEXT_CONTRACT.md](docs/CONTEXT_CONTRACT.md).
+
+## Architecture
+
+### Crate Map
+
+```
+agent-harness-core (105 tests)
+├── AgentLoop (run + run_with_plan with plan/step events)
+├── ExecutionPlan (compile_plan, Stop/Retry/Skip)
+├── Intent Router (weighted scoring + confidence + fallback)
+├── Tool Registry + Executor (permission, doom-loop detection)
+├── Context Quality (4-dim scoring)
+├── Budget Calibration (EMA rolling token-per-char)
+├── Recovery (FailureBundle + classify_failure)
+├── Compaction (water-level + event-driven)
+├── VectorDB (BM25 + cosine hybrid search)
+└── Provider (OpenAI-compat streaming + retry)
+
+agent-writer-backend (250 tests)
+├── HeadlessBackend (all MCP action dispatch)
+├── Chapter Generation Pipeline
+│   ├── Context assembly (async, parallelization-ready)
+│   ├── Craft Prompt Compiler (scene-type inference)
+│   ├── SceneCraftPlan (pre-writing plan artifact)
+│   ├── ChapterQualityReport (8 metrics + evidence gating)
+│   └── Targeted Revision (build_revision_prompt + auto-trigger)
+├── Writer Agent Kernel (run_loop, proposals, memory, trace)
+├── Craft Memory (SQLite feedback tables + compiler learning)
+├── Supervised Sprint (quality gate + budget accounting)
+├── Brain Service (embedding, retrieval, graph)
+└── Storage (SQLite project persistence)
+
+forge-agent-mcp (17 tests + 6 smoke)
+├── main.rs (JSON-RPC core, 627 lines)
+├── dispatch.rs (call_tool + call_backend_action, 320 lines)
+├── tools.rs (82 tool definitions, 1034 lines)
+└── smoke_test.rs (6 process-level integration tests)
+```
 
 ## Development
 
-Run the default headless checks:
+Run the full workspace checks:
 
 ```powershell
 cargo fmt --check
-cargo check -p forge-agent-mcp
-cargo test -p forge-agent-mcp
-cargo test -p agent-harness-core
-cargo test -p agent-writer --lib
-cargo clippy -p agent-harness-core --all-targets -- -D warnings
-cargo clippy -p agent-writer --all-targets -- -D warnings
-cargo clippy -p forge-agent-mcp --all-targets -- -D warnings
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Individual crate checks:
+
+```powershell
+cargo test -p agent-harness-core        # 105 tests
+cargo test -p agent-writer --lib        # 241 tests
+cargo test -p agent-writer --test writing_eval_test  # 9 eval tests
+cargo test -p forge-agent-mcp           # 11 unit + 6 smoke
 ```
 
 The headless path does not require Tauri config, icons, generated desktop schemas, renderer assets, or desktop runtime dependencies.
+
+## Configuration
+
+| File | Purpose |
+|------|---------|
+| `config/craft-library.json` | 8 core writing craft rules for the Prompt Compiler |
+| `config/llm-request-profiles.json` | 11 LLM call profiles (general, json, draft, revision, etc.) |
+| `config/anchor-carry-heuristics.json` | Sentence-level anchor mode detection |
+| `config/token-calibration.json` | Per-model token-per-char calibration seed |
 
 ## Plugin
 
