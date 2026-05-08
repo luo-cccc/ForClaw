@@ -107,14 +107,29 @@ pub async fn build_chapter_context(
         input.chapter_summary_override.as_deref(),
     )?;
 
-    let base_revision = project.chapter_revision(&target.title).map_err(|e| {
-        ChapterGenerationError::with_details(
-            "STORAGE_READ_FAILED",
-            "Failed to read target chapter revision.",
-            true,
-            e,
-        )
-    })?;
+    // Parallelize independent read-only I/O: chapter_revision + lorebook
+    let (base_revision_result, lorebook_result) = {
+        let target_title = target.title.clone();
+        let rev = project.chapter_revision(&target_title).map_err(|e| {
+            ChapterGenerationError::with_details(
+                "STORAGE_READ_FAILED",
+                "Failed to read target chapter revision.",
+                true,
+                e,
+            )
+        });
+        let lore = project.load_lorebook().map_err(|e| {
+            ChapterGenerationError::with_details(
+                "STORAGE_READ_FAILED",
+                "Failed to read lorebook.",
+                true,
+                e,
+            )
+        });
+        futures_util::join!(async { rev }, async { lore })
+    };
+    let base_revision = base_revision_result?;
+    let lore_entries = lorebook_result?;
 
     let chapter_contract = input.chapter_contract.validate()?;
     let query = format!("{}\n{}\n{}", instruction, target.title, target.summary);
@@ -255,11 +270,7 @@ pub async fn build_chapter_context(
         }
     }
 
-    // Read-only sources: now parallelizable since build_chapter_context is async.
-    // Future: wrap load_lorebook, brain queries, and chapter loads in tokio::join!.
-    let lore_entries = project
-        .load_lorebook()
-        .map_err(|e| ChapterGenerationError::new("lorebook_load_failed", e, true))?;
+    // Read-only sources: lorebook pre-fetched in parallel with chapter_revision above
     let selected_lore =
         select_lore_entries(&lore_entries, &query, input.budget.lorebook_entry_count);
     let lore_text = if selected_lore.is_empty() {
