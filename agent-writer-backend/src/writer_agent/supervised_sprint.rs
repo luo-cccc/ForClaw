@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::chapter_generation::ChapterQualityReport;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SupervisedSprintPlan {
@@ -19,6 +21,10 @@ pub struct SupervisedSprintPlan {
     pub budget_ceiling_micros: Option<u64>,
     pub checkpoint_count: usize,
     pub last_checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub minimum_quality_score: f32,
+    #[serde(default)]
+    pub stop_on_fatal_issue: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -112,6 +118,8 @@ pub fn create_sprint_plan_with_limits(
         budget_ceiling_micros,
         checkpoint_count: 0,
         last_checkpoint_id: None,
+        minimum_quality_score: 0.4,
+        stop_on_fatal_issue: true,
     }
 }
 
@@ -275,6 +283,47 @@ pub fn advance_sprint(sprint: &mut SupervisedSprintPlan) -> Option<String> {
     }
 }
 
+/// Quality gate check that blocks sprint advancement when chapter quality
+/// drops below the configured threshold.
+pub fn check_sprint_quality_gate(
+    sprint: &SupervisedSprintPlan,
+    quality_report: Option<&ChapterQualityReport>,
+) -> Result<(), String> {
+    let Some(qr) = quality_report else {
+        return Ok(()); // No quality report available, allow progression
+    };
+
+    if qr.overall_score < sprint.minimum_quality_score {
+        return Err(format!(
+            "Sprint quality gate: overall score {:.2} below minimum {:.2}",
+            qr.overall_score, sprint.minimum_quality_score
+        ));
+    }
+
+    if sprint.stop_on_fatal_issue && !qr.no_fatal_issue {
+        return Err(format!(
+            "Sprint quality gate: fatal issue detected in chapter {}",
+            qr.chapter_title
+        ));
+    }
+
+    Ok(())
+}
+
+/// Configure quality gate thresholds on an active sprint plan.
+pub fn set_sprint_quality_gate(
+    sprint: &mut SupervisedSprintPlan,
+    minimum_quality_score: Option<f32>,
+    stop_on_fatal_issue: Option<bool>,
+) {
+    if let Some(score) = minimum_quality_score {
+        sprint.minimum_quality_score = score.clamp(0.0, 1.0);
+    }
+    if let Some(stop) = stop_on_fatal_issue {
+        sprint.stop_on_fatal_issue = stop;
+    }
+}
+
 /// Build a progress report for the sprint.
 pub fn sprint_progress(sprint: &SupervisedSprintPlan) -> SprintProgress {
     let completed = sprint.current_index;
@@ -381,6 +430,77 @@ mod tests {
         assert!(restore_from_checkpoint(&mut sprint, &checkpoint));
         assert!(resume_sprint(&mut sprint));
         assert_eq!(sprint.status, "running");
+    }
+
+    #[test]
+    fn quality_gate_allows_when_no_report() {
+        let sprint = create_sprint_plan("sq1", &["Ch1".to_string()], false);
+        assert!(check_sprint_quality_gate(&sprint, None).is_ok());
+    }
+
+    #[test]
+    fn quality_gate_blocks_low_overall_score() {
+        let mut sprint = create_sprint_plan("sq2", &["Ch1".to_string()], false);
+        sprint.minimum_quality_score = 0.5;
+        let report = ChapterQualityReport {
+            chapter_title: "Ch1".to_string(),
+            overall_score: 0.3,
+            fatal_issues: vec![],
+            major_issues: vec![],
+            metric_results: vec![],
+            top_revision_targets: vec![],
+            no_fatal_issue: true,
+        };
+        assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_err());
+    }
+
+    #[test]
+    fn quality_gate_allows_acceptable_score() {
+        let mut sprint = create_sprint_plan("sq3", &["Ch1".to_string()], false);
+        sprint.minimum_quality_score = 0.4;
+        let report = ChapterQualityReport {
+            chapter_title: "Ch1".to_string(),
+            overall_score: 0.6,
+            fatal_issues: vec![],
+            major_issues: vec![],
+            metric_results: vec![],
+            top_revision_targets: vec![],
+            no_fatal_issue: true,
+        };
+        assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_ok());
+    }
+
+    #[test]
+    fn quality_gate_blocks_on_fatal_issue() {
+        let mut sprint = create_sprint_plan("sq4", &["Ch1".to_string()], false);
+        sprint.stop_on_fatal_issue = true;
+        let report = ChapterQualityReport {
+            chapter_title: "Ch1".to_string(),
+            overall_score: 0.8,
+            fatal_issues: vec![],
+            major_issues: vec![],
+            metric_results: vec![],
+            top_revision_targets: vec![],
+            no_fatal_issue: false,
+        };
+        assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_err());
+    }
+
+    #[test]
+    fn set_sprint_quality_gate_clamps_score() {
+        let mut sprint = create_sprint_plan("sq5", &["Ch1".to_string()], false);
+        set_sprint_quality_gate(&mut sprint, Some(1.5), None);
+        assert_eq!(sprint.minimum_quality_score, 1.0);
+        set_sprint_quality_gate(&mut sprint, Some(-0.5), None);
+        assert_eq!(sprint.minimum_quality_score, 0.0);
+    }
+
+    #[test]
+    fn set_sprint_quality_gate_updates_stop_flag() {
+        let mut sprint = create_sprint_plan("sq6", &["Ch1".to_string()], false);
+        assert!(sprint.stop_on_fatal_issue, "default is true");
+        set_sprint_quality_gate(&mut sprint, None, Some(false));
+        assert!(!sprint.stop_on_fatal_issue);
     }
 
     #[test]

@@ -82,6 +82,7 @@ const BACKEND_ACTIONS: &[&str] = &[
     "cancel_sprint",
     "checkpoint_sprint",
     "record_sprint_budget_usage",
+    "set_sprint_quality_gate",
     "project_graph_data",
     "project_storage_diagnostics",
     "export_writer_agent_trajectory",
@@ -272,12 +273,10 @@ async fn handle_message(backend: &HeadlessBackend, message: JsonRpcMessage) -> O
             if let Some(id) = message.id {
                 match call_tool(backend, message.params).await {
                     Ok(result) => Some(success_response(id, result)),
-                    Err(error) => {
-                        Some(success_response(
-                            id,
-                            tool_error_result(ErrorKind::Backend, error),
-                        ))
-                    }
+                    Err(error) => Some(success_response(
+                        id,
+                        tool_error_result(ErrorKind::Backend, error),
+                    )),
                 }
             } else {
                 None
@@ -552,6 +551,7 @@ async fn call_tool(backend: &HeadlessBackend, params: Value) -> Result<Value, St
         "forge_record_sprint_budget_usage" => {
             backend.dispatch("record_sprint_budget_usage", arguments)
         }
+        "forge_set_sprint_quality_gate" => backend.dispatch("set_sprint_quality_gate", arguments),
         "forge_project_graph_data" => backend.dispatch("project_graph_data", json!({})),
         "forge_project_storage_diagnostics" => {
             backend.dispatch("project_storage_diagnostics", json!({}))
@@ -1388,6 +1388,19 @@ fn tools() -> Vec<Value> {
             }),
         ),
         tool(
+            "forge_set_sprint_quality_gate",
+            "Set Sprint Quality Gate",
+            "Configure quality thresholds for the active supervised sprint. Blocks chapter advancement when quality drops below the minimum score or a fatal issue is detected.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "minimumQualityScore": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                    "stopOnFatalIssue": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        tool(
             "forge_project_graph_data",
             "Project Graph Data",
             "Return headless project graph data from lore, canon, chapters, and outline.",
@@ -1784,6 +1797,7 @@ mod tests {
             "forge_cancel_sprint",
             "forge_checkpoint_sprint",
             "forge_record_sprint_budget_usage",
+            "forge_set_sprint_quality_gate",
             "forge_ingest_external_research",
             "forge_restore_file_backup",
             "forge_set_api_key",
@@ -1835,8 +1849,7 @@ mod tests {
 
     #[test]
     fn validation_error_has_correct_kind() {
-        let result =
-            tool_error_result(ErrorKind::Validation, "chapterTitle is required".into());
+        let result = tool_error_result(ErrorKind::Validation, "chapterTitle is required".into());
         let sc = &result["structuredContent"];
         assert_eq!(sc["ok"], false);
         assert_eq!(sc["error"]["kind"], "validation");
@@ -1880,10 +1893,7 @@ mod tests {
     #[test]
     fn classify_error_permission_denied() {
         assert_eq!(
-            classify_error(
-                "forge_save_chapter",
-                "Tool requires explicit approval"
-            ),
+            classify_error("forge_save_chapter", "Tool requires explicit approval"),
             ErrorKind::Permission
         );
     }

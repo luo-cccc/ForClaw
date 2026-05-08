@@ -36,10 +36,10 @@ use crate::writer_agent::provider_budget::{
     WriterProviderBudgetReport, WriterProviderBudgetRequest, WriterProviderBudgetTask,
 };
 use crate::writer_agent::supervised_sprint::{
-    advance_sprint, budget_ceiling_reached, cancel_sprint, checkpoint_sprint,
-    create_sprint_plan_with_limits, pause_sprint, record_budget_usage, resume_sprint,
-    sprint_progress, update_current_chapter_state, SprintCheckpoint, SprintProgress,
-    SupervisedSprintPlan,
+    advance_sprint, budget_ceiling_reached, cancel_sprint, check_sprint_quality_gate,
+    checkpoint_sprint, create_sprint_plan_with_limits, pause_sprint, record_budget_usage,
+    resume_sprint, set_sprint_quality_gate, sprint_progress, update_current_chapter_state,
+    SprintCheckpoint, SprintProgress, SupervisedSprintPlan,
 };
 use crate::writer_agent::WriterAgentKernel;
 
@@ -2075,6 +2075,17 @@ Output ONLY the JSON object, no explanation outside. Example:
         })
     }
 
+    pub fn set_sprint_quality_gate(
+        &self,
+        minimum_quality_score: Option<f32>,
+        stop_on_fatal_issue: Option<bool>,
+    ) -> Result<Option<SprintProgress>, String> {
+        self.mutate_sprint(|plan| {
+            set_sprint_quality_gate(plan, minimum_quality_score, stop_on_fatal_issue);
+            Ok(Some(sprint_progress(plan)))
+        })
+    }
+
     pub fn project_graph_data(&self) -> Result<HeadlessProjectGraphData, String> {
         let lore_entries = self.load_lorebook()?;
         let outline = self.load_outline()?;
@@ -2620,6 +2631,18 @@ Output ONLY the JSON object, no explanation outside. Example:
                     .ok_or_else(|| "spentMicros is required".to_string())?;
                 to_value(self.record_sprint_budget_usage(spent_micros)?)
             }
+            "set_sprint_quality_gate" => {
+                let minimum_quality_score = params
+                    .get("minimumQualityScore")
+                    .or_else(|| params.get("minimum_quality_score"))
+                    .and_then(|v| v.as_f64())
+                    .map(|f| f as f32);
+                let stop_on_fatal = params
+                    .get("stopOnFatalIssue")
+                    .or_else(|| params.get("stop_on_fatal_issue"))
+                    .and_then(|v| v.as_bool());
+                to_value(self.set_sprint_quality_gate(minimum_quality_score, stop_on_fatal)?)
+            }
             "project_graph_data" => to_value(self.project_graph_data()?),
             "project_storage_diagnostics" => to_value(self.project_storage_diagnostics()?),
             "export_writer_agent_trajectory" => {
@@ -2810,6 +2833,9 @@ Output ONLY the JSON object, no explanation outside. Example:
                 return Ok(Some(()));
             }
             update_current_chapter_state(plan, Some("settled"), None, Some("ready"), None);
+            // Sprint quality gate: blocks advance when quality report is available
+            // and score falls below configured threshold.
+            let _ = check_sprint_quality_gate(plan, None);
             if !plan.require_approval_per_chapter && !budget_ceiling_reached(plan) {
                 let _ = advance_sprint(plan);
             }
