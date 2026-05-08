@@ -114,6 +114,7 @@ where
         conflict: None,
         error: None,
         generation_strategy: Some(strategy),
+        quality_report: None,
         warnings: context.warnings.clone(),
     });
 
@@ -323,6 +324,32 @@ where
         return PipelineTerminal::Failed(error);
     }
 
+    // Quality evaluation: always evaluate draft quality after length repairs.
+    // TODO(revision-loop): when provider budget approval pattern is cleanly
+    // abstracted, add a targeted revision pass here that calls
+    // LlmRequestProfile::ChapterTargetedRevision with the revision prompt
+    // from build_revision_prompt(), then re-evaluates quality and uses the
+    // better of the two outputs. The revision call needs:
+    //   1. budget approval using chapter_generation_provider_budget_for_profile()
+    //   2. ensure_provider_budget_allowed callback
+    //   3. record_model_started callback
+    //   4. llm_runtime::chat_text_profile with ChapterTargetedRevision profile
+    let quality_report = {
+        let scene_craft_plan = context
+            .craft_plan
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        evaluate_chapter_quality(
+            &draft.content,
+            &context.target.title,
+            &scene_craft_plan,
+            &[],
+            context.chapter_contract.min_chars,
+            context.chapter_contract.max_chars,
+        )
+    };
+
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
         PHASE_SAVE,
@@ -482,6 +509,7 @@ where
         conflict: None,
         error: None,
         generation_strategy: Some(context.generation_strategy.clone()),
+        quality_report: Some(quality_report.clone()),
         warnings,
     });
 
@@ -499,6 +527,7 @@ where
         saved,
         generated_content: draft.content,
         settlement_delta: Box::new(settlement_delta),
+        quality_report: Some(quality_report),
     }
 }
 
@@ -578,6 +607,7 @@ impl ChapterGenerationEvent {
             conflict: None,
             error: None,
             generation_strategy: None,
+            quality_report: None,
             warnings: vec![],
         }
     }
@@ -617,6 +647,7 @@ impl ChapterGenerationEvent {
             conflict: None,
             error: None,
             generation_strategy: None,
+            quality_report: None,
             warnings: vec![],
         }
     }
@@ -648,6 +679,7 @@ impl ChapterGenerationEvent {
             conflict: None,
             error: Some(error),
             generation_strategy: None,
+            quality_report: None,
             warnings: vec![],
         }
     }
@@ -679,6 +711,7 @@ impl ChapterGenerationEvent {
             conflict: Some(conflict),
             error: None,
             generation_strategy: None,
+            quality_report: None,
             warnings: vec![],
         }
     }

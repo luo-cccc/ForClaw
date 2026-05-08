@@ -26,6 +26,7 @@ pub enum LlmRequestProfile {
     ChapterDraft,
     ChapterContinuation,
     ChapterCompress,
+    ChapterTargetedRevision,
     GhostPreview,
     Analysis,
     ParallelDraft,
@@ -55,6 +56,7 @@ struct RequestProfileConfig {
     chapter_draft: LlmRequestOptions,
     chapter_continuation: LlmRequestOptions,
     chapter_compress: LlmRequestOptions,
+    chapter_targeted_revision: LlmRequestOptions,
     ghost_preview: LlmRequestOptions,
     analysis: LlmRequestOptions,
     parallel_draft: LlmRequestOptions,
@@ -139,6 +141,9 @@ fn profile_temperature_env(profile: LlmRequestProfile) -> Option<&'static str> {
         LlmRequestProfile::ChapterDraft => Some("OPENAI_CHAPTER_DRAFT_TEMPERATURE"),
         LlmRequestProfile::ChapterContinuation => Some("OPENAI_CHAPTER_CONTINUATION_TEMPERATURE"),
         LlmRequestProfile::ChapterCompress => Some("OPENAI_CHAPTER_COMPRESS_TEMPERATURE"),
+        LlmRequestProfile::ChapterTargetedRevision => {
+            Some("OPENAI_CHAPTER_TARGETED_REVISION_TEMPERATURE")
+        }
         LlmRequestProfile::GhostPreview => Some("OPENAI_GHOST_PREVIEW_TEMPERATURE"),
         LlmRequestProfile::Analysis => Some("OPENAI_ANALYSIS_TEMPERATURE"),
         LlmRequestProfile::ParallelDraft => Some("OPENAI_PARALLEL_DRAFT_TEMPERATURE"),
@@ -155,6 +160,9 @@ fn profile_max_tokens_env(profile: LlmRequestProfile) -> Option<&'static str> {
         LlmRequestProfile::ChapterDraft => Some("OPENAI_CHAPTER_DRAFT_MAX_TOKENS"),
         LlmRequestProfile::ChapterContinuation => Some("OPENAI_CHAPTER_CONTINUATION_MAX_TOKENS"),
         LlmRequestProfile::ChapterCompress => Some("OPENAI_CHAPTER_COMPRESS_MAX_TOKENS"),
+        LlmRequestProfile::ChapterTargetedRevision => {
+            Some("OPENAI_CHAPTER_TARGETED_REVISION_MAX_TOKENS")
+        }
         LlmRequestProfile::GhostPreview => Some("OPENAI_GHOST_PREVIEW_MAX_TOKENS"),
         LlmRequestProfile::Analysis => Some("OPENAI_ANALYSIS_MAX_TOKENS"),
         LlmRequestProfile::ParallelDraft => Some("OPENAI_PARALLEL_DRAFT_MAX_TOKENS"),
@@ -173,6 +181,9 @@ fn profile_reasoning_env(profile: LlmRequestProfile) -> Option<&'static str> {
             Some("OPENAI_CHAPTER_CONTINUATION_DISABLE_REASONING")
         }
         LlmRequestProfile::ChapterCompress => Some("OPENAI_CHAPTER_COMPRESS_DISABLE_REASONING"),
+        LlmRequestProfile::ChapterTargetedRevision => {
+            Some("OPENAI_CHAPTER_TARGETED_REVISION_DISABLE_REASONING")
+        }
         LlmRequestProfile::GhostPreview => Some("OPENAI_GHOST_PREVIEW_DISABLE_REASONING"),
         LlmRequestProfile::Analysis => Some("OPENAI_ANALYSIS_DISABLE_REASONING"),
         LlmRequestProfile::ParallelDraft => Some("OPENAI_PARALLEL_DRAFT_DISABLE_REASONING"),
@@ -212,6 +223,7 @@ fn default_profile_options(
         LlmRequestProfile::ChapterDraft => config.chapter_draft,
         LlmRequestProfile::ChapterContinuation => config.chapter_continuation,
         LlmRequestProfile::ChapterCompress => config.chapter_compress,
+        LlmRequestProfile::ChapterTargetedRevision => config.chapter_targeted_revision,
         LlmRequestProfile::GhostPreview => config.ghost_preview,
         LlmRequestProfile::Analysis => config.analysis,
         LlmRequestProfile::ParallelDraft => config.parallel_draft,

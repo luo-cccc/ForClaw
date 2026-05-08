@@ -515,6 +515,36 @@ pub fn build_chapter_context(
         ))
     };
 
+    // Build SceneCraftPlan from intent and outline data
+    let craft_plan = {
+        let participants: Vec<String> = scene_plan
+            .iter()
+            .flat_map(|entry| entry.participants.clone())
+            .collect();
+        let next_summary = target
+            .number
+            .and_then(|n| outline.get(n)) // n is 1-indexed, outline.get(n) is the next chapter
+            .map(|node| node.summary.as_str());
+        let packet = compile_empowerment_prompt(
+            &intent_artifact.goal,
+            &target.summary,
+            input.open_promise_count,
+            false,
+            Some(5),
+            Some(600),
+            None,
+        );
+        Some(build_scene_craft_plan(
+            &target.title,
+            &intent_artifact.goal,
+            &participants,
+            &target.summary,
+            next_summary,
+            &[],
+            &packet,
+        ))
+    };
+
     Ok(BuiltChapterContext {
         request_id,
         target,
@@ -530,6 +560,7 @@ pub fn build_chapter_context(
         rule_stack,
         trace_artifact,
         scene_plan,
+        craft_plan,
         compiled_input: input.compiled_input.clone(),
         stable_prefix_chars,
         dynamic_tail_chars,

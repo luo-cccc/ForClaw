@@ -83,6 +83,12 @@ const BACKEND_ACTIONS: &[&str] = &[
     "checkpoint_sprint",
     "record_sprint_budget_usage",
     "set_sprint_quality_gate",
+    "craft_library",
+    "craft_memory_stats",
+    "chapter_quality_report",
+    "context_quality_report",
+    "budget_calibration",
+    "execution_plan",
     "project_graph_data",
     "project_storage_diagnostics",
     "export_writer_agent_trajectory",
@@ -541,6 +547,12 @@ async fn call_tool(backend: &HeadlessBackend, params: Value) -> Result<Value, St
             serde_json::to_value(backend.run_metacognitive_recovery(request).await?)
                 .map_err(|error| error.to_string())
         }
+        "forge_craft_library" => backend.dispatch("craft_library", json!({})),
+        "forge_craft_memory_stats" => backend.dispatch("craft_memory_stats", json!({})),
+        "forge_chapter_quality_report" => backend.dispatch("chapter_quality_report", arguments),
+        "forge_context_quality_report" => backend.dispatch("context_quality_report", arguments),
+        "forge_budget_calibration" => backend.dispatch("budget_calibration", json!({})),
+        "forge_execution_plan" => backend.dispatch("execution_plan", json!({})),
         "forge_start_sprint" => backend.dispatch("start_sprint", arguments),
         "forge_sprint_plan" => backend.dispatch("sprint_plan", json!({})),
         "forge_sprint_progress" => backend.dispatch("sprint_progress", json!({})),
@@ -1399,6 +1411,57 @@ fn tools() -> Vec<Value> {
                 },
                 "additionalProperties": false
             }),
+        ),
+        tool(
+            "forge_craft_library",
+            "Craft Library",
+            "Return the loaded craft rule library with all available writing quality rules.",
+            empty_schema(),
+        ),
+        tool(
+            "forge_craft_memory_stats",
+            "Craft Memory Stats",
+            "Return craft memory statistics: rule acceptance/rejection rates across the project.",
+            empty_schema(),
+        ),
+        tool(
+            "forge_chapter_quality_report",
+            "Chapter Quality Report",
+            "Evaluate chapter text quality across 8 metrics and return a quality report with scores, issues, and revision targets.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "chapterText": { "type": "string" },
+                    "chapterTitle": { "type": "string" },
+                    "targetMinChars": { "type": "integer", "minimum": 1 },
+                    "targetMaxChars": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["chapterText", "chapterTitle"]
+            }),
+        ),
+        tool(
+            "forge_context_quality_report",
+            "Context Quality Report",
+            "Evaluate context quality for a chapter generation request and return completeness and relevance diagnostics.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "chapterTitle": { "type": "string" }
+                },
+                "required": ["chapterTitle"]
+            }),
+        ),
+        tool(
+            "forge_budget_calibration",
+            "Budget Calibration",
+            "Return chapter context budget calibration diagnostics for the current project.",
+            empty_schema(),
+        ),
+        tool(
+            "forge_execution_plan",
+            "Execution Plan",
+            "Return the current chapter generation execution plan with strategy and budget details.",
+            empty_schema(),
         ),
         tool(
             "forge_project_graph_data",

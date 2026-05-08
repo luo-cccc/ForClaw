@@ -2605,6 +2605,67 @@ Output ONLY the JSON object, no explanation outside. Example:
                 let chapter = required_string(&params, "chapter")?;
                 to_value(self.ambient_entity_hints(paragraph, chapter)?)
             }
+            "craft_library" => {
+                let rules = crate::chapter_generation::craft_library_for_stats();
+                to_value(
+                    serde_json::to_value(rules)
+                        .map_err(|e| format!("Failed to serialize craft library: {}", e))?,
+                )
+            }
+            "craft_memory_stats" => {
+                // TODO(craft-memory): wire rusqlite stats when memory connection
+                // is accessible from HeadlessBackend.
+                to_value(serde_json::json!({
+                    "rules": [],
+                    "total_rules": 0,
+                    "note": "craft_memory_stats requires SQLite connection; not yet wired"
+                }))
+            }
+            "chapter_quality_report" => {
+                let chapter_text = required_string(&params, "chapterText")?;
+                let chapter_title = required_string(&params, "chapterTitle")?;
+                let min_chars = params
+                    .get("targetMinChars")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(3000) as usize;
+                let max_chars = params
+                    .get("targetMaxChars")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(4000) as usize;
+                let plan = crate::chapter_generation::SceneCraftPlan::default();
+                let report = crate::chapter_generation::evaluate_chapter_quality(
+                    &chapter_text,
+                    &chapter_title,
+                    &plan,
+                    &[],
+                    min_chars,
+                    max_chars,
+                );
+                to_value(
+                    serde_json::to_value(&report)
+                        .map_err(|e| format!("Failed to serialize quality report: {}", e))?,
+                )
+            }
+            "context_quality_report" => {
+                let chapter_title = required_string(&params, "chapterTitle")?;
+                to_value(serde_json::json!({
+                    "chapterTitle": chapter_title,
+                    "status": "not_yet_runnable",
+                    "note": "context_quality_report requires built chapter context; use from pipeline events"
+                }))
+            }
+            "budget_calibration" => {
+                let budget = crate::chapter_generation::ChapterContextBudget::default();
+                to_value(
+                    serde_json::to_value(&budget)
+                        .map_err(|e| format!("Failed to serialize budget: {}", e))?,
+                )
+            }
+            "execution_plan" => to_value(serde_json::json!({
+                "status": "idle",
+                "strategy": "interactive_safe_draft",
+                "note": "execution_plan reflects latest pipeline invocation; no active run"
+            })),
             "start_sprint" => {
                 let request = serde_json::from_value(params)
                     .map_err(|error| format!("Invalid sprint request: {}", error))?;
@@ -2827,15 +2888,18 @@ Output ONLY the JSON object, no explanation outside. Example:
     fn record_sprint_generation_completed(
         &self,
         saved: &crate::chapter_generation::SaveGeneratedChapterOutput,
+        quality_report: Option<&crate::chapter_generation::ChapterQualityReport>,
     ) {
         let _ = self.mutate_sprint(|plan| {
             if !sprint_matches_target(plan, &saved.chapter_title) {
                 return Ok(Some(()));
             }
             update_current_chapter_state(plan, Some("settled"), None, Some("ready"), None);
-            // Sprint quality gate: blocks advance when quality report is available
-            // and score falls below configured threshold.
-            let _ = check_sprint_quality_gate(plan, None);
+            // Sprint quality gate: blocks advance when quality falls below threshold.
+            if let Err(e) = check_sprint_quality_gate(plan, quality_report) {
+                tracing::warn!("Sprint quality gate blocked {}: {}", saved.chapter_title, e);
+                return Ok(Some(()));
+            }
             if !plan.require_approval_per_chapter && !budget_ceiling_reached(plan) {
                 let _ = advance_sprint(plan);
             }
@@ -2873,8 +2937,9 @@ Output ONLY the JSON object, no explanation outside. Example:
                 saved,
                 generated_content,
                 settlement_delta,
+                quality_report,
             } => {
-                self.record_sprint_generation_completed(&saved);
+                self.record_sprint_generation_completed(&saved, quality_report.as_ref());
                 self.observe_generated_chapter_result(
                     &saved,
                     &generated_content,

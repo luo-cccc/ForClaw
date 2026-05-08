@@ -1,5 +1,5 @@
-include!("types_and_utils.in.rs");
 include!("craft_types.rs");
+include!("types_and_utils.in.rs");
 include!("craft_prompt.rs");
 include!("craft_quality.rs");
 include!("context.in.rs");

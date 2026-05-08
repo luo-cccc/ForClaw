@@ -36,12 +36,22 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
     );
 
     // Append writing craft empowerment section
-    let summary_snippet: String = context.prompt_context.chars().take(200).collect();
+    let summary_snippet: String = context.prompt_context.chars().take(400).collect();
+    let target_beat = context
+        .sources
+        .iter()
+        .find(|s| s.source_type == "target_beat" || s.label.contains("beat"))
+        .map(|s| s.label.as_str())
+        .unwrap_or("");
     let open_promise_count = context
         .sources
         .iter()
         .filter(|s| s.source_type == "promise" || s.label.contains("promise"))
         .count();
+    let has_near_payoff = context
+        .sources
+        .iter()
+        .any(|s| s.source_type == "promise" && s.label.contains("near_payoff"));
 
     // craft_memory stats not available at this call site:
     // The chapter generation pipeline runs with ChapterGenerationProject trait,
@@ -52,9 +62,9 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
     // preflight. Until then, the compiler uses default priorities.
     let craft_packet = compile_empowerment_prompt(
         &summary_snippet,
-        "",
+        target_beat,
         open_promise_count,
-        false,
+        has_near_payoff,
         Some(5),
         Some(600),
         None,

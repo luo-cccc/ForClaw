@@ -39,6 +39,13 @@ pub fn persist_chapter_runtime_artifacts(
     write_json_file(&rule_stack_path, &context.rule_stack)?;
     write_json_file(&trace_path, &context.trace_artifact)?;
     write_json_file(&scene_plan_path, &context.scene_plan)?;
+    let craft_plan_path = if let Some(ref craft_plan) = context.craft_plan {
+        let path = runtime_dir.join(format!("{}.craft_plan.json", stem));
+        write_json_file(&path, craft_plan)?;
+        Some(path)
+    } else {
+        None
+    };
     write_json_file(&settlement_path, settlement_delta)?;
     write_json_file(&length_path, length_telemetry)?;
     if let Some(ref compiled_input) = context.compiled_input {
@@ -77,6 +84,9 @@ pub fn persist_chapter_runtime_artifacts(
     ];
     if context.compiled_input.is_some() {
         artifact_refs.push(path_ref(project_dir, &compiled_input_path));
+    }
+    if let Some(ref craft_plan_path) = craft_plan_path {
+        artifact_refs.push(path_ref(project_dir, craft_plan_path));
     }
 
     Ok(PersistedChapterRuntimeArtifacts {

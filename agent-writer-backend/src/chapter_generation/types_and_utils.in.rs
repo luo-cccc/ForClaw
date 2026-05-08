@@ -5,7 +5,6 @@ use agent_harness_core::{
     ToolPolicyContract, ToolSideEffectLevel, VectorDB,
 };
 use crate::writer_agent::input_governance::CompiledInput;
-use serde::{Deserialize, Serialize};
 
 use crate::writer_agent::context_relevance::{format_text_chunk_relevance, rerank_text_chunks};
 use crate::writer_agent::provider_budget::{
@@ -710,6 +709,8 @@ pub struct BuiltChapterContext {
     pub trace_artifact: ChapterTraceArtifact,
     #[serde(default)]
     pub scene_plan: Vec<ScenePlanEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub craft_plan: Option<SceneCraftPlan>,
     pub compiled_input: Option<CompiledInput>,
     pub stable_prefix_chars: usize,
     pub dynamic_tail_chars: usize,
@@ -901,6 +902,8 @@ pub struct ChapterGenerationEvent {
     pub error: Option<ChapterGenerationError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_strategy: Option<GenerationStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_report: Option<ChapterQualityReport>,
     pub warnings: Vec<String>,
 }
 
@@ -910,6 +913,7 @@ pub enum PipelineTerminal {
         saved: SaveGeneratedChapterOutput,
         generated_content: String,
         settlement_delta: Box<ChapterSettlementDelta>,
+        quality_report: Option<ChapterQualityReport>,
     },
     Conflict(SaveConflict),
     Failed(ChapterGenerationError),
