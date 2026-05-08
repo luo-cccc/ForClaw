@@ -1,6 +1,7 @@
 pub mod agent_loop;
 pub mod compaction;
 pub mod context_pack;
+pub mod execution_plan;
 pub mod context_window_guard;
 pub mod credential_pool;
 pub mod domain;
@@ -30,6 +31,9 @@ pub use context_window_guard::{
     ContextWindowInfo, ContextWindowSource,
 };
 pub use credential_pool::{CredentialPool, CredentialRegistry, PoolStrategy, PooledCredential};
+pub use execution_plan::{
+    compile_plan, ExecutionPlan, ExecutionStep, PlanStatus, StepFailureAction, StepStatus,
+};
 pub use domain::{writing_domain_profile, AgentDomainProfile, ContextPriority, DomainCapability};
 pub use permission::{PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule};
 pub use prompt_cache::{PromptCache, PromptCacheConfig, PromptCacheStats};
