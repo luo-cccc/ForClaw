@@ -6,7 +6,7 @@ This document defines the context boundary for MCP clients and schedulers. The M
 
 MCP callers do not build the final prompt. They provide a request envelope. Forge resolves the active project from `FORGE_AGENT_DATA_DIR`, reads chapters/lore/outline/Project Brain/writer memory, assembles the task-specific context pack, applies budget rules, records trace evidence, and returns structured telemetry.
 
-The original Tauri renderer context is not required. Headless callers may omit UI-only state, but they must not pretend the document is clean or current when they have unsaved text.
+Renderer context is not required. Headless callers may omit UI-only state, but they must not pretend the document is clean or current when they have unsaved text.
 
 ## Common Caller Fields
 
@@ -190,6 +190,6 @@ Tool annotations in `tools/list` are scheduling hints only. Callers must still u
 2. Use `forge_project_paths` and `forge_project_manifest` for project identity, not hard-coded paths.
 3. Use `forge_chapter_revision` before write-sensitive chapter calls.
 4. Set `dirty: true` when unsaved editor text exists.
-5. Do not send renderer-only state; Forge has no Tauri/React UI in this build.
+5. Do not send renderer-only state; Forge Agent's MCP contract is backend-only.
 6. Prefer specific tools for discoverability; use `forge_backend_call` for scheduler implementations that need one stable dispatch surface.
 7. Treat returned proposals and operations as pending until explicitly approved and durably saved.

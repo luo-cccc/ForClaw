@@ -1,30 +1,62 @@
 # Forge Agent
 
-This folder is the headless backend-only Forge writer agent. It keeps the original Forge backend/kernel capabilities and adds a stdio MCP server so the agent can be scheduled as a plugin by MCP-capable hosts.
+[![CI](https://github.com/luo-cccc/ForClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/luo-cccc/ForClaw/actions/workflows/ci.yml)
 
-## What Is Kept
+Forge Agent is a headless long-form fiction writing agent exposed through the Model Context Protocol (MCP). It provides project storage, chapter operations, story memory, Project Brain retrieval, proposal review, diagnostics, supervised chapter sprints, and model-backed writing workflows through a stable stdio server.
 
-- `agent-writer-backend/`: Forge writer backend, writer kernel, memory, chapter generation, diagnostics, story ledger, supervised sprint logic, provider budget, and storage-related backend modules.
-- `agent-harness-core/`: reusable agent runtime, provider abstraction, task packets, compaction, tool registry, vector/BM25 utilities, and Hermes memory.
-- `forge-agent-mcp/`: stdio MCP adapter that exposes the backend as tools.
-- `plugins/forge-writer-agent/`: local Codex plugin metadata pointing at the MCP server.
+The repository is designed as a backend-first agent runtime. MCP clients and schedulers can run the agent as a plugin without embedding a desktop UI.
 
-Frontend/Tauri desktop UI assets, Vite/React files, desktop icons, `dist/`, `node_modules/`, eval reports, and source repo worktrees are intentionally not part of this project. The Tauri desktop shell and renderer event stream are removed; the backend writer agent, storage, memory, chapter-generation pipeline, tools, provider budget checks, and headless model-backed agent loop remain.
+## Features
 
-## Run
+- Headless MCP server over newline-delimited JSON-RPC stdio.
+- Full writer-agent backend with story ledger, proposals, typed operations, memory, diagnostics, and trace history.
+- Chapter generation pipeline with context assembly, provider-budget checks, draft validation, repair/compression, revision-safe saves, settlement, runtime artifacts, and Project Brain embedding.
+- Project assets for chapters, lorebook, outline, volume snapshots, book state, backups, and storage diagnostics.
+- Project Brain tools for graph indexing, source revision comparison/restore, cross-reference suggestions, and approved external research ingest.
+- Supervised sprint tools for planning, progress, pause/resume/cancel, checkpointing, and budget accounting.
+- Codex plugin metadata under `plugins/forge-writer-agent/`.
+
+## Repository Layout
+
+```text
+agent-harness-core/       Shared agent runtime, providers, tool registry, context packing, memory utilities
+agent-writer-backend/     Forge writer backend and headless project implementation
+forge-agent-mcp/          MCP stdio server that exposes backend capabilities
+plugins/forge-writer-agent/ Codex plugin bundle and skill metadata
+scripts/                  Windows launchers for the MCP server
+docs/                     Protocol and caller contracts
+config/                   Runtime configuration assets
+```
+
+## Requirements
+
+- Rust stable toolchain
+- Windows PowerShell or `cmd` for the bundled launch scripts
+- Optional: `OPENAI_API_KEY` or a stored provider key for model-backed tools
+
+The default build is headless. Desktop/Tauri support is available only when explicitly enabling the `desktop` feature for `agent-writer`.
+
+## Quick Start
+
+Build the MCP server:
 
 ```powershell
 cargo build -p forge-agent-mcp
-.\scripts\forge-agent-mcp.cmd
 ```
 
-By default, project data is stored under `.forge-agent-data` in this folder. Override it with:
+Run it over stdio:
+
+```powershell
+.\scripts\forge-agent-mcp.cmd stdio
+```
+
+By default, project data is stored in `.forge-agent-data` at the repository root. Override it with:
 
 ```powershell
 $env:FORGE_AGENT_DATA_DIR="C:\path\to\forge-data"
 ```
 
-For model-backed tools, set the same provider variables used by Forge:
+For model-backed tools:
 
 ```powershell
 $env:OPENAI_API_KEY="..."
@@ -32,11 +64,28 @@ $env:OPENAI_API_BASE="https://openrouter.ai/api/v1"
 $env:OPENAI_MODEL="deepseek/deepseek-v4-flash"
 ```
 
-## MCP Tools
+## MCP Usage
 
-The stdio entrypoint is `scripts\forge-agent-mcp.cmd`. It runs the compiled `forge-agent-mcp.exe` in stdio mode, keeps logs on stderr, and leaves stdout for newline-delimited JSON-RPC responses only. The bundled plugin starts it as `cmd /c scripts\forge-agent-mcp.cmd stdio` with `cwd` at the repository root, so the command and default data directory stay relative to the checked-out project.
+The stdio entrypoint is `scripts\forge-agent-mcp.cmd`. It launches `forge-agent-mcp.exe`, keeps logs on stderr, and reserves stdout for JSON-RPC responses. The bundled plugin starts it as:
 
-`forge_backend_call` is the stable generic dispatcher for backend actions. Specific tools are also exposed for client discovery and plugin scheduling:
+```json
+{
+  "command": "cmd",
+  "args": ["/c", "scripts\\forge-agent-mcp.cmd", "stdio"],
+  "cwd": "..\\.."
+}
+```
+
+Use `initialize`, then `tools/list`, then `tools/call` from an MCP client. `forge_backend_call` is the stable generic dispatcher:
+
+```json
+{
+  "action": "status",
+  "params": {}
+}
+```
+
+Specific MCP tools are exposed for discovery and scheduling:
 
 - Protocol/project: `forge_manifest`, `forge_project_manifest`, `forge_project_paths`
 - Agent/kernel: `forge_ask_agent`, `forge_agent_tools`, `forge_effective_tool_inventory`, `forge_agent_kernel_status`, `forge_agent_domain_profile`, `forge_status`
@@ -50,20 +99,7 @@ The stdio entrypoint is `scripts\forge-agent-mcp.cmd`. It runs the compiled `for
 - Project diagnostics: `forge_project_graph_data`, `forge_project_storage_diagnostics`, `forge_export_writer_agent_trajectory`, `forge_export_diagnostic_logs`, `forge_list_file_backups`, `forge_restore_file_backup`
 - Settings: `forge_set_api_key`, `forge_check_api_key`
 
-The generic dispatcher accepts:
-
-```json
-{
-  "action": "status",
-  "params": {}
-}
-```
-
-Use `tools/list` from an MCP client for the full JSON input schemas.
-
-For scheduler and plugin authors, the context boundary is documented in `docs/CONTEXT_CONTRACT.md`. MCP callers pass intent, active editor state, chapter revision, dirty flag, and optional budget approval; Forge assembles durable project context from local storage and writer memory.
-
-All tool calls return a stable `structuredContent` envelope:
+Machine-readable tool responses use the stable Forge envelope in `result.structuredContent`:
 
 ```json
 {
@@ -73,18 +109,46 @@ All tool calls return a stable `structuredContent` envelope:
 }
 ```
 
-Backend failures return `ok: false` with `error.message` and `isError: true`; JSON-RPC protocol failures use standard JSON-RPC error codes.
+Backend failures return `ok: false` with `error.kind` and `error.message`. JSON-RPC parse, invalid request, and unknown method failures use standard JSON-RPC error responses.
 
-Model-backed tools require `OPENAI_API_KEY` or a stored provider key. `forge_ask_agent` returns the agent answer, proposals, typed operations, run metadata, and collected loop events instead of emitting Tauri renderer events. `forge_generate_chapter_autonomous` now uses the same chapter-generation pipeline behind a headless project storage abstraction, including context building, provider-budget checks, draft repair/compression, revision-safe save, settlement application, runtime artifacts, Project Brain embedding, and returned generation events.
+For caller context requirements, budget approval rules, revision safety, and write-sensitive scheduling, see [docs/CONTEXT_CONTRACT.md](docs/CONTEXT_CONTRACT.md).
 
-What is intentionally not kept is the original Tauri/React desktop UI and renderer event stream. Editor-only renderer commands such as live prediction abort/reporting and semantic-lint UI state are not exposed as plugin tools because they are UI integration hooks, not backend agent capabilities.
+## Development
 
-## Verify
+Run the default headless checks:
 
 ```powershell
+cargo fmt --check
 cargo check -p forge-agent-mcp
+cargo test -p forge-agent-mcp
 cargo test -p agent-harness-core
 cargo test -p agent-writer --lib
+cargo clippy -p agent-harness-core --all-targets -- -D warnings
+cargo clippy -p agent-writer --all-targets -- -D warnings
+cargo clippy -p forge-agent-mcp --all-targets -- -D warnings
 ```
 
-The desktop/Tauri shell is available only when explicitly built with `cargo test -p agent-writer --features desktop` or `cargo build -p agent-writer --features desktop`. The default MCP/headless build path does not require local Tauri config, icons, or generated desktop assets.
+Run the optional desktop feature locally:
+
+```powershell
+cargo test -p agent-writer --features desktop
+cargo build -p agent-writer --features desktop
+```
+
+The headless path does not require Tauri config, icons, generated desktop schemas, or renderer assets.
+
+## Plugin
+
+The Codex plugin bundle lives at `plugins/forge-writer-agent/`. It exposes the MCP server named `forge-writer-agent` and defaults data storage to `.forge-agent-data` unless `FORGE_AGENT_DATA_DIR` is set.
+
+## Security
+
+Do not commit local project data, provider keys, logs, or generated desktop artifacts. See [SECURITY.md](SECURITY.md) for vulnerability reporting and operational guidance.
+
+## Contributing
+
+Contributions should preserve the MCP contract, keep the headless path buildable in a clean clone, and include focused tests for protocol or backend behavior changes. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+This project is currently unlicensed. Do not redistribute or reuse the code outside the permissions granted by the repository owner.

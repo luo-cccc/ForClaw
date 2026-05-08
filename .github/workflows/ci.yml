@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Rust checks
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Check MCP server
+        run: cargo check -p forge-agent-mcp
+
+      - name: Test MCP server
+        run: cargo test -p forge-agent-mcp
+
+      - name: Test agent harness
+        run: cargo test -p agent-harness-core
+
+      - name: Test writer backend
+        run: cargo test -p agent-writer --lib
+
+      - name: Clippy agent harness
+        run: cargo clippy -p agent-harness-core --all-targets -- -D warnings
+
+      - name: Clippy writer backend
+        run: cargo clippy -p agent-writer --all-targets -- -D warnings
+
+      - name: Clippy MCP server
+        run: cargo clippy -p forge-agent-mcp --all-targets -- -D warnings
