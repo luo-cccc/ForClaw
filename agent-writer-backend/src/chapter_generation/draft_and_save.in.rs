@@ -53,13 +53,9 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         .iter()
         .any(|s| s.source_type == "promise" && s.label.contains("near_payoff"));
 
-    // craft_memory stats not available at this call site:
-    // The chapter generation pipeline runs with ChapterGenerationProject trait,
-    // which does not expose the raw SQLite connection. The craft_memory module
-    // requires a rusqlite::Connection to query rule acceptance/rejection stats.
-    // Craft memory stats will be wired when the project trait exposes
-    // get_connection() or when stats are cached in BuiltChapterContext during
-    // preflight. Until then, the compiler uses default priorities.
+    // Craft memory stats: if preflight cached stats in BuiltChapterContext,
+    // the compiler adjusts rule priority by acceptance rate. Otherwise, default
+    // priorities are used (no historical data yet).
     let craft_packet = compile_empowerment_prompt(
         &summary_snippet,
         target_beat,
@@ -67,7 +63,7 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         has_near_payoff,
         Some(5),
         Some(600),
-        None,
+        context.craft_rule_stats.as_ref(),
     );
 
     let system_prompt = if !craft_packet.chapter_discipline.is_empty() {

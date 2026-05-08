@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CraftRuleStats {
     pub rule_id: String,
     pub accepted_count: u32,

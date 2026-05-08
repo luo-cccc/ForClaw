@@ -572,6 +572,7 @@ pub fn build_chapter_context(
         impact_truncated: false,
         generation_strategy: GenerationStrategy::default(),
         context_quality,
+        craft_rule_stats: None, // populated when DB connection available at preflight
     })
 }
 
