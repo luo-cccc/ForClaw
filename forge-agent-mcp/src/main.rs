@@ -92,6 +92,15 @@ const BACKEND_ACTIONS: &[&str] = &[
     "check_api_key",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ErrorKind {
+    Backend,
+    Validation,
+    Provider,
+    Permission,
+}
+
 #[derive(Debug, Deserialize)]
 struct JsonRpcMessage {
     #[serde(default)]
@@ -263,7 +272,12 @@ async fn handle_message(backend: &HeadlessBackend, message: JsonRpcMessage) -> O
             if let Some(id) = message.id {
                 match call_tool(backend, message.params).await {
                     Ok(result) => Some(success_response(id, result)),
-                    Err(error) => Some(error_response(Some(id), -32602, error, None)),
+                    Err(error) => {
+                        Some(success_response(
+                            id,
+                            tool_error_result(ErrorKind::Backend, error),
+                        ))
+                    }
                 }
             } else {
                 None
@@ -338,9 +352,45 @@ fn server_manifest() -> Value {
     })
 }
 
+fn classify_error(_tool_name: &str, error: &str) -> ErrorKind {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("invalid") && (lower.contains("request") || lower.contains("tool call")) {
+        return ErrorKind::Validation;
+    }
+    if lower.contains("required")
+        || lower.contains("must not be empty")
+        || lower.contains("missing")
+    {
+        return ErrorKind::Validation;
+    }
+    if lower.contains("llm call failed")
+        || lower.contains("http request failed")
+        || lower.contains("stream read error")
+        || lower.contains("rate limit")
+        || lower.contains("429")
+    {
+        return ErrorKind::Provider;
+    }
+    if lower.contains("approval")
+        || lower.contains("permission")
+        || lower.contains("denied")
+        || lower.contains("read-only")
+    {
+        return ErrorKind::Permission;
+    }
+    ErrorKind::Backend
+}
+
 async fn call_tool(backend: &HeadlessBackend, params: Value) -> Result<Value, String> {
-    let call: ToolCallParams =
-        serde_json::from_value(params).map_err(|error| format!("Invalid tool call: {}", error))?;
+    let call: ToolCallParams = match serde_json::from_value(params) {
+        Ok(c) => c,
+        Err(error) => {
+            return Ok(tool_error_result(
+                ErrorKind::Validation,
+                format!("Invalid tool call: {}", error),
+            ));
+        }
+    };
     let arguments = if call.arguments.is_null() {
         json!({})
     } else {
@@ -514,12 +564,20 @@ async fn call_tool(backend: &HeadlessBackend, params: Value) -> Result<Value, St
         "forge_restore_file_backup" => backend.dispatch("restore_file_backup", arguments),
         "forge_set_api_key" => backend.dispatch("set_api_key", arguments),
         "forge_check_api_key" => backend.dispatch("check_api_key", arguments),
-        other => return Err(format!("Unknown tool: {}", other)),
+        other => {
+            return Ok(tool_error_result(
+                ErrorKind::Validation,
+                format!("Unknown tool: {}", other),
+            ));
+        }
     };
 
     match result {
         Ok(value) => Ok(tool_result(value, false)),
-        Err(error) => Ok(tool_error_result(error)),
+        Err(error) => {
+            let kind = classify_error(&call.name, &error);
+            Ok(tool_error_result(kind, error))
+        }
     }
 }
 
@@ -616,13 +674,13 @@ fn tool_result(value: Value, is_error: bool) -> Value {
     })
 }
 
-fn tool_error_result(error: String) -> Value {
+fn tool_error_result(kind: ErrorKind, message: String) -> Value {
     let structured_content = json!({
         "ok": false,
         "data": Value::Null,
         "error": {
-            "message": error,
-            "kind": "backend"
+            "kind": kind,
+            "message": message,
         }
     });
     json!({
@@ -1768,10 +1826,65 @@ mod tests {
         assert_eq!(result["structuredContent"]["data"]["value"], 1);
         assert!(result["structuredContent"]["error"].is_null());
 
-        let error = tool_error_result("failed".to_string());
+        let error = tool_error_result(ErrorKind::Backend, "failed".to_string());
         assert_eq!(error["isError"], true);
         assert_eq!(error["structuredContent"]["ok"], false);
         assert_eq!(error["structuredContent"]["error"]["kind"], "backend");
         assert_eq!(error["structuredContent"]["error"]["message"], "failed");
+    }
+
+    #[test]
+    fn validation_error_has_correct_kind() {
+        let result =
+            tool_error_result(ErrorKind::Validation, "chapterTitle is required".into());
+        let sc = &result["structuredContent"];
+        assert_eq!(sc["ok"], false);
+        assert_eq!(sc["error"]["kind"], "validation");
+        assert_eq!(sc["error"]["message"], "chapterTitle is required");
+    }
+
+    #[test]
+    fn provider_error_has_correct_kind() {
+        let result = tool_error_result(
+            ErrorKind::Provider,
+            "LLM call failed (429): rate limited".into(),
+        );
+        let sc = &result["structuredContent"];
+        assert_eq!(sc["error"]["kind"], "provider");
+    }
+
+    #[test]
+    fn classify_error_detects_validation() {
+        assert_eq!(
+            classify_error("forge_load_chapter", "chapterTitle is required"),
+            ErrorKind::Validation
+        );
+    }
+
+    #[test]
+    fn classify_error_detects_provider() {
+        assert_eq!(
+            classify_error("forge_ask_agent", "LLM call failed (500)"),
+            ErrorKind::Provider
+        );
+    }
+
+    #[test]
+    fn classify_error_defaults_to_backend() {
+        assert_eq!(
+            classify_error("forge_status", "something unexpected happened"),
+            ErrorKind::Backend
+        );
+    }
+
+    #[test]
+    fn classify_error_permission_denied() {
+        assert_eq!(
+            classify_error(
+                "forge_save_chapter",
+                "Tool requires explicit approval"
+            ),
+            ErrorKind::Permission
+        );
     }
 }
