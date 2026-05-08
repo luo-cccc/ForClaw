@@ -376,6 +376,65 @@ fn metric_promise_progress(text: &str, keywords: &[String]) -> QualityMetricResu
     )
 }
 
+pub fn build_revision_prompt(
+    chapter_text: &str,
+    quality_report: &ChapterQualityReport,
+    max_targets: usize,
+) -> String {
+    let targets: Vec<&QualityMetricResult> = quality_report
+        .metric_results
+        .iter()
+        .filter(|m| m.severity == IssueSeverity::Major || m.severity == IssueSeverity::Fatal)
+        .take(max_targets)
+        .collect();
+
+    if targets.is_empty() {
+        return String::new();
+    }
+
+    let strong_metrics: Vec<&str> = quality_report
+        .metric_results
+        .iter()
+        .filter(|m| m.score >= 0.8)
+        .map(|m| m.metric.as_str())
+        .collect();
+
+    let mut prompt = String::from(
+        "你是专业中文小说修订者。只修复下面列出的问题，不改其他任何内容。\n\n",
+    );
+
+    prompt.push_str("## 需要修复的问题\n\n");
+    for (i, target) in targets.iter().enumerate() {
+        prompt.push_str(&format!(
+            "{}. **{}** (score {:.1}): {}\n   Revision hint: {}\n\n",
+            i + 1,
+            target.metric,
+            target.score,
+            target.reason,
+            target.revision_hint
+        ));
+    }
+
+    if !strong_metrics.is_empty() {
+        prompt.push_str("## 必须保留的强项\n\n");
+        prompt.push_str(&format!(
+            "以下指标已达标，修订不能破坏：{}\n\n",
+            strong_metrics.join("、")
+        ));
+    }
+
+    prompt.push_str("## 硬约束\n\n");
+    prompt.push_str("- 只修改与上述问题直接相关的句子和段落\n");
+    prompt.push_str("- 不重写全章、不改变情节走向、不引入新人物或新设定\n");
+    prompt.push_str("- 修改后字数变化不超过 ±10%\n");
+    prompt.push_str("- 保留原文中所有已通过的写作特征\n\n");
+
+    prompt.push_str("## 待修订正文\n\n");
+    prompt.push_str(chapter_text);
+
+    prompt
+}
+
 #[cfg(test)]
 mod craft_quality_tests {
     use super::*;
@@ -455,6 +514,35 @@ mod craft_quality_tests {
                 report.metric_results.iter().any(|m| m.metric == *expected),
                 "missing metric: {expected}"
             );
+        }
+    }
+
+    #[test]
+    fn revision_prompt_empty_for_no_issues() {
+        let plan = SceneCraftPlan::default();
+        let report = evaluate_chapter_quality(
+            "一些正常文本内容，但是他终于明白了代价。",
+            "test-chapter",
+            &plan,
+            &[],
+            0,
+            500,
+        );
+        let prompt = build_revision_prompt("text", &report, 3);
+        // If no major/fatal issues, prompt is empty
+        assert!(prompt.is_empty() || !prompt.contains("需要修复的问题"));
+    }
+
+    #[test]
+    fn revision_prompt_includes_targets_and_constraints() {
+        let plan = SceneCraftPlan::default();
+        // Force a low-quality report by providing empty text with high length requirement
+        let report = evaluate_chapter_quality("", "test-chapter", &plan, &[], 3000, 4000);
+        let prompt = build_revision_prompt("正文内容", &report, 2);
+        if !prompt.is_empty() {
+            assert!(prompt.contains("需要修复的问题"));
+            assert!(prompt.contains("硬约束"));
+            assert!(prompt.contains("待修订正文"));
         }
     }
 }

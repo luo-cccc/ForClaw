@@ -53,5 +53,10 @@
     "temperature": 0.3,
     "maxTokens": 4096,
     "disableReasoning": true
+  },
+  "chapter_targeted_revision": {
+    "temperature": 0.3,
+    "maxTokens": 4096,
+    "disableReasoning": true
   }
 }
