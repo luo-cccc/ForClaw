@@ -4,6 +4,7 @@ use crate::compaction::{compact_messages, should_compact, CompactionConfig};
 use crate::context_window_guard::{
     evaluate_context_window, ContextWindowInfo, ContextWindowSource,
 };
+use crate::execution_plan::{ExecutionPlan, PlanStatus, StepFailureAction, StepStatus};
 use crate::provider::{LlmMessage, LlmRequest, Provider, StreamEvent};
 use crate::router::{classify_intent, Intent};
 use crate::tool_executor::{ToolExecution, ToolExecutor, ToolHandler};
@@ -56,6 +57,34 @@ pub enum AgentLoopEvent {
         tokens_saved_by_truncation: u64,
         #[serde(default)]
         boundary_summary: String,
+    },
+    #[serde(rename = "plan_started")]
+    PlanStarted {
+        plan_id: String,
+        steps: Vec<String>,
+    },
+    #[serde(rename = "step_started")]
+    StepStarted {
+        step_id: String,
+        index: usize,
+        goal: String,
+    },
+    #[serde(rename = "step_completed")]
+    StepCompleted {
+        step_id: String,
+        evidence: Vec<String>,
+    },
+    #[serde(rename = "step_failed")]
+    StepFailed {
+        step_id: String,
+        reason: String,
+        action: String,
+    },
+    #[serde(rename = "plan_completed")]
+    PlanCompleted {
+        plan_id: String,
+        steps_completed: usize,
+        steps_failed: usize,
     },
     #[serde(rename = "error")]
     Error { message: String },
@@ -505,6 +534,127 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 
         Ok(final_text)
     }
+
+    pub async fn run_with_plan(
+        &mut self,
+        plan: &mut ExecutionPlan,
+        user_message: &str,
+    ) -> Result<String, String> {
+        let step_goals: Vec<String> = plan.steps.iter().map(|s| s.goal.clone()).collect();
+        self.emit(AgentLoopEvent::PlanStarted {
+            plan_id: plan.plan_id.clone(),
+            steps: step_goals,
+        });
+        plan.status = PlanStatus::Running;
+
+        let mut final_text = String::new();
+        let mut steps_completed = 0usize;
+        let mut steps_failed = 0usize;
+
+        for step in &mut plan.steps {
+            step.status = StepStatus::Active;
+            self.emit(AgentLoopEvent::StepStarted {
+                step_id: step.step_id.clone(),
+                index: step.index,
+                goal: step.goal.clone(),
+            });
+
+            // Constrain tool filter to this step's max_side_effect
+            let saved_filter = self.config.tool_filter.clone();
+            self.config.tool_filter = Some(crate::tool_registry::ToolFilter {
+                intent: saved_filter.as_ref().and_then(|f| f.intent.clone()),
+                include_requires_approval: false,
+                include_disabled: false,
+                max_side_effect_level: Some(step.max_side_effect),
+                required_tags: Vec::new(),
+            });
+
+            let step_result = self.run(user_message, true, true).await;
+            self.config.tool_filter = saved_filter;
+
+            match step_result {
+                Ok(text) => {
+                    steps_completed += 1;
+                    final_text = text;
+                    step.status = StepStatus::Completed { evidence: vec![] };
+                    self.emit(AgentLoopEvent::StepCompleted {
+                        step_id: step.step_id.clone(),
+                        evidence: vec![],
+                    });
+                }
+                Err(e) => match step.on_failure {
+                    StepFailureAction::Skip => {
+                        steps_failed += 1;
+                        step.status = StepStatus::Skipped { reason: e.clone() };
+                        self.emit(AgentLoopEvent::StepFailed {
+                            step_id: step.step_id.clone(),
+                            reason: e.clone(),
+                            action: "skip".into(),
+                        });
+                        continue;
+                    }
+                    StepFailureAction::Stop => {
+                        steps_failed += 1;
+                        step.status = StepStatus::Failed { reason: e.clone() };
+                        self.emit(AgentLoopEvent::StepFailed {
+                            step_id: step.step_id.clone(),
+                            reason: e.clone(),
+                            action: "stop".into(),
+                        });
+                        plan.status = PlanStatus::Failed {
+                            failed_step: step.step_id.clone(),
+                            reason: e.clone(),
+                        };
+                        self.emit(AgentLoopEvent::PlanCompleted {
+                            plan_id: plan.plan_id.clone(),
+                            steps_completed,
+                            steps_failed,
+                        });
+                        return Err(e);
+                    }
+                    StepFailureAction::Retry { max_retries: _ } => {
+                        let retry_result = self.run(user_message, true, true).await;
+                        if let Ok(text) = retry_result {
+                            steps_completed += 1;
+                            final_text = text;
+                            step.status = StepStatus::Completed { evidence: vec![] };
+                            self.emit(AgentLoopEvent::StepCompleted {
+                                step_id: step.step_id.clone(),
+                                evidence: vec![],
+                            });
+                            continue;
+                        }
+                        steps_failed += 1;
+                        step.status = StepStatus::Failed { reason: e.clone() };
+                        self.emit(AgentLoopEvent::StepFailed {
+                            step_id: step.step_id.clone(),
+                            reason: format!("Retry exhausted: {}", e),
+                            action: "stop".into(),
+                        });
+                        plan.status = PlanStatus::Failed {
+                            failed_step: step.step_id.clone(),
+                            reason: e.clone(),
+                        };
+                        self.emit(AgentLoopEvent::PlanCompleted {
+                            plan_id: plan.plan_id.clone(),
+                            steps_completed,
+                            steps_failed,
+                        });
+                        return Err(e);
+                    }
+                },
+            }
+        }
+
+        plan.status = PlanStatus::Completed;
+        self.emit(AgentLoopEvent::PlanCompleted {
+            plan_id: plan.plan_id.clone(),
+            steps_completed,
+            steps_failed,
+        });
+
+        Ok(final_text)
+    }
 }
 
 #[cfg(test)]
@@ -717,5 +867,27 @@ mod tests {
         assert_eq!(json["ttft_ms"], 320);
         assert_eq!(json["first_provider_call_ms"], 1500);
         assert_eq!(json["last_provider_call_ms"], 3000);
+    }
+
+    #[test]
+    fn run_with_plan_events_serialize() {
+        let event = AgentLoopEvent::PlanStarted {
+            plan_id: "p1".into(),
+            steps: vec!["step-0".into(), "step-1".into()],
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "plan_started");
+        assert_eq!(json["steps"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn step_failed_event_serializes_action() {
+        let event = AgentLoopEvent::StepFailed {
+            step_id: "step-1".into(),
+            reason: "timeout".into(),
+            action: "stop".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["action"], "stop");
     }
 }
