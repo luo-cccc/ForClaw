@@ -778,3 +778,4 @@ include!("memory/scene_result_methods.in.rs");
 include!("memory/time_slice_methods.in.rs");
 include!("memory/chapter_time_methods.in.rs");
 include!("memory/timeline_event_methods.in.rs");
+include!("memory/craft_memory.rs");

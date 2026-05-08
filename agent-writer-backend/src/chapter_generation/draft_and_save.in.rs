@@ -50,6 +50,7 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         false,
         Some(5),
         Some(600),
+        None,
     );
 
     let system_prompt = if !craft_packet.chapter_discipline.is_empty() {

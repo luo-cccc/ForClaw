@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::sync::OnceLock;
+
+use crate::writer_agent::memory::CraftRuleStats;
 
 // ── Library loader ──
 
@@ -58,6 +61,7 @@ pub fn compile_empowerment_prompt(
     has_near_payoff: bool,
     max_rules: Option<usize>,
     max_prompt_chars: Option<usize>,
+    rule_stats: Option<&HashMap<String, CraftRuleStats>>,
 ) -> EmpowermentPromptPacket {
     let max_rules = max_rules.unwrap_or(DEFAULT_MAX_RULES);
     let max_prompt_chars = max_prompt_chars.unwrap_or(DEFAULT_MAX_PROMPT_CHARS);
@@ -88,11 +92,22 @@ pub fn compile_empowerment_prompt(
             break;
         }
         chars_used += rule_chars;
+        let base_priority = if rule.id == "promise_advance" && has_near_payoff { 10 } else { 5 };
+        let adjusted_priority = if let Some(stats_map) = rule_stats {
+            if let Some(stats) = stats_map.get(&rule.id) {
+                let boost = (stats.acceptance_rate() - 0.5) * 5.0;
+                (base_priority as f32 + boost).clamp(1.0, 10.0) as u8
+            } else {
+                base_priority
+            }
+        } else {
+            base_priority
+        };
         selected.push(CraftRuleSelection {
             rule_id: rule.id.clone(),
             reason: format!("当前场景类型匹配: {}", rule.name),
             evidence_refs: vec![format!("scene_type:{}", scene_tag)],
-            priority: if rule.id == "promise_advance" && has_near_payoff { 10 } else { 5 },
+            priority: adjusted_priority,
         });
     }
 
@@ -226,7 +241,7 @@ mod craft_prompt_tests {
     fn empty_context_falls_back_to_chapter_draft() {
         // Empty objective/target_beat infers ChapterDraft, which selects
         // all rules with "chapter_draft" in their applies_when.
-        let packet = compile_empowerment_prompt("", "", 0, false, None, None);
+        let packet = compile_empowerment_prompt("", "", 0, false, None, None, None);
         assert!(!packet.craft_rules.is_empty(), "empty context should still select chapter_draft rules");
         assert!(!packet.chapter_discipline.is_empty());
     }
@@ -236,7 +251,7 @@ mod craft_prompt_tests {
         let packet = compile_empowerment_prompt(
             "本章继续推进主线剧情",
             "审讯场景", 3, true,
-            Some(3), None,
+            Some(3), None, None,
         );
         assert!(packet.craft_rules.len() <= 3);
     }
@@ -246,7 +261,7 @@ mod craft_prompt_tests {
         let packet = compile_empowerment_prompt(
             "本章揭开伏笔",
             "关键揭示", 2, true,
-            Some(5), Some(2000),
+            Some(5), Some(2000), None,
         );
         let has_promise = packet
             .craft_rules
@@ -260,7 +275,7 @@ mod craft_prompt_tests {
         let packet = compile_empowerment_prompt(
             "高潮审讯：逼问真相",
             "对话推进", 0, false,
-            Some(5), Some(2000),
+            Some(5), Some(2000), None,
         );
         let ids: Vec<&str> = packet.craft_rules.iter().map(|r| r.rule_id.as_str()).collect();
         assert!(ids.contains(&"dialogue_function"), "dialogue scene should select dialogue rules");

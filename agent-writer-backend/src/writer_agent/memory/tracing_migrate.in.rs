@@ -892,5 +892,8 @@ fn migrate_writer_memory_schema(conn: &Connection) -> SqlResult<()> {
         "time_slice_id INTEGER",
     )?;
 
+    // v21 migration: craft memory feedback tables
+    ensure_craft_tables(conn).map_err(rusqlite::Error::InvalidParameterName)?;
+
     Ok(())
 }
