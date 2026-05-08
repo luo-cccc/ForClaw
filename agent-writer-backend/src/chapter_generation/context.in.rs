@@ -569,7 +569,15 @@ pub async fn build_chapter_context(
         impact_truncated: false,
         generation_strategy: GenerationStrategy::default(),
         context_quality,
-        craft_rule_stats: None, // populated when DB connection available at preflight
+        craft_rule_stats: project.open_memory_db().map(|conn| {
+            let mut stats = std::collections::HashMap::new();
+            for rule in craft_library_for_stats() {
+                if let Some(s) = crate::writer_agent::memory::get_craft_rule_stats(&conn, &rule.id) {
+                    stats.insert(rule.id.clone(), s);
+                }
+            }
+            stats
+        }),
     })
 }
 

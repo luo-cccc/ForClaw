@@ -461,6 +461,9 @@ impl crate::chapter_generation::ChapterGenerationProject for HeadlessChapterGene
         storage::atomic_write(&path, content)?;
         Ok(storage::content_revision(content))
     }
+    fn open_memory_db(&self) -> Option<rusqlite::Connection> {
+        rusqlite::Connection::open(&self.memory_path).ok()
+    }
 }
 
 impl HeadlessToolBridge {

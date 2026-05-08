@@ -32,6 +32,9 @@ pub trait ChapterGenerationProject {
         title: &str,
         content: &str,
     ) -> Result<String, String>;
+    fn open_memory_db(&self) -> Option<rusqlite::Connection> {
+        None // default: no DB access
+    }
 }
 
 pub const PHASE_STARTED: &str = "chapter_generation_started";
