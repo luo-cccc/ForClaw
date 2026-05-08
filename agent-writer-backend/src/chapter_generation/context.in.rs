@@ -255,6 +255,11 @@ pub fn build_chapter_context(
         }
     }
 
+    // TODO(parallel): load_lorebook, select_rag_chunks, and load_chapter are
+    // independent read-only operations that could run in parallel via
+    // tokio::try_join!. Blocked because build_chapter_context is sync, and
+    // making it async requires converting ChapterGenerationProject trait
+    // methods and all callers in pipeline/main.in.rs and headless.rs.
     let lore_entries = project
         .load_lorebook()
         .map_err(|e| ChapterGenerationError::new("lorebook_load_failed", e, true))?;
@@ -469,6 +474,47 @@ pub fn build_chapter_context(
         rebuild_count = state.rebuild_count;
     }
 
+    let context_quality = {
+        let required_types: Vec<String> = [
+            "instruction",
+            "outline",
+            "target_beat",
+            "previous_chapters",
+            "lorebook",
+            "project_brain",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let packed = agent_harness_core::PackedContext {
+            text: prompt_context.clone(),
+            sources: sources
+                .iter()
+                .map(|s| agent_harness_core::ContextSourceReport {
+                    source_type: s.source_type.clone(),
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    original_chars: s.original_chars,
+                    included_chars: s.included_chars,
+                    truncated: s.truncated,
+                    score: s.score,
+                })
+                .collect(),
+            budget: agent_harness_core::ContextBudgetReport {
+                max_chars: budget_report.max_chars,
+                included_chars: budget_report.included_chars,
+                source_count: budget_report.source_count,
+                truncated_source_count: budget_report.truncated_source_count,
+                warnings: budget_report.warnings.clone(),
+            },
+        };
+        Some(agent_harness_core::evaluate_context_quality(
+            &request_id,
+            &packed,
+            &required_types,
+        ))
+    };
+
     Ok(BuiltChapterContext {
         request_id,
         target,
@@ -494,7 +540,7 @@ pub fn build_chapter_context(
         impact_filtered_count,
         impact_truncated: false,
         generation_strategy: GenerationStrategy::default(),
-        context_quality: None,
+        context_quality,
     })
 }
 
