@@ -1,10 +1,11 @@
 pub mod agent_loop;
 pub mod compaction;
 pub mod context_pack;
-pub mod execution_plan;
+pub mod context_quality;
 pub mod context_window_guard;
 pub mod credential_pool;
 pub mod domain;
+pub mod execution_plan;
 pub mod permission;
 pub mod prompt_cache;
 pub mod provider;
@@ -26,15 +27,18 @@ pub use context_pack::{
     char_count, truncate_text_report, ContextBudgetReport, ContextPacker, ContextSourceReport,
     PackedContext,
 };
+pub use context_quality::{
+    evaluate_context_quality, ContextQualityRecommendation, ContextQualityReport,
+};
 pub use context_window_guard::{
     evaluate_context_window, guard_request, resolve_context_window_info, ContextWindowGuard,
     ContextWindowInfo, ContextWindowSource,
 };
 pub use credential_pool::{CredentialPool, CredentialRegistry, PoolStrategy, PooledCredential};
+pub use domain::{writing_domain_profile, AgentDomainProfile, ContextPriority, DomainCapability};
 pub use execution_plan::{
     compile_plan, ExecutionPlan, ExecutionStep, PlanStatus, StepFailureAction, StepStatus,
 };
-pub use domain::{writing_domain_profile, AgentDomainProfile, ContextPriority, DomainCapability};
 pub use permission::{PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule};
 pub use prompt_cache::{PromptCache, PromptCacheConfig, PromptCacheStats};
 pub use router::{classify_intent, Intent};
