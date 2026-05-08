@@ -4,7 +4,7 @@
 
 Forge Agent is a headless long-form fiction writing agent exposed through the Model Context Protocol (MCP). It provides project storage, chapter operations, story memory, Project Brain retrieval, proposal review, diagnostics, supervised chapter sprints, and model-backed writing workflows through a stable stdio server.
 
-The repository is designed as a backend-first agent runtime. MCP clients and schedulers can run the agent as a plugin without embedding a desktop UI.
+The repository is designed as a headless backend runtime. MCP clients and schedulers run the agent as a plugin without a desktop application or renderer process.
 
 ## Features
 
@@ -34,7 +34,7 @@ config/                   Runtime configuration assets
 - Windows PowerShell or `cmd` for the bundled launch scripts
 - Optional: `OPENAI_API_KEY` or a stored provider key for model-backed tools
 
-The default build is headless. Desktop/Tauri support is available only when explicitly enabling the `desktop` feature for `agent-writer`.
+Forge Agent is headless-only. The supported runtime is the MCP stdio server backed by `HeadlessBackend`; there is no Tauri desktop runtime or UI build target.
 
 ## Quick Start
 
@@ -128,14 +128,7 @@ cargo clippy -p agent-writer --all-targets -- -D warnings
 cargo clippy -p forge-agent-mcp --all-targets -- -D warnings
 ```
 
-Run the optional desktop feature locally:
-
-```powershell
-cargo test -p agent-writer --features desktop
-cargo build -p agent-writer --features desktop
-```
-
-The headless path does not require Tauri config, icons, generated desktop schemas, or renderer assets.
+The headless path does not require Tauri config, icons, generated desktop schemas, renderer assets, or desktop runtime dependencies.
 
 ## Plugin
 
@@ -143,7 +136,7 @@ The Codex plugin bundle lives at `plugins/forge-writer-agent/`. It exposes the M
 
 ## Security
 
-Do not commit local project data, provider keys, logs, or generated desktop artifacts. See [SECURITY.md](SECURITY.md) for vulnerability reporting and operational guidance.
+Do not commit local project data, provider keys, or logs. See [SECURITY.md](SECURITY.md) for vulnerability reporting and operational guidance.
 
 ## Contributing
 

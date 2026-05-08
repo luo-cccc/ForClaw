@@ -75,7 +75,7 @@ impl Default for AgentLoopConfig {
     }
 }
 
-/// Event callback type — the Tauri layer provides this to emit events to the frontend.
+/// Event callback type supplied by the host runtime.
 pub type EventCallback = Arc<dyn Fn(AgentLoopEvent) + Send + Sync>;
 
 #[derive(Debug, Clone)]

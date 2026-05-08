@@ -14,56 +14,6 @@ pub async fn embed_project_brain_text(
     Ok(embedding)
 }
 
-pub async fn embed_chapter(
-    app: &tauri::AppHandle,
-    settings: &llm_runtime::LlmSettings,
-    chapter_title: &str,
-    content: &str,
-) -> Result<(), String> {
-    let chunks = chunk_text(content, CHUNK_MAX_CHARS);
-    if chunks.is_empty() {
-        return Ok(());
-    }
-
-    let (embedded_chunks, report) =
-        embed_project_brain_chunks(settings, chapter_title, &chunks, 30).await;
-    if !matches!(report.status, ProjectBrainEmbeddingBatchStatus::Complete) {
-        tracing::warn!(
-            "Project Brain embedding batch for '{}' finished with {:?}: embedded={} skipped={} truncated={} errors={:?}",
-            chapter_title,
-            report.status,
-            report.embedded_count,
-            report.skipped_count,
-            report.truncated_count,
-            report.errors
-        );
-    }
-
-    if embedded_chunks.is_empty() {
-        return Ok(());
-    }
-
-    let path = storage::brain_path(app)?;
-    let mut db = VectorDB::load(&path).map_err(|e| {
-        format!(
-            "Project Brain index at '{}' is unreadable; restore a backup or rebuild the index: {}",
-            path.display(),
-            e
-        )
-    })?;
-    let active_revision = embedded_chunks
-        .first()
-        .and_then(|chunk| chunk.source_revision.as_deref())
-        .unwrap_or_default()
-        .to_string();
-    db.archive_chapter_revision(chapter_title, &active_revision);
-    for chunk in embedded_chunks {
-        db.upsert(chunk);
-    }
-
-    db.save(&path)
-}
-
 pub async fn embed_project_brain_chunks(
     settings: &llm_runtime::LlmSettings,
     chapter_title: &str,
@@ -151,4 +101,141 @@ pub async fn embed_project_brain_chunks(
     );
 
     (embedded_chunks, report)
+}
+
+pub fn validate_external_research_ingest_approval(
+    author_approved: bool,
+    approval_reason: &str,
+) -> Result<(), String> {
+    if !author_approved {
+        return Err(
+            "External research ingestion writes to Project Brain and requires explicit author approval"
+                .to_string(),
+        );
+    }
+    if approval_reason.trim().is_empty() {
+        return Err("External research ingestion requires an author approval reason".to_string());
+    }
+    Ok(())
+}
+
+pub fn project_brain_embedding_profile(
+    settings: &llm_runtime::LlmSettings,
+) -> ProjectBrainEmbeddingProviderProfile {
+    project_brain_embedding_profile_from_config(
+        &settings.api_base,
+        &settings.embedding_model,
+        settings.embedding_input_limit_chars,
+    )
+}
+
+pub fn project_brain_embedding_profile_from_config(
+    api_base: &str,
+    embedding_model: &str,
+    input_limit_chars: usize,
+) -> ProjectBrainEmbeddingProviderProfile {
+    resolve_project_brain_embedding_profile(api_base, embedding_model, Some(input_limit_chars))
+}
+
+pub fn resolve_project_brain_embedding_profile(
+    api_base: &str,
+    embedding_model: &str,
+    input_limit_chars: Option<usize>,
+) -> ProjectBrainEmbeddingProviderProfile {
+    let registry = project_brain_embedding_provider_registry();
+    let provider_spec = registry_provider_for_api_base(&registry, api_base);
+    let model_spec = registry_model_for_name(&registry, provider_spec, embedding_model);
+    let provider_status = if provider_spec.is_some() {
+        ProjectBrainEmbeddingRegistryStatus::RegistryKnown
+    } else {
+        ProjectBrainEmbeddingRegistryStatus::CompatibilityFallback
+    };
+    let model_status = if model_spec.is_some() {
+        ProjectBrainEmbeddingRegistryStatus::RegistryKnown
+    } else {
+        ProjectBrainEmbeddingRegistryStatus::CompatibilityFallback
+    };
+    let provider_id = provider_spec
+        .map(|provider| provider.provider_id.clone())
+        .unwrap_or_else(|| registry.fallback_provider_id.clone());
+    let dimensions = model_spec
+        .map(|model| model.dimensions)
+        .unwrap_or(registry.fallback_dimensions);
+    let input_limit_chars = input_limit_chars
+        .filter(|limit| *limit > 0)
+        .unwrap_or_else(|| {
+            provider_spec
+                .map(|provider| provider.default_input_limit_chars)
+                .unwrap_or(registry.fallback_input_limit_chars)
+        });
+    let batch_limit = provider_spec
+        .map(|provider| provider.batch_limit)
+        .unwrap_or(registry.fallback_batch_limit);
+    let retry_limit = provider_spec
+        .map(|provider| provider.retry_limit)
+        .unwrap_or(registry.fallback_retry_limit);
+
+    ProjectBrainEmbeddingProviderProfile {
+        provider_id,
+        model: embedding_model.to_string(),
+        dimensions,
+        input_limit_chars,
+        batch_limit,
+        retry_limit,
+        provider_status,
+        model_status,
+    }
+}
+
+pub fn project_brain_embedding_provider_registry() -> ProjectBrainEmbeddingProviderRegistry {
+    let openai_models = openai_embedding_model_specs();
+    ProjectBrainEmbeddingProviderRegistry {
+        providers: vec![
+            ProjectBrainEmbeddingProviderSpec {
+                provider_id: "openai".to_string(),
+                api_base_markers: vec!["api.openai.com".to_string()],
+                default_input_limit_chars: DEFAULT_EMBEDDING_INPUT_LIMIT_CHARS,
+                batch_limit: 16,
+                retry_limit: 1,
+                models: openai_models.clone(),
+            },
+            ProjectBrainEmbeddingProviderSpec {
+                provider_id: "openrouter".to_string(),
+                api_base_markers: vec!["openrouter.ai".to_string()],
+                default_input_limit_chars: DEFAULT_EMBEDDING_INPUT_LIMIT_CHARS,
+                batch_limit: 16,
+                retry_limit: 1,
+                models: openai_models.clone(),
+            },
+            ProjectBrainEmbeddingProviderSpec {
+                provider_id: "local-openai-compatible".to_string(),
+                api_base_markers: vec![
+                    "localhost".to_string(),
+                    "127.0.0.1".to_string(),
+                    "[::1]".to_string(),
+                ],
+                default_input_limit_chars: 4_000,
+                batch_limit: 8,
+                retry_limit: 0,
+                models: openai_models,
+            },
+        ],
+        fallback_provider_id: "openai-compatible".to_string(),
+        fallback_dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
+        fallback_input_limit_chars: DEFAULT_EMBEDDING_INPUT_LIMIT_CHARS,
+        fallback_batch_limit: 8,
+        fallback_retry_limit: 0,
+    }
+}
+
+pub fn trim_embedding_input(input: &str, limit: usize) -> (String, bool) {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= limit {
+        return (trimmed.to_string(), false);
+    }
+    let mut output = trimmed.chars().take(limit).collect::<String>();
+    while output.ends_with(char::is_whitespace) {
+        output.pop();
+    }
+    (output, true)
 }

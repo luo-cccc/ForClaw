@@ -255,31 +255,6 @@ fn unique_keywords(mut seed: Vec<String>, text: &str) -> Vec<String> {
         .collect()
 }
 
-fn normalized_limited_keywords(seed: Vec<String>, limit: usize) -> Vec<String> {
-    let mut seen = HashSet::new();
-    seed.into_iter()
-        .flat_map(|keyword| unique_keywords(vec![keyword.clone()], &keyword))
-        .map(|keyword| keyword.trim().to_string())
-        .filter(|keyword| keyword.chars().count() >= 2 && seen.insert(keyword.to_lowercase()))
-        .take(limit)
-        .collect()
-}
-
-fn normalized_keyword_set(seed: &[String]) -> BTreeSet<String> {
-    normalized_limited_keywords(seed.to_vec(), 64)
-        .into_iter()
-        .collect()
-}
-
-fn compare_summary_terms(primary: &str, baseline: &str) -> Vec<String> {
-    let baseline_terms = normalized_keyword_set(&agent_harness_core::extract_keywords(baseline));
-    normalized_limited_keywords(agent_harness_core::extract_keywords(primary), 24)
-        .into_iter()
-        .filter(|term| !baseline_terms.contains(term))
-        .take(8)
-        .collect()
-}
-
 fn stable_node_id(primary: &str, fallback: &str) -> String {
     let source = if primary.trim().is_empty() {
         fallback

@@ -6,7 +6,7 @@ use crate::permission::{PermissionDecision, PermissionMode, PermissionPolicy};
 use crate::tool_registry::ToolRegistry;
 
 /// Callback trait for tool handlers.
-/// Implementations bridge to the application layer (Tauri storage, lorebook, etc.).
+/// Implementations bridge to the application layer storage and domain tools.
 /// Ported from Claw Code's tool dispatch pattern.
 #[async_trait::async_trait]
 pub trait ToolHandler: Send + Sync {

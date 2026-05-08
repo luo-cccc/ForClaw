@@ -1,7 +1,7 @@
 //! Headless backend facade for CLI/MCP hosts.
 //!
-//! The desktop product still owns the Tauri command surface. This module exposes
-//! the same durable kernel/storage core without requiring a renderer or AppHandle.
+//! This is the supported runtime facade for Forge Agent. It exposes the durable
+//! kernel and storage core without a desktop UI runtime.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1943,7 +1943,7 @@ Output ONLY the JSON object, no explanation outside. Example:
         chapter_title: Option<String>,
         chapter_revision: Option<String>,
     ) -> Result<(), String> {
-        let saved_text = saved_content.map(|content| crate::html_to_plain_text(&content));
+        let saved_text = saved_content.map(|content| html_to_plain_text(&content));
         self.lock_kernel()?
             .record_operation_durable_save_with_post_write(
                 proposal_id,
@@ -5186,7 +5186,7 @@ fn chapter_save_observation(
     revision: &str,
     content: &str,
 ) -> WriterObservation {
-    let plain = crate::html_to_plain_text(content);
+    let plain = html_to_plain_text(content);
     let paragraph = last_non_empty_paragraph(&plain);
     let cursor = plain.chars().count();
     WriterObservation {
@@ -5207,6 +5207,85 @@ fn chapter_save_observation(
         paragraph,
         full_text_digest: Some(storage::content_revision(&plain)),
         editor_dirty: false,
+    }
+}
+
+fn html_to_plain_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    let mut entity = String::new();
+    let mut in_entity = false;
+
+    for ch in html.chars() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            continue;
+        }
+
+        if in_entity {
+            if ch == ';' {
+                out.push_str(&decode_html_entity(&entity));
+                entity.clear();
+                in_entity = false;
+            } else if entity.chars().count() < 12 {
+                entity.push(ch);
+            } else {
+                out.push('&');
+                out.push_str(&entity);
+                out.push(ch);
+                entity.clear();
+                in_entity = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '<' => in_tag = true,
+            '&' => in_entity = true,
+            '\r' => {}
+            _ => out.push(ch),
+        }
+    }
+
+    if in_entity {
+        out.push('&');
+        out.push_str(&entity);
+    }
+
+    out.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn decode_html_entity(entity: &str) -> String {
+    match entity {
+        "amp" => "&".to_string(),
+        "lt" => "<".to_string(),
+        "gt" => ">".to_string(),
+        "quot" => "\"".to_string(),
+        "apos" => "'".to_string(),
+        "nbsp" => " ".to_string(),
+        entity if entity.starts_with("#x") || entity.starts_with("#X") => {
+            u32::from_str_radix(&entity[2..], 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| format!("&{};", entity))
+        }
+        entity if entity.starts_with('#') => entity[1..]
+            .parse::<u32>()
+            .ok()
+            .and_then(char::from_u32)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| format!("&{};", entity)),
+        _ => format!("&{};", entity),
     }
 }
 

@@ -1,37 +1,8 @@
 
-pub const HERMES_DB_FILENAME: &str = "hermes_memory.db";
 pub const WRITER_MEMORY_DB_FILENAME: &str = "writer_memory.db";
 const MAX_FILE_BACKUPS: usize = 20;
 static ACTIVE_WRITE_LOCKS: OnceLock<(Mutex<HashSet<PathBuf>>, Condvar)> = OnceLock::new();
 static ATOMIC_WRITE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-const HERMES_DIAGNOSTIC_TABLES: &[&str] = &[
-    "session_history",
-    "user_drift_profile",
-    "hierarchical_summaries",
-    "agent_skills",
-    "character_state",
-    "plot_thread",
-    "world_rule",
-];
-
-const WRITER_MEMORY_DIAGNOSTIC_TABLES: &[&str] = &[
-    "story_contracts",
-    "chapter_missions",
-    "chapter_result_snapshots",
-    "canon_entities",
-    "canon_facts",
-    "canon_rules",
-    "plot_promises",
-    "style_preferences",
-    "creative_decisions",
-    "proposal_feedback",
-    "memory_audit_events",
-    "manual_agent_turns",
-    "writer_observation_trace",
-    "writer_proposal_trace",
-    "writer_feedback_trace",
-];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoreEntry {

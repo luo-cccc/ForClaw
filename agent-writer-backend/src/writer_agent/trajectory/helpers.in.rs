@@ -97,16 +97,3 @@ fn stable_hash64(bytes: &[u8], seed: u64) -> u64 {
     }
     hash
 }
-
-#[allow(dead_code)]
-fn _assert_trace_types(
-    _observation: &WriterObservationTrace,
-    _task_packet: &WriterTaskPacketTrace,
-    _proposal: &WriterProposalTrace,
-    _feedback: &WriterFeedbackTrace,
-    _lifecycle: &WriterOperationLifecycleTrace,
-    _run_event: &WriterRunEvent,
-    _recall: &ContextRecallSummary,
-    _metacognition: &WriterMetacognitiveSnapshot,
-) {
-}

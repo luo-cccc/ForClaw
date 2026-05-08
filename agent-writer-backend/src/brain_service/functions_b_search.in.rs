@@ -122,7 +122,7 @@ fn project_brain_chunk_text(chunk: &Chunk) -> String {
     )
 }
 
-fn build_context(results: &[(f32, Vec<String>, &Chunk)]) -> String {
+pub fn build_context(results: &[(f32, Vec<String>, &Chunk)]) -> String {
     if results.is_empty() {
         return "No relevant chunks found in the book.".to_string();
     }

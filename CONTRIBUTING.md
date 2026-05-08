@@ -32,12 +32,6 @@ cargo clippy -p agent-writer --all-targets -- -D warnings
 cargo clippy -p forge-agent-mcp --all-targets -- -D warnings
 ```
 
-If a change touches desktop-only code, also run:
-
-```powershell
-cargo test -p agent-writer --features desktop
-```
-
 ## MCP Contract Rules
 
 - Keep `forge_backend_call` stable as the generic dispatch surface.
@@ -54,12 +48,10 @@ Do not commit:
 - `.env`
 - provider API keys
 - logs
-- generated desktop artifacts
-- local Tauri config or icon output
 
 ## Pull Request Checklist
 
-- The default headless build works in a clean clone.
+- The headless MCP build works in a clean clone.
 - New or changed tools are covered by tests.
 - Protocol-facing behavior is documented.
 - Formatting and clippy checks pass.

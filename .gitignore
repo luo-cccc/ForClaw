@@ -5,6 +5,3 @@
 reports/
 dist/
 node_modules/
-/agent-writer-backend/icons/
-/agent-writer-backend/gen/
-/agent-writer-backend/tauri.conf.json

@@ -322,8 +322,9 @@ fn server_manifest() -> Value {
         "backend": {
             "mode": "headless",
             "ui": false,
-            "tauriRendererEvents": false,
-            "capabilityPolicy": "backend capabilities are preserved; desktop UI and renderer-only hooks are intentionally excluded"
+            "uiRuntime": false,
+            "uiEvents": false,
+            "capabilityPolicy": "backend capabilities are preserved; UI runtime and UI-only hooks are intentionally excluded"
         },
         "actions": BACKEND_ACTIONS,
         "stableEntrypoints": [

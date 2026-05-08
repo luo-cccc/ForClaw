@@ -18,7 +18,7 @@ The `main` branch is the supported development line until tagged releases are pu
 ## Operational Guidance
 
 - Treat `FORGE_AGENT_DATA_DIR` as private user data.
-- Do not commit `.forge-agent-data/`, `.env`, logs, provider keys, or generated desktop artifacts.
+- Do not commit `.forge-agent-data/`, `.env`, logs, or provider keys.
 - Prefer least-privilege MCP host configuration.
 - Review write-capable MCP tools before allowing unattended scheduling.
 - Require explicit approval metadata for provider spend and write-sensitive operations.

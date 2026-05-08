@@ -1,11 +1,9 @@
 
 pub use crate::storage::{LoreEntry, OutlineNode};
 
-const CHUNK_MAX_CHARS: usize = 500;
 const MIN_CHUNK_CHARS: usize = 20;
 const TOP_K: usize = 5;
 const RERANK_CANDIDATE_MULTIPLIER: usize = 6;
-const KNOWLEDGE_INDEX_FILENAME: &str = "knowledge_index.json";
 const DEFAULT_EMBEDDING_DIMENSIONS: usize = 1536;
 const DEFAULT_EMBEDDING_INPUT_LIMIT_CHARS: usize = 8_000;
 

@@ -2,13 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::kernel::{
-    WriterAgentTraceSnapshot, WriterFeedbackTrace, WriterObservationTrace,
-    WriterOperationLifecycleTrace, WriterProposalTrace, WriterTaskPacketTrace,
-};
-use super::memory::ContextRecallSummary;
-use super::metacognition::WriterMetacognitiveSnapshot;
-use super::run_events::WriterRunEvent;
+use super::kernel::WriterAgentTraceSnapshot;
 
 const TRAJECTORY_SCHEMA: &str = "forge-writer-agent-trajectory";
 const SCHEMA_VERSION: u8 = 1;
@@ -60,6 +54,7 @@ include!("trajectory/helpers.in.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::writer_agent::kernel::{WriterFeedbackTrace, WriterObservationTrace};
 
     #[test]
     fn exports_snapshot_as_jsonl_events() {
