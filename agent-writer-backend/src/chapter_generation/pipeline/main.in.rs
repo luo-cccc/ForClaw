@@ -325,30 +325,61 @@ where
     }
 
     // Quality evaluation: always evaluate draft quality after length repairs.
-    // TODO(revision-loop): when provider budget approval pattern is cleanly
-    // abstracted, add a targeted revision pass here that calls
-    // LlmRequestProfile::ChapterTargetedRevision with the revision prompt
-    // from build_revision_prompt(), then re-evaluates quality and uses the
-    // better of the two outputs. The revision call needs:
-    //   1. budget approval using chapter_generation_provider_budget_for_profile()
-    //   2. ensure_provider_budget_allowed callback
-    //   3. record_model_started callback
-    //   4. llm_runtime::chat_text_profile with ChapterTargetedRevision profile
-    let quality_report = {
-        let scene_craft_plan = context
-            .craft_plan
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
-        evaluate_chapter_quality(
+    let scene_craft_plan = context
+        .craft_plan
+        .as_ref()
+        .cloned()
+        .unwrap_or_default();
+    let quality_report = evaluate_chapter_quality(
+        &draft.content,
+        &context.target.title,
+        &scene_craft_plan,
+        &[],
+        context.chapter_contract.min_chars,
+        context.chapter_contract.max_chars,
+    );
+
+    // Targeted revision: if quality report has major/fatal issues, attempt
+    // a single revision pass with the ChapterTargetedRevision profile.
+    if !quality_report.fatal_issues.is_empty() || !quality_report.major_issues.is_empty() {
+        let revision_prompt = build_revision_prompt(
             &draft.content,
-            &context.target.title,
-            &scene_craft_plan,
-            &[],
-            context.chapter_contract.min_chars,
-            context.chapter_contract.max_chars,
-        )
-    };
+            &quality_report,
+            3,
+        );
+        if !revision_prompt.is_empty() {
+            emit(ChapterGenerationEvent::progress_with_detail(
+                &request_id,
+                PHASE_SCENE_PLAN,
+                "定向修订中",
+                "running",
+                "正在定向修订低分项...",
+                65,
+                Some(context.target.title.clone()),
+            ));
+            let revision_result = crate::llm_runtime::chat_text_profile(
+                &config.settings,
+                vec![serde_json::json!({"role": "user", "content": revision_prompt})],
+                crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
+                300,
+            )
+            .await;
+            if let Ok(revised) = revision_result {
+                let after = evaluate_chapter_quality(
+                    &revised,
+                    &context.target.title,
+                    &scene_craft_plan,
+                    &[],
+                    context.chapter_contract.min_chars,
+                    context.chapter_contract.max_chars,
+                );
+                if after.overall_score > quality_report.overall_score {
+                    draft.content = revised;
+                    draft.output_chars = char_count(&draft.content);
+                }
+            }
+        }
+    }
 
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
