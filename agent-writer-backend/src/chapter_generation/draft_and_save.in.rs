@@ -43,8 +43,13 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         .filter(|s| s.source_type == "promise" || s.label.contains("promise"))
         .count();
 
-    // TODO: wire craft memory stats when DB connection is available at this call site
-    // The compiler will use default priorities until stats are wired
+    // craft_memory stats not available at this call site:
+    // The chapter generation pipeline runs with ChapterGenerationProject trait,
+    // which does not expose the raw SQLite connection. The craft_memory module
+    // requires a rusqlite::Connection to query rule acceptance/rejection stats.
+    // Craft memory stats will be wired when the project trait exposes
+    // get_connection() or when stats are cached in BuiltChapterContext during
+    // preflight. Until then, the compiler uses default priorities.
     let craft_packet = compile_empowerment_prompt(
         &summary_snippet,
         "",

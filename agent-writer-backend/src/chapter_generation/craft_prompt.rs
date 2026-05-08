@@ -13,6 +13,11 @@ fn craft_library() -> &'static Vec<CraftRule> {
     })
 }
 
+/// Public accessor for external stats lookup (e.g., craft_memory integration)
+pub fn craft_library_for_stats() -> &'static Vec<CraftRule> {
+    craft_library()
+}
+
 const DEFAULT_MAX_RULES: usize = 5;
 const DEFAULT_MAX_PROMPT_CHARS: usize = 600;
 
@@ -177,16 +182,60 @@ pub fn build_scene_craft_plan(
         .map(|s| s.chars().take(80).collect::<String>())
         .unwrap_or_default();
 
+    // Derive conflict pressure from participants and objective
+    let conflict_pressure = if !participants.is_empty() && !objective_text.is_empty() {
+        let conflict_source = if objective_text.contains("追杀") || objective_text.contains("战斗") {
+            "外部威胁".to_string()
+        } else if objective_text.contains("选择") || objective_text.contains("决定") {
+            "内在抉择".to_string()
+        } else if objective_text.contains("秘密") || objective_text.contains("真相") {
+            "信息差".to_string()
+        } else {
+            "情境压力".to_string()
+        };
+        ConflictPressure {
+            source: conflict_source,
+            escalation: objective_text.contains("升级") || objective_text.contains("加剧"),
+            cost_or_consequence: String::new(),
+        }
+    } else {
+        ConflictPressure::default()
+    };
+
+    // Basic emotional curve from scene type keywords
+    let mut emotional_beats = Vec::new();
+    if objective_text.contains("平静") || objective_text.contains("日常") {
+        emotional_beats.push(EmotionalBeat {
+            position: "opening".into(),
+            emotion: "平静".into(),
+            trigger: "场景开端".into(),
+        });
+    }
+    if objective_text.contains("紧张") || objective_text.contains("冲突") || objective_text.contains("追杀") {
+        emotional_beats.push(EmotionalBeat {
+            position: "mid".into(),
+            emotion: "紧张".into(),
+            trigger: "冲突升级".into(),
+        });
+    }
+    if objective_text.contains("揭示") || objective_text.contains("发现") || objective_text.contains("真相") {
+        emotional_beats.push(EmotionalBeat {
+            position: "climax".into(),
+            emotion: "震惊/觉悟".into(),
+            trigger: "真相揭示".into(),
+        });
+    }
+
     SceneCraftPlan {
         scene_id: format!("scene-{}", chapter_title),
         chapter_title: chapter_title.to_string(),
         objective: objective_text,
         participants: participants.to_vec(),
-        conflict_pressure: ConflictPressure::default(),
+        conflict_pressure,
         character_choice: CharacterChoice::default(),
         information_release: Vec::new(),
         withheld_information: Vec::new(),
-        emotional_curve: Vec::new(),
+        emotional_curve: emotional_beats,
         promise_or_anchor_payoff: promise_payoff,
         ending_hook: EndingHook {
             consequence_delivered: String::new(),

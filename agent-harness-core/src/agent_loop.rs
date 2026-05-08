@@ -655,46 +655,71 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         });
                         return Err(e);
                     }
-                    StepFailureAction::Retry { max_retries: _ } => {
-                        let retry_result = self.run(user_message, true, true).await;
-                        if let Ok(text) = retry_result {
-                            steps_completed += 1;
-                            completed_step_ids.push(step.step_id.clone());
-                            final_text = text;
-                            step.status = StepStatus::Completed { evidence: vec![] };
-                            self.emit(AgentLoopEvent::StepCompleted {
-                                step_id: step.step_id.clone(),
-                                evidence: vec![],
-                            });
-                            continue;
+                    StepFailureAction::Retry { max_retries } => {
+                        let mut retry_remaining = max_retries;
+                        loop {
+                            let retry_result = self.run(user_message, true, true).await;
+                            match retry_result {
+                                Ok(text) => {
+                                    steps_completed += 1;
+                                    completed_step_ids.push(step.step_id.clone());
+                                    final_text = text;
+                                    step.status = StepStatus::Completed { evidence: vec![] };
+                                    self.emit(AgentLoopEvent::StepCompleted {
+                                        step_id: step.step_id.clone(),
+                                        evidence: vec![],
+                                    });
+                                    break; // success -- exit retry loop, next plan step
+                                }
+                                Err(retry_error) => {
+                                    if retry_remaining == 0 {
+                                        steps_failed += 1;
+                                        step.status = StepStatus::Failed {
+                                            reason: retry_error.clone(),
+                                        };
+                                        self.emit(AgentLoopEvent::StepFailed {
+                                            step_id: step.step_id.clone(),
+                                            reason: format!(
+                                                "Retry exhausted ({} attempts): {}",
+                                                max_retries, retry_error
+                                            ),
+                                            action: "stop".into(),
+                                        });
+                                        plan.status = PlanStatus::Failed {
+                                            failed_step: step.step_id.clone(),
+                                            reason: retry_error.clone(),
+                                        };
+                                        self.emit(AgentLoopEvent::PlanCompleted {
+                                            plan_id: plan.plan_id.clone(),
+                                            steps_completed,
+                                            steps_failed,
+                                        });
+                                        // Emit failure bundle before returning error
+                                        let bundle = classify_failure(
+                                            &plan.plan_id,
+                                            &retry_error,
+                                            &step.step_id,
+                                            &completed_step_ids,
+                                        );
+                                        self.emit(AgentLoopEvent::FailureBundle {
+                                            run_id: bundle.run_id,
+                                            failed_step: bundle.failed_step,
+                                            error_kind: bundle.error_kind,
+                                            completed_steps: bundle.completed_steps,
+                                            suggested_action: format!(
+                                                "{:?}",
+                                                bundle.suggested_action
+                                            ),
+                                        });
+                                        return Err(retry_error);
+                                    }
+                                    retry_remaining -= 1;
+                                    // Brief delay between retries
+                                    tokio::time::sleep(std::time::Duration::from_millis(1000))
+                                        .await;
+                                }
+                            }
                         }
-                        steps_failed += 1;
-                        step.status = StepStatus::Failed { reason: e.clone() };
-                        self.emit(AgentLoopEvent::StepFailed {
-                            step_id: step.step_id.clone(),
-                            reason: format!("Retry exhausted: {}", e),
-                            action: "stop".into(),
-                        });
-                        plan.status = PlanStatus::Failed {
-                            failed_step: step.step_id.clone(),
-                            reason: e.clone(),
-                        };
-                        self.emit(AgentLoopEvent::PlanCompleted {
-                            plan_id: plan.plan_id.clone(),
-                            steps_completed,
-                            steps_failed,
-                        });
-                        // Emit failure bundle before returning error
-                        let bundle =
-                            classify_failure(&plan.plan_id, &e, &step.step_id, &completed_step_ids);
-                        self.emit(AgentLoopEvent::FailureBundle {
-                            run_id: bundle.run_id,
-                            failed_step: bundle.failed_step,
-                            error_kind: bundle.error_kind,
-                            completed_steps: bundle.completed_steps,
-                            suggested_action: format!("{:?}", bundle.suggested_action),
-                        });
-                        return Err(e);
                     }
                 },
             }

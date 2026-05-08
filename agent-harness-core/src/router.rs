@@ -17,10 +17,10 @@ pub enum Intent {
 #[serde(rename_all = "camelCase")]
 pub struct IntentClassification {
     pub intent: Intent,
-    pub confidence: f32,                    // 0.0-1.0
-    pub reason: String,                     // why this intent was chosen
-    pub evidence: Vec<String>,              // keywords that matched
-    pub fallback_intent: Option<Intent>,    // alternative if confidence low
+    pub confidence: f32,                 // 0.0-1.0
+    pub reason: String,                  // why this intent was chosen
+    pub evidence: Vec<String>,           // keywords that matched
+    pub fallback_intent: Option<Intent>, // alternative if confidence low
     pub source: ClassificationSource,
 }
 
@@ -135,7 +135,10 @@ pub fn classify_intent(input: &str, has_lorebook: bool, has_outline: bool) -> In
         (
             Intent::GenerateContent,
             generate_score,
-            generate_matches.iter().map(|(k, _)| k.to_string()).collect(),
+            generate_matches
+                .iter()
+                .map(|(k, _)| k.to_string())
+                .collect(),
         ),
         (Intent::Chat, chat_score, vec![]),
     ];
