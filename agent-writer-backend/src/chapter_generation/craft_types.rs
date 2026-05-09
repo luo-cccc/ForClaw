@@ -147,6 +147,10 @@ pub struct RevisionTargetChange {
     pub status: RevisionTargetChangeStatus,
     pub evidence_before: String,
     pub evidence_after: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changed_excerpt_before: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changed_excerpt_after: String,
     pub text_change_summary: String,
 }
 

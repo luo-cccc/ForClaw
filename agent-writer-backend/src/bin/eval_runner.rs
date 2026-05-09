@@ -1,6 +1,10 @@
 use agent_writer_lib::chapter_generation::{
-    build_revision_target_changes, compile_empowerment_prompt, evaluate_chapter_quality,
+    build_revision_target_changes, build_revision_target_changes_with_text,
+    compile_empowerment_prompt, evaluate_chapter_quality_with_signals, ChapterQualitySignals,
     SceneCraftPlan,
+};
+use agent_writer_lib::writer_agent::author_voice::{
+    AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -55,8 +59,16 @@ fn run_chapter_generation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
     let plan = SceneCraftPlan::default();
 
     // Before: evaluate raw fixture chapter
-    let before_report =
-        evaluate_chapter_quality(chapter_text, &task.chapter, &plan, &[], 500, 2000);
+    let quality_signals = quality_signals_from_fixture(fixture);
+    let before_report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        &task.chapter,
+        &plan,
+        &[],
+        500,
+        2000,
+        &quality_signals,
+    );
 
     // After: compile empowerment prompt for the requested generation contract, then
     // re-evaluate the fixture chapter against the selected craft targets.
@@ -83,8 +95,15 @@ fn run_chapter_generation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
         ..SceneCraftPlan::default()
     };
 
-    let after_report =
-        evaluate_chapter_quality(chapter_text, &task.chapter, &craft_plan, &[], 500, 2000);
+    let after_report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        &task.chapter,
+        &craft_plan,
+        &[],
+        500,
+        2000,
+        &quality_signals,
+    );
 
     let before_score = before_report.overall_score;
     let after_score = after_report.overall_score;
@@ -171,8 +190,16 @@ fn run_quality_evaluation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
     let plan = SceneCraftPlan::default();
 
     // Before: evaluate with default plan
-    let before_report =
-        evaluate_chapter_quality(chapter_text, &task.chapter, &plan, &[], 500, 2000);
+    let quality_signals = quality_signals_from_fixture(fixture);
+    let before_report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        &task.chapter,
+        &plan,
+        &[],
+        500,
+        2000,
+        &quality_signals,
+    );
 
     // After: evaluate with craft-aware plan
     let outline = fixture["outline"].as_array().unwrap();
@@ -195,8 +222,15 @@ fn run_quality_evaluation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
         ..SceneCraftPlan::default()
     };
 
-    let after_report =
-        evaluate_chapter_quality(chapter_text, &task.chapter, &craft_plan, &[], 500, 2000);
+    let after_report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        &task.chapter,
+        &craft_plan,
+        &[],
+        500,
+        2000,
+        &quality_signals,
+    );
 
     let before_score = before_report.overall_score;
     let after_score = after_report.overall_score;
@@ -252,6 +286,213 @@ fn run_quality_evaluation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
             "revision_target_changes": target_changes,
         })),
         message,
+    }
+}
+
+fn run_quality_signal_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
+    let chapter_text = fixture["chapters"][&task.chapter].as_str().unwrap_or("");
+    let plan = SceneCraftPlan::default();
+    let quality_signals = quality_signals_from_fixture(fixture);
+    let report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        &task.chapter,
+        &plan,
+        &[],
+        500,
+        2000,
+        &quality_signals,
+    );
+    let metric_scores = report
+        .metric_results
+        .iter()
+        .map(|metric| (metric.metric.clone(), metric.score))
+        .collect::<std::collections::HashMap<_, _>>();
+    let metric_reasons = report
+        .metric_results
+        .iter()
+        .map(|metric| (metric.metric.clone(), metric.reason.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let metric_min = task.expected["metric_min"].as_object();
+    let metric_failures: Vec<String> = metric_min
+        .into_iter()
+        .flat_map(|map| map.iter())
+        .filter_map(|(metric, min)| {
+            let min = min.as_f64().unwrap_or(0.0) as f32;
+            let actual = metric_scores.get(metric).copied().unwrap_or(0.0);
+            if actual < min {
+                Some(format!("{metric} {:.2} < {:.2}", actual, min))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let checked_metrics = task
+        .metrics
+        .clone()
+        .unwrap_or_else(|| vec!["anchor_carry".to_string(), "style_drift".to_string()]);
+    let evidence_failures: Vec<String> = task
+        .expected
+        .get("must_not_contain_reason")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .filter_map(|needle| {
+            let found = checked_metrics.iter().any(|metric| {
+                metric_reasons
+                    .get(metric)
+                    .is_some_and(|reason| reason.contains(needle))
+            });
+            if found {
+                Some(format!("unexpected placeholder reason: {needle}"))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let status = if metric_failures.is_empty() && evidence_failures.is_empty() {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: None,
+        after: Some(serde_json::json!({
+            "overall_score": report.overall_score,
+            "metric_results": metric_scores,
+            "metric_reasons": metric_reasons,
+            "anchor_keywords": quality_signals.anchor_keywords,
+            "author_voice": quality_signals.author_voice,
+        })),
+        delta: None,
+        message: format!(
+            "quality_signals metric_failures={:?}, evidence_failures={:?}",
+            metric_failures, evidence_failures
+        ),
+    }
+}
+
+fn run_targeted_revision_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
+    let before_text = task
+        .expected
+        .get("before_text")
+        .and_then(|value| value.as_str())
+        .unwrap_or("林墨看着寒影剑。");
+    let after_text = task
+        .expected
+        .get("after_text")
+        .and_then(|value| value.as_str())
+        .unwrap_or("林墨只好拔出寒影剑，因此付出代价。");
+    let plan = SceneCraftPlan::default();
+    let quality_signals = quality_signals_from_fixture(fixture);
+    let before_report = evaluate_chapter_quality_with_signals(
+        before_text,
+        &task.chapter,
+        &plan,
+        &[],
+        0,
+        2000,
+        &quality_signals,
+    );
+    let after_report = evaluate_chapter_quality_with_signals(
+        after_text,
+        &task.chapter,
+        &plan,
+        &[],
+        0,
+        2000,
+        &quality_signals,
+    );
+    let changes = build_revision_target_changes_with_text(
+        &before_report,
+        Some(&after_report),
+        true,
+        false,
+        Some(before_text),
+        Some(after_text),
+    );
+    let has_excerpt_mapping = changes.iter().any(|change| {
+        !change.changed_excerpt_before.is_empty()
+            && !change.changed_excerpt_after.is_empty()
+            && change.text_change_summary.contains("Draft text changed")
+    });
+    let status = if has_excerpt_mapping { "pass" } else { "fail" };
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({
+            "overall_score": before_report.overall_score,
+            "metric_results": before_report.metric_results.iter().map(|m| (m.metric.clone(), m.score)).collect::<std::collections::HashMap<_,_>>(),
+        })),
+        after: Some(serde_json::json!({
+            "overall_score": after_report.overall_score,
+            "metric_results": after_report.metric_results.iter().map(|m| (m.metric.clone(), m.score)).collect::<std::collections::HashMap<_,_>>(),
+        })),
+        delta: Some(serde_json::json!({
+            "revision_target_changes": changes,
+            "has_excerpt_mapping": has_excerpt_mapping,
+        })),
+        message: format!("targeted_revision excerpt_mapping={}", has_excerpt_mapping),
+    }
+}
+
+fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySignals {
+    let mut anchors = Vec::new();
+    for entry in fixture["lorebook"].as_array().into_iter().flatten() {
+        if let Some(keyword) = entry["keyword"].as_str() {
+            push_unique(&mut anchors, keyword);
+        }
+    }
+    for outline in fixture["outline"].as_array().into_iter().flatten() {
+        if let Some(summary) = outline["summary"].as_str() {
+            for token in ["寒影剑", "林墨", "青云宗", "执事", "代价", "选择"] {
+                if summary.contains(token) {
+                    push_unique(&mut anchors, token);
+                }
+            }
+        }
+    }
+
+    ChapterQualitySignals {
+        anchor_keywords: anchors,
+        author_voice: Some(AuthorVoiceSnapshot {
+            voice_id: "fixture-voice".to_string(),
+            rhythm: VoiceRhythm {
+                avg_sentence_length: 28.0,
+                sentence_variance: 8.0,
+                paragraph_pacing: "medium".to_string(),
+            },
+            diction: VoiceDiction {
+                register: "formal".to_string(),
+                sensory_density: 0.5,
+                subtext_ratio: 0.3,
+            },
+            pov: "third_person_limited".to_string(),
+            dialogue_texture: "subtext_heavy".to_string(),
+            sentence_shape: vec!["short action beats mixed with reflective consequence".to_string()],
+            taboo_phrases: Vec::new(),
+            confidence: 0.8,
+            sample_refs: vec![
+                "fixture:chapter:第一章".to_string(),
+                "fixture:chapter:第二章".to_string(),
+            ],
+            last_updated_ms: 0,
+        }),
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
     }
 }
 
@@ -325,6 +566,8 @@ fn main() {
         let result = match task.task.as_str() {
             "chapter_generation" => run_chapter_generation_eval(task, &fixture),
             "quality_evaluation" => run_quality_evaluation_eval(task, &fixture),
+            "quality_signals" => run_quality_signal_eval(task, &fixture),
+            "targeted_revision" => run_targeted_revision_eval(task, &fixture),
             "continuity_diagnostic" => run_continuity_diagnostic_eval(task, &fixture),
             other => EvalResult {
                 task: task.task.clone(),

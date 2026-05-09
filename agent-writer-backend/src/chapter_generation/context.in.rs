@@ -344,6 +344,10 @@ pub async fn build_chapter_context(
 
     let (mut prompt_context, sources, budget_report) = composer.finish();
     let warnings = budget_report.warnings.clone();
+    let quality_anchor_keywords =
+        build_quality_anchor_keywords(&target, &selected_lore, &sources, input.compiled_input.as_ref());
+    let author_voice_snapshot =
+        build_quality_author_voice_snapshot(project.memory_path(), project.project_id());
 
     if let Some(ref ci) = input.compiled_input {
         let evidence_text = ci.selected_evidence.join("\n");
@@ -619,7 +623,232 @@ pub async fn build_chapter_context(
             }
             stats
         }),
+        quality_anchor_keywords,
+        author_voice_snapshot,
     })
+}
+
+fn build_quality_anchor_keywords(
+    target: &ChapterTarget,
+    selected_lore: &[(f32, &storage::LoreEntry)],
+    sources: &[ChapterContextSource],
+    compiled_input: Option<&CompiledInput>,
+) -> Vec<String> {
+    let mut anchors = Vec::new();
+    for (_, entry) in selected_lore.iter().take(8) {
+        push_anchor_candidate(&mut anchors, &entry.keyword);
+    }
+    for source in sources.iter().filter(|source| {
+        matches!(
+            source.source_type.as_str(),
+            "previous_chapters" | "lorebook" | "project_brain"
+        )
+    }) {
+        push_anchor_candidate(&mut anchors, &source.id);
+    }
+    for token in extract_story_anchor_terms(&target.summary) {
+        push_anchor_candidate(&mut anchors, &token);
+    }
+    if let Some(compiled_input) = compiled_input {
+        for evidence in compiled_input.selected_evidence.iter().take(8) {
+            for token in extract_story_anchor_terms(evidence) {
+                push_anchor_candidate(&mut anchors, &token);
+            }
+        }
+    }
+    anchors.truncate(16);
+    anchors
+}
+
+fn extract_story_anchor_terms(text: &str) -> Vec<String> {
+    let mut anchors = Vec::new();
+    for phrase in [
+        "代价", "旧债", "真相", "秘密", "承诺", "背叛", "选择", "入口", "线索",
+    ] {
+        if text.contains(phrase) {
+            push_anchor_candidate(&mut anchors, phrase);
+        }
+    }
+
+    let chars = text.chars().collect::<Vec<_>>();
+    for (idx, ch) in chars.iter().enumerate() {
+        if !is_anchor_suffix(*ch) {
+            continue;
+        }
+        let start = idx.saturating_sub(4);
+        let mut candidates = Vec::new();
+        for prefix_start in start..=idx {
+            let candidate = chars[prefix_start..=idx].iter().collect::<String>();
+            if !candidate.chars().all(is_anchor_char) {
+                continue;
+            }
+            if let Some(normalized) = normalize_anchor_candidate(&candidate) {
+                candidates.push(normalized);
+            }
+        }
+        if let Some(best) = candidates.into_iter().max_by_key(|candidate| char_count(candidate)) {
+            push_anchor_candidate(&mut anchors, &best);
+        }
+    }
+    anchors
+}
+
+fn normalize_anchor_candidate(candidate: &str) -> Option<String> {
+    let mut normalized = candidate.trim().to_string();
+    for prefix in [
+        "使用", "发现", "拔出", "握住", "回到", "带着", "报告", "私藏", "遭遇", "被迫",
+        "继续", "一把", "那个", "这个", "他的", "她的", "它的", "我的", "你的",
+    ] {
+        if normalized.starts_with(prefix) {
+            normalized = normalized.chars().skip(prefix.chars().count()).collect();
+        }
+    }
+    normalized = normalized
+        .trim_start_matches(|ch| {
+            matches!(
+                ch,
+                '用'
+                    | '向'
+                    | '把'
+                    | '被'
+                    | '将'
+                    | '在'
+                    | '到'
+                    | '从'
+                    | '和'
+                    | '与'
+                    | '的'
+                    | '了'
+                    | '着'
+                    | '过'
+                    | '出'
+                    | '进'
+                    | '回'
+                    | '藏'
+                    | '拔'
+                    | '握'
+                    | '看'
+                    | '见'
+                    | '有'
+                    | '是'
+                    | '让'
+                    | '使'
+                    | '令'
+                    | '遭'
+                    | '遇'
+                    | '现'
+                    | '告'
+                    | '角'
+                    | '主'
+            )
+        })
+        .to_string();
+    let len = char_count(&normalized);
+    if !(2..=8).contains(&len) {
+        return None;
+    }
+    if normalized.chars().any(|ch| {
+        matches!(
+            ch,
+            '在' | '把' | '被' | '将' | '与' | '和' | '到' | '从' | '了' | '着'
+        )
+    }) {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn is_anchor_suffix(ch: char) -> bool {
+    matches!(
+        ch,
+        '剑'
+            | '刀'
+            | '枪'
+            | '弓'
+            | '宗'
+            | '门'
+            | '堂'
+            | '城'
+            | '山'
+            | '谷'
+            | '峰'
+            | '庙'
+            | '墟'
+            | '镜'
+            | '书'
+            | '信'
+            | '账'
+            | '册'
+            | '令'
+            | '符'
+            | '印'
+            | '鼎'
+            | '珠'
+            | '环'
+            | '佩'
+            | '玉'
+            | '阵'
+            | '器'
+            | '术'
+            | '诀'
+            | '丹'
+            | '药'
+            | '契'
+    )
+}
+
+fn is_anchor_char(ch: char) -> bool {
+    is_cjk(ch) || ch.is_ascii_alphanumeric()
+}
+
+fn push_anchor_candidate(anchors: &mut Vec<String>, candidate: &str) {
+    let normalized = candidate
+        .trim()
+        .trim_matches(|ch: char| {
+            ch.is_ascii_punctuation()
+                || matches!(ch, '：' | '，' | '。' | '、' | '；' | '！' | '？' | '[' | ']')
+        })
+        .to_string();
+    let len = char_count(&normalized);
+    if !(2..=12).contains(&len) {
+        return;
+    }
+    if normalized.ends_with('章') && normalized.chars().all(|ch| {
+        ch.is_ascii_digit() || matches!(ch, '第' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '章')
+    }) {
+        return;
+    }
+    if ["chapter", "outline", "lorebook", "json", "previous", "score"].contains(&normalized.as_str())
+    {
+        return;
+    }
+    if !anchors.iter().any(|existing| existing == &normalized) {
+        anchors.push(normalized);
+    }
+}
+
+fn build_quality_author_voice_snapshot(
+    memory_path: &std::path::Path,
+    project_id: &str,
+) -> Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot> {
+    let memory = crate::writer_agent::memory::WriterMemory::open(memory_path).ok()?;
+    let sample_titles = memory
+        .list_recent_chapter_results(project_id, 3)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|result| result.chapter_title)
+        .filter(|title| !title.trim().is_empty())
+        .collect::<Vec<_>>();
+    let voice = crate::writer_agent::author_voice::build_author_voice_snapshot(
+        &memory,
+        &sample_titles,
+        crate::agent_runtime::now_ms(),
+    );
+    if voice.confidence <= 0.0 && voice.sample_refs.is_empty() {
+        None
+    } else {
+        Some(voice)
+    }
 }
 
 fn build_chapter_intent_artifact(

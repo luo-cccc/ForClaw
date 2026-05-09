@@ -734,6 +734,10 @@ pub struct BuiltChapterContext {
     pub context_quality: Option<ContextQualityReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub craft_rule_stats: Option<std::collections::HashMap<String, crate::writer_agent::memory::CraftRuleStats>>,
+    #[serde(default)]
+    pub quality_anchor_keywords: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_voice_snapshot: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
 }
 
 #[derive(Debug, Clone)]

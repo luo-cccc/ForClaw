@@ -330,13 +330,18 @@ where
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    let quality_report_before = evaluate_chapter_quality(
+    let quality_signals = ChapterQualitySignals {
+        anchor_keywords: context.quality_anchor_keywords.clone(),
+        author_voice: context.author_voice_snapshot.clone(),
+    };
+    let quality_report_before = evaluate_chapter_quality_with_signals(
         &draft.content,
         &context.target.title,
         &scene_craft_plan,
         &[],
         context.chapter_contract.min_chars,
         context.chapter_contract.max_chars,
+        &quality_signals,
     );
 
     // Targeted revision: if quality report has major/fatal issues, attempt
@@ -344,6 +349,8 @@ where
     
     let mut quality_report_after_revision: Option<ChapterQualityReport> = None;
     let mut quality_report_after_attempt: Option<ChapterQualityReport> = None;
+    let draft_before_revision = draft.content.clone();
+    let mut revised_text_attempt: Option<String> = None;
     let mut revision_budget_skipped = false;
     let mut revision_attempted = false;
     if !quality_report_before.fatal_issues.is_empty() || !quality_report_before.major_issues.is_empty() {
@@ -403,15 +410,17 @@ where
                         ChapterContractOutcome::Valid
                     );
                     if length_ok {
-                        let after = evaluate_chapter_quality(
+                        let after = evaluate_chapter_quality_with_signals(
                             &revised,
                             &context.target.title,
                             &scene_craft_plan,
                             &[],
                             context.chapter_contract.min_chars,
                             context.chapter_contract.max_chars,
+                            &quality_signals,
                         );
                         quality_report_after_attempt = Some(after.clone());
+                        revised_text_attempt = Some(revised.clone());
                         if after.overall_score > quality_report_before.overall_score {
                             draft.content = revised;
                             draft.output_chars = char_count(&draft.content);
@@ -428,11 +437,13 @@ where
     let final_quality = quality_report_after_revision
         .clone()
         .unwrap_or(quality_report_before.clone());
-    let target_changes = build_revision_target_changes(
+    let target_changes = build_revision_target_changes_with_text(
         &quality_report_before,
         quality_report_after_attempt.as_ref(),
         revision_attempted,
         revision_budget_skipped,
+        Some(&draft_before_revision),
+        revised_text_attempt.as_deref(),
     );
     let craft_memory_updates = record_craft_memory_feedback(
         &config,

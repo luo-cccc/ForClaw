@@ -9,6 +9,12 @@ const OVERALL_WEIGHTS: &[(&str, f32)] = &[
     ("promise_progress", 0.10),
 ];
 
+#[derive(Debug, Clone, Default)]
+pub struct ChapterQualitySignals {
+    pub anchor_keywords: Vec<String>,
+    pub author_voice: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
+}
+
 pub fn evaluate_chapter_quality(
     chapter_text: &str,
     chapter_title: &str,
@@ -17,6 +23,26 @@ pub fn evaluate_chapter_quality(
     target_min_chars: usize,
     target_max_chars: usize,
 ) -> ChapterQualityReport {
+    evaluate_chapter_quality_with_signals(
+        chapter_text,
+        chapter_title,
+        scene_plan,
+        open_promise_keywords,
+        target_min_chars,
+        target_max_chars,
+        &ChapterQualitySignals::default(),
+    )
+}
+
+pub fn evaluate_chapter_quality_with_signals(
+    chapter_text: &str,
+    chapter_title: &str,
+    scene_plan: &SceneCraftPlan,
+    open_promise_keywords: &[String],
+    target_min_chars: usize,
+    target_max_chars: usize,
+    signals: &ChapterQualitySignals,
+) -> ChapterQualityReport {
     let metric_results = vec![
         metric_length_compliance(chapter_text, target_min_chars, target_max_chars),
         metric_dialogue_function(chapter_text),
@@ -24,16 +50,8 @@ pub fn evaluate_chapter_quality(
         metric_ending_hook(chapter_text, scene_plan),
         metric_scene_causality(chapter_text, scene_plan),
         metric_promise_progress(chapter_text, open_promise_keywords),
-        // anchor_carry and style_drift require project-level data or pre-built snapshots;
-        // for MVP, emit placeholder "insufficient evidence" results
-        gated_metric(
-            "anchor_carry", 0.5, "", "anchor_carry.rs",
-            "需要项目级锚点数据，本次评估跳过", "在完整写作项目中重新运行"
-        ),
-        gated_metric(
-            "style_drift", 0.5, "", "author_voice.rs",
-            "需要作者风格快照，本次评估跳过", "在完整写作项目中重新运行"
-        ),
+        metric_anchor_carry(chapter_text, &signals.anchor_keywords),
+        metric_style_drift(chapter_text, chapter_title, signals.author_voice.as_ref()),
     ];
 
     let overall_score: f32 = metric_results
@@ -95,6 +113,121 @@ pub fn evaluate_chapter_quality(
         top_revision_targets,
         no_fatal_issue,
     }
+}
+
+fn metric_anchor_carry(text: &str, anchors: &[String]) -> QualityMetricResult {
+    if anchors.is_empty() {
+        return gated_metric(
+            "anchor_carry",
+            0.5,
+            "",
+            "anchor_carry.rs",
+            "需要项目级锚点数据，本次评估跳过",
+            "在完整写作项目中重新运行",
+        );
+    }
+
+    let report = crate::writer_agent::anchor_carry::score_anchor_carry(text, anchors);
+    let score = report.carry_rate as f32;
+    let evidence = report
+        .items
+        .iter()
+        .filter(|item| item.mentioned)
+        .take(4)
+        .map(|item| {
+            let modes = if item.carry_modes.is_empty() {
+                "mentioned_only".to_string()
+            } else {
+                item.carry_modes.join("+")
+            };
+            format!("{}:{}", item.anchor, modes)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let reason = format!(
+        "锚点承载率 {}/{}，提及率 {}/{}",
+        report.carried_count, report.anchor_count, report.mentioned_count, report.anchor_count
+    );
+
+    gated_metric(
+        "anchor_carry",
+        score,
+        &evidence,
+        "anchor_carry.rs",
+        &reason,
+        "让关键锚点参与行动、对话、后果或兑现压力，而不是只被提名",
+    )
+}
+
+fn metric_style_drift(
+    text: &str,
+    chapter_title: &str,
+    author_voice: Option<&crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
+) -> QualityMetricResult {
+    let Some(voice) = author_voice else {
+        return gated_metric(
+            "style_drift",
+            0.5,
+            "",
+            "author_voice.rs",
+            "需要作者风格快照，本次评估跳过",
+            "在完整写作项目中重新运行",
+        );
+    };
+
+    let diagnostic = crate::writer_agent::author_voice::compute_style_drift(
+        voice,
+        text,
+        chapter_title,
+    );
+    let high = diagnostic
+        .drift_signals
+        .iter()
+        .filter(|signal| signal.severity == "high")
+        .count();
+    let medium = diagnostic
+        .drift_signals
+        .iter()
+        .filter(|signal| signal.severity == "medium")
+        .count();
+    let score = (1.0 - (high as f32 * 0.35) - (medium as f32 * 0.18))
+        .clamp(0.0, 1.0);
+    let evidence = diagnostic
+        .drift_signals
+        .iter()
+        .take(3)
+        .map(|signal| {
+            format!(
+                "{}:{}->{}",
+                signal.aspect, signal.expected_pattern, signal.observed_pattern
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    if diagnostic.drift_signals.is_empty() {
+        return gated_metric(
+            "style_drift",
+            score,
+            "no drift signal",
+            "author_voice.rs",
+            "作者风格漂移信号低",
+            "",
+        );
+    }
+
+    let reason = format!(
+        "风格漂移 {}，high={}, medium={}，voice_confidence={:.2}",
+        diagnostic.overall_severity, high, medium, voice.confidence
+    );
+    gated_metric(
+        "style_drift",
+        score,
+        &evidence,
+        "author_voice.rs",
+        &reason,
+        "按作者风格快照压回句式、语气、对话密度和禁用表达",
+    )
 }
 
 fn gated_metric(
@@ -489,6 +622,24 @@ pub fn build_revision_target_changes(
     revision_attempted: bool,
     budget_skipped: bool,
 ) -> Vec<RevisionTargetChange> {
+    build_revision_target_changes_with_text(
+        before,
+        after,
+        revision_attempted,
+        budget_skipped,
+        None,
+        None,
+    )
+}
+
+pub fn build_revision_target_changes_with_text(
+    before: &ChapterQualityReport,
+    after: Option<&ChapterQualityReport>,
+    revision_attempted: bool,
+    budget_skipped: bool,
+    draft_before: Option<&str>,
+    draft_after: Option<&str>,
+) -> Vec<RevisionTargetChange> {
     let mut targets: Vec<&QualityMetricResult> = before
         .top_revision_targets
         .iter()
@@ -529,6 +680,13 @@ pub fn build_revision_target_changes(
                 after_metric.is_some(),
             );
             let evidence_after = after_metric.map(|metric| metric.evidence_excerpt.clone());
+            let text_excerpt_change =
+                match (draft_before, draft_after) {
+                    (Some(before_text), Some(after_text)) => {
+                        changed_text_excerpt(before_text, after_text, &target.metric)
+                    }
+                    _ => None,
+                };
             RevisionTargetChange {
                 metric: target.metric.clone(),
                 revision_hint: target.revision_hint.clone(),
@@ -537,10 +695,21 @@ pub fn build_revision_target_changes(
                 delta,
                 status,
                 evidence_before: target.evidence_excerpt.clone(),
+                changed_excerpt_before: text_excerpt_change
+                    .as_ref()
+                    .map(|change| change.0.clone())
+                    .unwrap_or_default(),
+                changed_excerpt_after: text_excerpt_change
+                    .as_ref()
+                    .map(|change| change.1.clone())
+                    .unwrap_or_default(),
                 text_change_summary: summarize_revision_text_change(
                     &target.evidence_excerpt,
                     evidence_after.as_deref(),
                     delta,
+                    text_excerpt_change.as_ref().map(|change| {
+                        (change.0.as_str(), change.1.as_str())
+                    }),
                 ),
                 evidence_after,
             }
@@ -577,7 +746,16 @@ fn summarize_revision_text_change(
     evidence_before: &str,
     evidence_after: Option<&str>,
     delta: Option<f32>,
+    text_excerpt_change: Option<(&str, &str)>,
 ) -> String {
+    if let Some((before_excerpt, after_excerpt)) = text_excerpt_change {
+        return format!(
+            "Draft text changed from '{}' to '{}'; score delta {:+.2}.",
+            snippet_for_report(before_excerpt, 80),
+            snippet_for_report(after_excerpt, 80),
+            delta.unwrap_or(0.0)
+        );
+    }
     let Some(evidence_after) = evidence_after else {
         return "No after-revision metric evidence was recorded for this target.".to_string();
     };
@@ -602,6 +780,114 @@ fn summarize_revision_text_change(
             snippet_for_report(evidence_after, 80),
             delta
         )
+    }
+}
+
+fn changed_text_excerpt(
+    before_text: &str,
+    after_text: &str,
+    metric: &str,
+) -> Option<(String, String)> {
+    if before_text == after_text {
+        return None;
+    }
+
+    let before_sentences = split_revision_units(before_text);
+    let after_sentences = split_revision_units(after_text);
+    if before_sentences.is_empty() || after_sentences.is_empty() {
+        return Some((
+            snippet_for_report(before_text, 120),
+            snippet_for_report(after_text, 120),
+        ));
+    }
+
+    let preferred_needles = metric_change_needles(metric);
+    for needle in preferred_needles {
+        let before = before_sentences
+            .iter()
+            .find(|sentence| sentence.contains(needle.as_str()));
+        let after = after_sentences
+            .iter()
+            .find(|sentence| sentence.contains(needle.as_str()));
+        if let (Some(before), Some(after)) = (before, after) {
+            if before != after {
+                return Some((before.clone(), after.clone()));
+            }
+        } else if before.is_some() || after.is_some() {
+            return Some(match (before, after) {
+                (Some(before), None) => (
+                    before.clone(),
+                    after_sentences.first().cloned().unwrap_or_default(),
+                ),
+                (None, Some(after)) => (
+                    before_sentences.first().cloned().unwrap_or_default(),
+                    after.clone(),
+                ),
+                _ => unreachable!(),
+            });
+        }
+    }
+
+    let max_len = before_sentences.len().max(after_sentences.len());
+    for idx in 0..max_len {
+        let before = before_sentences.get(idx);
+        let after = after_sentences.get(idx);
+        if before != after {
+            return Some((
+                before.cloned().unwrap_or_default(),
+                after.cloned().unwrap_or_default(),
+            ));
+        }
+    }
+
+    None
+}
+
+fn split_revision_units(text: &str) -> Vec<String> {
+    let mut units = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if matches!(ch, '。' | '！' | '？' | '!' | '?' | '\n') {
+            push_revision_unit(&mut units, &mut current);
+        }
+    }
+    push_revision_unit(&mut units, &mut current);
+    units
+}
+
+fn push_revision_unit(units: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        units.push(snippet_for_report(trimmed, 160));
+    }
+    current.clear();
+}
+
+fn metric_change_needles(metric: &str) -> Vec<String> {
+    match metric {
+        "length_compliance" => Vec::new(),
+        "dialogue_function" => ["说", "问", "答", "道", "\"", "“"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        "ending_hook" => ["代价", "后果", "选择", "不知道", "但是", "然而"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        "scene_causality" => ["因为", "所以", "因此", "于是", "导致", "只好"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        "promise_progress" | "anchor_carry" => ["代价", "选择", "兑现", "线索", "秘密"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        "style_drift" => ["说", "问", "。", "，"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -744,5 +1030,81 @@ mod craft_quality_tests {
         assert!(changes
             .iter()
             .any(|change| change.status == RevisionTargetChangeStatus::Improved));
+    }
+
+    #[test]
+    fn quality_signals_drive_anchor_and_style_metrics() {
+        let plan = SceneCraftPlan::default();
+        let signals = ChapterQualitySignals {
+            anchor_keywords: vec!["寒影剑".to_string(), "林墨".to_string(), "代价".to_string()],
+            author_voice: Some(crate::writer_agent::author_voice::AuthorVoiceSnapshot {
+                voice_id: "test-voice".to_string(),
+                rhythm: crate::writer_agent::author_voice::VoiceRhythm {
+                    avg_sentence_length: 24.0,
+                    sentence_variance: 8.0,
+                    paragraph_pacing: "medium".to_string(),
+                },
+                diction: crate::writer_agent::author_voice::VoiceDiction {
+                    register: "formal".to_string(),
+                    sensory_density: 0.5,
+                    subtext_ratio: 0.3,
+                },
+                pov: "third_person_limited".to_string(),
+                dialogue_texture: "subtext_heavy".to_string(),
+                sentence_shape: Vec::new(),
+                taboo_phrases: Vec::new(),
+                confidence: 0.8,
+                sample_refs: vec!["sample:chapter-1".to_string()],
+                last_updated_ms: 0,
+            }),
+        };
+        let report = evaluate_chapter_quality_with_signals(
+            "林墨只好拔出寒影剑，因此付出代价。",
+            "test-chapter",
+            &plan,
+            &[],
+            0,
+            500,
+            &signals,
+        );
+
+        let anchor = report
+            .metric_results
+            .iter()
+            .find(|metric| metric.metric == "anchor_carry")
+            .unwrap();
+        let style = report
+            .metric_results
+            .iter()
+            .find(|metric| metric.metric == "style_drift")
+            .unwrap();
+        assert!(!anchor.reason.contains("证据不足"));
+        assert!(!style.reason.contains("证据不足"));
+        assert!(anchor.score > 0.0);
+        assert!(style.score > 0.0);
+    }
+
+    #[test]
+    fn revision_target_changes_record_text_excerpts() {
+        let plan = SceneCraftPlan::default();
+        let before_text = "林墨看着寒影剑。";
+        let after_text = "林墨只好拔出寒影剑，因此付出代价。";
+        let before = evaluate_chapter_quality(before_text, "test-chapter", &plan, &[], 0, 500);
+        let after = evaluate_chapter_quality(after_text, "test-chapter", &plan, &[], 0, 500);
+
+        let changes = build_revision_target_changes_with_text(
+            &before,
+            Some(&after),
+            true,
+            false,
+            Some(before_text),
+            Some(after_text),
+        );
+
+        assert!(changes.iter().any(|change| {
+            !change.changed_excerpt_before.is_empty()
+                && !change.changed_excerpt_after.is_empty()
+                && change.text_change_summary.contains("Draft text changed")
+        }));
     }
 }

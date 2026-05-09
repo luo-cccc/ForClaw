@@ -29,6 +29,17 @@ mod tests {
     }
 
     #[test]
+    fn story_anchor_extraction_trims_action_prefix_noise() {
+        let anchors = extract_story_anchor_terms("林墨被迫使用寒影剑，并决定隐瞒代价。");
+
+        assert!(anchors.contains(&"寒影剑".to_string()));
+        assert!(anchors.contains(&"代价".to_string()));
+        assert!(!anchors.contains(&"使用寒影剑".to_string()));
+        assert!(!anchors.contains(&"用寒影剑".to_string()));
+        assert!(!anchors.contains(&"影剑".to_string()));
+    }
+
+    #[test]
     fn truncates_chinese_at_valid_utf8_boundary() {
         let (text, included, truncated) = truncate_text_report("林墨推开破庙石门", 4);
         assert_eq!(text, "林墨推开");

@@ -1,6 +1,11 @@
 use agent_writer_lib::chapter_generation::compile_empowerment_prompt;
 use agent_writer_lib::chapter_generation::evaluate_chapter_quality;
+use agent_writer_lib::chapter_generation::evaluate_chapter_quality_with_signals;
+use agent_writer_lib::chapter_generation::ChapterQualitySignals;
 use agent_writer_lib::chapter_generation::SceneCraftPlan;
+use agent_writer_lib::writer_agent::author_voice::{
+    AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -139,7 +144,7 @@ fn eval_quality_evaluation_task() {
 fn eval_fixture_has_expanded_task_coverage() {
     let tasks = load_tasks();
     assert!(
-        tasks.len() >= 5,
+        tasks.len() >= 7,
         "eval fixture should cover more than the initial 3 shallow tasks"
     );
     assert!(tasks
@@ -148,6 +153,12 @@ fn eval_fixture_has_expanded_task_coverage() {
     assert!(tasks
         .iter()
         .any(|task| task.task == "chapter_generation" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "quality_signals" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "targeted_revision" && task.chapter == "第二章"));
 }
 
 #[test]
@@ -241,4 +252,84 @@ fn eval_craft_prompt_for_fixture_objective() {
         !packet.chapter_discipline.is_empty(),
         "Should have discipline"
     );
+}
+
+#[test]
+fn eval_quality_signals_use_real_anchor_and_voice_metrics() {
+    let fixture = load_fixture();
+    let chapter_text = fixture["chapters"]["第二章"].as_str().unwrap();
+    let plan = SceneCraftPlan::default();
+    let signals = fixture_quality_signals();
+    let report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        "第二章",
+        &plan,
+        &[],
+        500,
+        2000,
+        &signals,
+    );
+
+    let anchor = report
+        .metric_results
+        .iter()
+        .find(|metric| metric.metric == "anchor_carry")
+        .unwrap();
+    let style = report
+        .metric_results
+        .iter()
+        .find(|metric| metric.metric == "style_drift")
+        .unwrap();
+    assert!(
+        !anchor.reason.contains("证据不足"),
+        "anchor_carry should use fixture anchors, got {}",
+        anchor.reason
+    );
+    assert!(
+        !style.reason.contains("证据不足"),
+        "style_drift should use fixture voice snapshot, got {}",
+        style.reason
+    );
+    assert!(
+        anchor.score >= 0.35,
+        "anchor_carry too low: {:.2}",
+        anchor.score
+    );
+    assert!(
+        style.score >= 0.55,
+        "style_drift too low: {:.2}",
+        style.score
+    );
+}
+
+fn fixture_quality_signals() -> ChapterQualitySignals {
+    ChapterQualitySignals {
+        anchor_keywords: ["古剑", "寒影剑", "林墨", "青云宗", "代价", "选择"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        author_voice: Some(AuthorVoiceSnapshot {
+            voice_id: "test-fixture-voice".to_string(),
+            rhythm: VoiceRhythm {
+                avg_sentence_length: 28.0,
+                sentence_variance: 8.0,
+                paragraph_pacing: "medium".to_string(),
+            },
+            diction: VoiceDiction {
+                register: "formal".to_string(),
+                sensory_density: 0.5,
+                subtext_ratio: 0.3,
+            },
+            pov: "third_person_limited".to_string(),
+            dialogue_texture: "subtext_heavy".to_string(),
+            sentence_shape: vec!["short action beats mixed with reflective consequence".to_string()],
+            taboo_phrases: Vec::new(),
+            confidence: 0.8,
+            sample_refs: vec![
+                "fixture:chapter:第一章".to_string(),
+                "fixture:chapter:第二章".to_string(),
+            ],
+            last_updated_ms: 0,
+        }),
+    }
 }
