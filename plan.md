@@ -110,7 +110,7 @@ Forge Agent 现在已经收敛为 Headless-only 写作 Agent Runtime：唯一支
 
 ## 下一阶段优先级
 
-### P0: 内核遥测与 MCP Smoke
+### P0: 内核遥测与 MCP Smoke ⚠️（结构已就绪，缺 provider usage 校准端到端证据）
 
 目标：让每次 agent run 都能被复盘，让 MCP 入口能被真实进程级测试覆盖。
 
@@ -144,7 +144,7 @@ cargo test -p agent-writer --lib
 cargo test -p forge-agent-mcp
 ```
 
-### P1: Planner-Aware AgentLoop
+### P1: Planner-Aware AgentLoop ⚠️（ExecutionPlan/step event 已存在，缺真实中断恢复和步骤级工具约束证据）
 
 目标：把 `TaskPacket` 从“任务说明/trace 结构”升级为“可执行计划”的输入。
 
@@ -170,7 +170,7 @@ cargo test -p forge-agent-mcp
 - max rounds 失败时能指出卡在哪一步。
 - 计划步骤能约束工具暴露范围。
 
-### P2: 上下文质量与预算校准
+### P2: 上下文质量与预算校准 ⚠️（taxonomy/action code/timing 字段已存在，缺 provider usage 回写和全链路并行检索启用）
 
 目标：让上下文和预算从“能用”变成“可解释、可校准、可优化”。
 
@@ -200,7 +200,7 @@ cargo test -p forge-agent-mcp
 - 常见中文长上下文 token 估算误差可持续下降。
 - trace 能看到各上下文来源耗时和预算消耗。
 
-### P3: 写作质量评测集
+### P3: 写作质量评测集 ⚠️（fixture/规则评分/趋势对比已存在，缺 LLM judge 辅助和更大负例矩阵）
 
 目标：让内核能力提升有可重复证据，而不是靠主观感觉。
 
@@ -225,7 +225,7 @@ cargo test -p forge-agent-mcp
 - 核心 prompt、context 策略、router、planner 改动都能跑回归评测。
 - 每次评测输出 JSONL，能比较前后版本质量差异。
 
-### P4: 恢复策略和长任务鲁棒性
+### P4: 恢复策略和长任务鲁棒性 ✅（StepFailureAction/Retry/Skip/Stop 已存在，缺真实长任务中断后 resume 的端到端证据归入 P3）
 
 目标：长任务失败后能继续，不需要完全重跑。
 
@@ -1400,7 +1400,7 @@ P4：
    - `project.json` 从 3 个大纲节点扩展为 4 个，并新增 `canon` 与 `promises` 数据，覆盖寒影剑代价、青云宗仙器门规、寒影剑代价伏笔、执事堂审问伏笔。
    - `eval_tasks.jsonl` 从 10 个任务扩展为 13 个，新增 `canon_conflict`、`planning_review`、`promise_progression`。
    - `eval_runner` 新增三类规则评估：检测候选文本是否触发显式 canon forbidden pattern；验证第三章计划是否选中关键 craft rules、承载 open promise 并保留下一章钩子；验证第二章是否实际推进跨章节伏笔。
-   - 当前 writing eval 变为 13 tasks / 13 pass / 0 fail。
+   - （历史快照）该阶段 writing eval 从 13 tasks 继续扩展到 48 tasks（3 profiles × 16 tasks），后续在 P5-P7 中完成。
 
 ### 当前完成度估算
 
@@ -1409,16 +1409,16 @@ P4：
 | Headless MCP 写作后端底座 | 86% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；进程级 smoke 已加固临时目录隔离；仍缺部分长任务恢复策略。 |
 | ForClaw 写作赋能 MVP | 98% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；Craft Memory 已能沉淀自动修订和作者手改样本，回流进生成 prompt，并进入 rule 级趋势证据；eval trend 已暴露为 MCP 只读工具。 |
 | 写作质量证据闭环 | 97% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、48-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进。 |
-| Context quality / preflight 可操作性 | 72% | 已能查询、阻断和建议动作，并进入章节生成 warning/block；但 source taxonomy 与 Story OS source 的映射仍偏规则化，缺来源耗时和 provider usage 校准。 |
-| plan.md 全量路线 | 80% | P4 Required Anchors、P5 Writing Eval Matrix（48 tasks / 3 profiles）、P6 Sentence-Level Diff、P7 Craft Trend CI 已完成；Planner-Aware AgentLoop、provider usage 校准、read-only 并行检索、长任务 checkpoint recovery 仍未完整完成。 |
+| Context quality / preflight 可操作性 | 82% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告。短板是 provider usage 回写校准表尚未完整闭环，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
+| plan.md 全量路线 | 82% | P4 Required Anchors ✅、P5 Writing Eval Matrix（48 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P0 Provider Calibration（代码已存在，缺更多真实 usage 样本沉淀和端到端演练证据）⚠️、P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing 字段已存在，缺全链路并行检索启用和 provider usage 回写）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
 
 ### 剩余真实缺口
 
 - `anchor_carry` 和 `style_drift` 已接入真实信号，但锚点抽取仍是保守启发式；下一步应让 Project Brain / Story OS 明确产出“本章必须承载锚点”清单。
-- eval fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，并已有跨运行趋势报告；但仍只能算小样本回归，下一步应增加多章连续样本和更大负例矩阵。
+- eval fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，并已有跨运行趋势报告；但仍只能算小样本规则回归，不能完全代表长篇真实生成质量，下一步应增加更大负例矩阵和 LLM judge 辅助验证。
 - Sentence-level semantic diff 已落地（Jaccard 对齐 + confidence 分级），复杂同义替换和语序大调仍可能标为 Low/Unaligned，这是轻量方案的设计权衡。
 - Craft Memory 趋势已接入 headless dispatch 和 MCP 只读工具（`forge_eval_trend_summary`），Companion/CI 可直接消费；下一步应增加趋势可视化而非 API 扩展。
-- Context quality 已进入 preflight，但还没有 provider usage 校准、source timing 和 read-only retrieval parallelism。
+- Context quality taxonomy、action code、elapsed_ms、retrieval_status 字段和 preflight 绑定已就绪，但 provider usage 校准尚缺真实运行样本的持续回写闭环，read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。
 
 ### 本轮验证
 
