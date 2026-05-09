@@ -166,6 +166,10 @@ pub struct CraftMemoryUpdate {
     pub score_after: f32,
     pub evidence_ref: String,
     pub reason: String,
+    #[serde(default)]
+    pub example_refs: Vec<String>,
+    #[serde(default)]
+    pub bad_pattern_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

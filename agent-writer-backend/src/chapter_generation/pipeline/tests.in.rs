@@ -343,4 +343,61 @@ mod tests {
         assert_eq!(continuation.requested_output_tokens, 2_200);
         assert_eq!(compress.requested_output_tokens, 5_200);
     }
+
+    #[test]
+    fn craft_pattern_memory_records_examples_and_bad_patterns_from_target_changes() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::writer_agent::memory::ensure_craft_tables(&conn).unwrap();
+        let target_changes = vec![RevisionTargetChange {
+            metric: "dialogue_function".to_string(),
+            revision_hint: "让对话改变选择。".to_string(),
+            score_before: 0.2,
+            score_after: Some(0.8),
+            delta: Some(0.6),
+            status: RevisionTargetChangeStatus::Improved,
+            evidence_before: "没有功能性对话".to_string(),
+            evidence_after: Some("选择".to_string()),
+            changed_excerpt_before: "他说了背景。".to_string(),
+            changed_excerpt_after: "他说：你现在必须选择。".to_string(),
+            text_change_summary: "Draft text changed".to_string(),
+        }];
+        let matched_metrics = vec!["dialogue_function".to_string()];
+
+        let (example_refs, bad_refs) = record_craft_pattern_memory(
+            &conn,
+            "dialogue_function",
+            "chapter-7",
+            "accepted",
+            &matched_metrics,
+            &target_changes,
+            0.6,
+            "revision_report:chapter-7:dialogue_function",
+            "metric improved",
+        );
+        assert_eq!(example_refs.len(), 1);
+        assert!(bad_refs.is_empty());
+        let examples =
+            crate::writer_agent::memory::list_craft_examples(&conn, "dialogue_function", 10)
+                .unwrap();
+        assert_eq!(examples.len(), 1);
+        assert!(examples[0].excerpt.contains("必须选择"));
+
+        let (_, bad_refs) = record_craft_pattern_memory(
+            &conn,
+            "dialogue_function",
+            "chapter-7",
+            "rejected",
+            &matched_metrics,
+            &target_changes,
+            -0.2,
+            "revision_report:chapter-7:dialogue_function",
+            "metric regressed",
+        );
+        assert_eq!(bad_refs.len(), 1);
+        let bad_patterns =
+            crate::writer_agent::memory::list_craft_bad_patterns(&conn, "dialogue_function", 10)
+                .unwrap();
+        assert_eq!(bad_patterns.len(), 1);
+        assert_eq!(bad_patterns[0].correction, "让对话改变选择。");
+    }
 }

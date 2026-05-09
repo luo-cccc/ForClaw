@@ -831,6 +831,17 @@ fn record_craft_memory_feedback<P: ChapterGenerationProject>(
             reason: reason.clone(),
         };
         let _ = crate::writer_agent::memory::record_craft_feedback_event(&conn, &event);
+        let (example_refs, bad_pattern_refs) = record_craft_pattern_memory(
+            &conn,
+            &rule_id,
+            &scope,
+            decision,
+            &matched_metrics,
+            target_changes,
+            delta,
+            &evidence_ref,
+            &reason,
+        );
         updates.push(CraftMemoryUpdate {
             rule_id,
             scope: scope.clone(),
@@ -841,10 +852,120 @@ fn record_craft_memory_feedback<P: ChapterGenerationProject>(
             score_after,
             evidence_ref,
             reason,
+            example_refs,
+            bad_pattern_refs,
         });
     }
 
     updates
+}
+
+fn record_craft_pattern_memory(
+    conn: &rusqlite::Connection,
+    rule_id: &str,
+    scope: &str,
+    decision: &str,
+    matched_metrics: &[String],
+    target_changes: &[RevisionTargetChange],
+    score_delta: f32,
+    evidence_ref: &str,
+    reason: &str,
+) -> (Vec<String>, Vec<String>) {
+    let mut example_refs = Vec::new();
+    let mut bad_pattern_refs = Vec::new();
+    let Some(change) = best_target_change_for_metrics(target_changes, matched_metrics) else {
+        return (example_refs, bad_pattern_refs);
+    };
+    let now = crate::agent_runtime::now_ms();
+    let primary_metric = matched_metrics
+        .first()
+        .map(String::as_str)
+        .unwrap_or(rule_id);
+    if decision == "accepted" {
+        let excerpt = if !change.changed_excerpt_after.trim().is_empty() {
+            change.changed_excerpt_after.clone()
+        } else {
+            change.evidence_after.clone().unwrap_or_default()
+        };
+        if excerpt.trim().is_empty() {
+            return (example_refs, bad_pattern_refs);
+        }
+        let id = stable_craft_memory_id("good", rule_id, scope, primary_metric, &excerpt);
+        let example = crate::writer_agent::memory::CraftExampleMemory {
+            id: id.clone(),
+            rule_id: rule_id.to_string(),
+            scope: scope.to_string(),
+            excerpt_ref: evidence_ref.to_string(),
+            excerpt: snippet_for_craft_memory(&excerpt, 260),
+            reason: reason.to_string(),
+            pattern: primary_metric.to_string(),
+            scene_types: vec!["chapter_targeted_revision".to_string()],
+            score_delta,
+            created_at: now,
+        };
+        if crate::writer_agent::memory::record_craft_example(conn, &example).is_ok() {
+            example_refs.push(format!("craft_examples:{}", id));
+        }
+    } else if decision == "rejected" {
+        let evidence_excerpt = if !change.changed_excerpt_after.trim().is_empty() {
+            change.changed_excerpt_after.clone()
+        } else if !change.evidence_before.trim().is_empty() {
+            change.evidence_before.clone()
+        } else {
+            change.evidence_after.clone().unwrap_or_default()
+        };
+        let id = stable_craft_memory_id("bad", rule_id, scope, primary_metric, &evidence_excerpt);
+        let pattern = crate::writer_agent::memory::CraftBadPatternMemory {
+            id: id.clone(),
+            rule_id: rule_id.to_string(),
+            scope: scope.to_string(),
+            pattern: primary_metric.to_string(),
+            evidence_ref: evidence_ref.to_string(),
+            evidence_excerpt: snippet_for_craft_memory(&evidence_excerpt, 260),
+            correction: change.revision_hint.clone(),
+            rejected_count: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        if crate::writer_agent::memory::record_craft_bad_pattern(conn, &pattern).is_ok() {
+            bad_pattern_refs.push(format!("craft_bad_patterns:{}", id));
+        }
+    }
+    (example_refs, bad_pattern_refs)
+}
+
+fn best_target_change_for_metrics<'a>(
+    target_changes: &'a [RevisionTargetChange],
+    matched_metrics: &[String],
+) -> Option<&'a RevisionTargetChange> {
+    target_changes
+        .iter()
+        .find(|change| matched_metrics.iter().any(|metric| metric == &change.metric))
+        .or_else(|| target_changes.first())
+}
+
+fn stable_craft_memory_id(
+    kind: &str,
+    rule_id: &str,
+    scope: &str,
+    metric: &str,
+    excerpt: &str,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    rule_id.hash(&mut hasher);
+    scope.hash(&mut hasher);
+    metric.hash(&mut hasher);
+    excerpt.hash(&mut hasher);
+    format!("{}-{}-{}-{:x}", kind, rule_id, metric, hasher.finish())
+}
+
+fn snippet_for_craft_memory(text: &str, max_chars: usize) -> String {
+    let mut snippet: String = text.trim().chars().take(max_chars).collect();
+    if text.trim().chars().count() > max_chars {
+        snippet.push_str("...");
+    }
+    snippet
 }
 
 fn matched_quality_metrics_for_rule(

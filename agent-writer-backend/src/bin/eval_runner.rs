@@ -441,6 +441,81 @@ fn run_targeted_revision_eval(task: &EvalTask, fixture: &serde_json::Value) -> E
     }
 }
 
+fn run_craft_memory_eval(task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+    agent_writer_lib::writer_agent::memory::ensure_craft_tables(&conn)
+        .expect("ensure craft tables");
+    let example = agent_writer_lib::writer_agent::memory::CraftExampleMemory {
+        id: "eval-dialogue-example".to_string(),
+        rule_id: "dialogue_function".to_string(),
+        scope: task.chapter.clone(),
+        excerpt_ref: "eval:revision_report:dialogue_function".to_string(),
+        excerpt: "他说：你现在必须选择。".to_string(),
+        reason: "dialogue_function improved".to_string(),
+        pattern: "dialogue_function".to_string(),
+        scene_types: vec!["chapter_targeted_revision".to_string()],
+        score_delta: 0.42,
+        created_at: 1,
+    };
+    let bad = agent_writer_lib::writer_agent::memory::CraftBadPatternMemory {
+        id: "eval-dialogue-bad-pattern".to_string(),
+        rule_id: "dialogue_function".to_string(),
+        scope: task.chapter.clone(),
+        pattern: "dialogue_function".to_string(),
+        evidence_ref: "eval:revision_report:dialogue_function".to_string(),
+        evidence_excerpt: "他说了一段背景，局面没有变化。".to_string(),
+        correction: "让对话改变权力、关系、信息或选择。".to_string(),
+        rejected_count: 1,
+        created_at: 2,
+        updated_at: 2,
+    };
+    agent_writer_lib::writer_agent::memory::record_craft_example(&conn, &example)
+        .expect("record craft example");
+    agent_writer_lib::writer_agent::memory::record_craft_bad_pattern(&conn, &bad)
+        .expect("record bad pattern");
+    agent_writer_lib::writer_agent::memory::record_craft_bad_pattern(&conn, &bad)
+        .expect("increment bad pattern");
+
+    let examples =
+        agent_writer_lib::writer_agent::memory::list_craft_examples(&conn, "dialogue_function", 10)
+            .expect("list examples");
+    let bad_patterns = agent_writer_lib::writer_agent::memory::list_craft_bad_patterns(
+        &conn,
+        "dialogue_function",
+        10,
+    )
+    .expect("list bad patterns");
+    let min_examples = task.expected["min_examples"].as_u64().unwrap_or(1) as usize;
+    let min_bad_patterns = task.expected["min_bad_patterns"].as_u64().unwrap_or(1) as usize;
+    let status = if examples.len() >= min_examples
+        && bad_patterns.len() >= min_bad_patterns
+        && bad_patterns
+            .first()
+            .is_some_and(|pattern| pattern.rejected_count >= 2)
+    {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: None,
+        after: Some(serde_json::json!({
+            "examples": examples,
+            "bad_patterns": bad_patterns,
+        })),
+        delta: None,
+        message: format!(
+            "craft_memory examples={}, bad_patterns={}",
+            examples.len(),
+            bad_patterns.len()
+        ),
+    }
+}
+
 fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySignals {
     let mut anchors = Vec::new();
     for entry in fixture["lorebook"].as_array().into_iter().flatten() {
@@ -568,6 +643,7 @@ fn main() {
             "quality_evaluation" => run_quality_evaluation_eval(task, &fixture),
             "quality_signals" => run_quality_signal_eval(task, &fixture),
             "targeted_revision" => run_targeted_revision_eval(task, &fixture),
+            "craft_memory" => run_craft_memory_eval(task, &fixture),
             "continuity_diagnostic" => run_continuity_diagnostic_eval(task, &fixture),
             other => EvalResult {
                 task: task.task.clone(),

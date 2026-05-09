@@ -17,6 +17,36 @@ pub struct CraftFeedbackEvent {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftExampleMemory {
+    pub id: String,
+    pub rule_id: String,
+    pub scope: String,
+    pub excerpt_ref: String,
+    pub excerpt: String,
+    pub reason: String,
+    pub pattern: String,
+    pub scene_types: Vec<String>,
+    pub score_delta: f32,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftBadPatternMemory {
+    pub id: String,
+    pub rule_id: String,
+    pub scope: String,
+    pub pattern: String,
+    pub evidence_ref: String,
+    pub evidence_excerpt: String,
+    pub correction: String,
+    pub rejected_count: u32,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 impl CraftRuleStats {
     pub fn acceptance_rate(&self) -> f32 {
         let total = self.accepted_count + self.rejected_count;
@@ -39,16 +69,27 @@ pub fn ensure_craft_tables(conn: &Connection) -> Result<(), String> {
         );
         CREATE TABLE IF NOT EXISTS craft_examples (
             id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT '',
             excerpt_ref TEXT NOT NULL,
+            excerpt TEXT NOT NULL DEFAULT '',
             reason TEXT NOT NULL DEFAULT '',
             pattern TEXT NOT NULL DEFAULT '',
-            scene_types TEXT NOT NULL DEFAULT ''
+            scene_types TEXT NOT NULL DEFAULT '',
+            score_delta REAL NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS craft_bad_patterns (
             id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT '',
             pattern TEXT NOT NULL,
+            evidence_ref TEXT NOT NULL DEFAULT '',
+            evidence_excerpt TEXT NOT NULL DEFAULT '',
             correction TEXT NOT NULL DEFAULT '',
-            rejected_count INTEGER NOT NULL DEFAULT 0
+            rejected_count INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS craft_feedback_events (
             id TEXT PRIMARY KEY,
@@ -63,7 +104,69 @@ pub fn ensure_craft_tables(conn: &Connection) -> Result<(), String> {
             created_at INTEGER NOT NULL DEFAULT 0
         );",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    ensure_craft_column(conn, "craft_examples", "rule_id", "rule_id TEXT NOT NULL DEFAULT ''")?;
+    ensure_craft_column(conn, "craft_examples", "scope", "scope TEXT NOT NULL DEFAULT ''")?;
+    ensure_craft_column(conn, "craft_examples", "excerpt", "excerpt TEXT NOT NULL DEFAULT ''")?;
+    ensure_craft_column(
+        conn,
+        "craft_examples",
+        "score_delta",
+        "score_delta REAL NOT NULL DEFAULT 0",
+    )?;
+    ensure_craft_column(
+        conn,
+        "craft_examples",
+        "created_at",
+        "created_at INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_craft_column(conn, "craft_bad_patterns", "rule_id", "rule_id TEXT NOT NULL DEFAULT ''")?;
+    ensure_craft_column(conn, "craft_bad_patterns", "scope", "scope TEXT NOT NULL DEFAULT ''")?;
+    ensure_craft_column(
+        conn,
+        "craft_bad_patterns",
+        "evidence_ref",
+        "evidence_ref TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_craft_column(
+        conn,
+        "craft_bad_patterns",
+        "evidence_excerpt",
+        "evidence_excerpt TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_craft_column(
+        conn,
+        "craft_bad_patterns",
+        "created_at",
+        "created_at INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_craft_column(
+        conn,
+        "craft_bad_patterns",
+        "updated_at",
+        "updated_at INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn ensure_craft_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let pragma = format!("PRAGMA table_info({})", table);
+    let mut stmt = conn.prepare(&pragma).map_err(|e| e.to_string())?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE {} ADD COLUMN {};", table, definition))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn record_craft_accept(conn: &Connection, rule_id: &str, scope: &str) -> Result<(), String> {
@@ -135,6 +238,146 @@ pub fn record_craft_feedback_event(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn record_craft_example(
+    conn: &Connection,
+    example: &CraftExampleMemory,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO craft_examples
+         (id, rule_id, scope, excerpt_ref, excerpt, reason, pattern, scene_types, score_delta, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(id) DO UPDATE SET
+            excerpt=excluded.excerpt,
+            reason=excluded.reason,
+            pattern=excluded.pattern,
+            scene_types=excluded.scene_types,
+            score_delta=excluded.score_delta",
+        rusqlite::params![
+            example.id,
+            example.rule_id,
+            example.scope,
+            example.excerpt_ref,
+            example.excerpt,
+            example.reason,
+            example.pattern,
+            example.scene_types.join(","),
+            example.score_delta,
+            example.created_at as i64,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn record_craft_bad_pattern(
+    conn: &Connection,
+    pattern: &CraftBadPatternMemory,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO craft_bad_patterns
+         (id, rule_id, scope, pattern, evidence_ref, evidence_excerpt, correction, rejected_count, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(id) DO UPDATE SET
+            evidence_ref=excluded.evidence_ref,
+            evidence_excerpt=excluded.evidence_excerpt,
+            correction=excluded.correction,
+            rejected_count=craft_bad_patterns.rejected_count + excluded.rejected_count,
+            updated_at=excluded.updated_at",
+        rusqlite::params![
+            pattern.id,
+            pattern.rule_id,
+            pattern.scope,
+            pattern.pattern,
+            pattern.evidence_ref,
+            pattern.evidence_excerpt,
+            pattern.correction,
+            pattern.rejected_count,
+            pattern.created_at as i64,
+            pattern.updated_at as i64,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn list_craft_examples(
+    conn: &Connection,
+    rule_id: &str,
+    limit: usize,
+) -> Result<Vec<CraftExampleMemory>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, rule_id, scope, excerpt_ref, excerpt, reason, pattern, scene_types, score_delta, created_at
+             FROM craft_examples
+             WHERE rule_id = ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![rule_id, limit as i64], |row| {
+            let scene_types: String = row.get(7)?;
+            Ok(CraftExampleMemory {
+                id: row.get(0)?,
+                rule_id: row.get(1)?,
+                scope: row.get(2)?,
+                excerpt_ref: row.get(3)?,
+                excerpt: row.get(4)?,
+                reason: row.get(5)?,
+                pattern: row.get(6)?,
+                scene_types: split_csv(&scene_types),
+                score_delta: row.get(8)?,
+                created_at: row.get::<_, i64>(9)? as u64,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+pub fn list_craft_bad_patterns(
+    conn: &Connection,
+    rule_id: &str,
+    limit: usize,
+) -> Result<Vec<CraftBadPatternMemory>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, rule_id, scope, pattern, evidence_ref, evidence_excerpt, correction, rejected_count, created_at, updated_at
+             FROM craft_bad_patterns
+             WHERE rule_id = ?1
+             ORDER BY rejected_count DESC, updated_at DESC
+             LIMIT ?2",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![rule_id, limit as i64], |row| {
+            Ok(CraftBadPatternMemory {
+                id: row.get(0)?,
+                rule_id: row.get(1)?,
+                scope: row.get(2)?,
+                pattern: row.get(3)?,
+                evidence_ref: row.get(4)?,
+                evidence_excerpt: row.get(5)?,
+                correction: row.get(6)?,
+                rejected_count: row.get(7)?,
+                created_at: row.get::<_, i64>(8)? as u64,
+                updated_at: row.get::<_, i64>(9)? as u64,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -230,5 +473,46 @@ mod craft_memory_tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn records_good_examples_and_bad_patterns() {
+        let conn = test_conn();
+        let example = CraftExampleMemory {
+            id: "dialogue_function-ch7-example".to_string(),
+            rule_id: "dialogue_function".to_string(),
+            scope: "chapter-7".to_string(),
+            excerpt_ref: "revision_report:chapter-7:dialogue_function".to_string(),
+            excerpt: "他说：你必须选择。".to_string(),
+            reason: "dialogue metric improved".to_string(),
+            pattern: "dialogue_function".to_string(),
+            scene_types: vec!["chapter_revision".to_string()],
+            score_delta: 0.42,
+            created_at: 100,
+        };
+        record_craft_example(&conn, &example).unwrap();
+
+        let bad = CraftBadPatternMemory {
+            id: "ending_hook-ch8-bad".to_string(),
+            rule_id: "ending_hook".to_string(),
+            scope: "chapter-8".to_string(),
+            pattern: "ending_hook".to_string(),
+            evidence_ref: "revision_report:chapter-8:ending_hook".to_string(),
+            evidence_excerpt: "结尾没有后果。".to_string(),
+            correction: "章末交付后果并留下选择。".to_string(),
+            rejected_count: 1,
+            created_at: 110,
+            updated_at: 110,
+        };
+        record_craft_bad_pattern(&conn, &bad).unwrap();
+        record_craft_bad_pattern(&conn, &bad).unwrap();
+
+        let examples = list_craft_examples(&conn, "dialogue_function", 10).unwrap();
+        assert_eq!(examples, vec![example]);
+
+        let patterns = list_craft_bad_patterns(&conn, "ending_hook", 10).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].rejected_count, 2);
+        assert_eq!(patterns[0].correction, "章末交付后果并留下选择。");
     }
 }

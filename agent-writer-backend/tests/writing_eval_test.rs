@@ -144,7 +144,7 @@ fn eval_quality_evaluation_task() {
 fn eval_fixture_has_expanded_task_coverage() {
     let tasks = load_tasks();
     assert!(
-        tasks.len() >= 7,
+        tasks.len() >= 8,
         "eval fixture should cover more than the initial 3 shallow tasks"
     );
     assert!(tasks
@@ -159,6 +159,9 @@ fn eval_fixture_has_expanded_task_coverage() {
     assert!(tasks
         .iter()
         .any(|task| task.task == "targeted_revision" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "craft_memory" && task.chapter == "第二章"));
 }
 
 #[test]
