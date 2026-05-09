@@ -1,6 +1,6 @@
 # Writing Eval Report
 
-**Run:** 2026-05-09T08:45:22.087490400+00:00
+**Run:** 2026-05-09T13:42:18.840629100+00:00
 **Mode:** full
 **Profiles:** mystery, scifi, xianxia
 
@@ -8,10 +8,10 @@
 
 | Profile | Tasks | Pass | Fail | Failing Tasks |
 |---------|-------|------|------|---------------|
-| mystery | 15 | 15 | 0 | - |
-| scifi | 15 | 15 | 0 | - |
-| xianxia | 18 | 18 | 0 | - |
-| **Total** | **48** | **48** | **0** | |
+| mystery | 21 | 21 | 0 | - |
+| scifi | 21 | 21 | 0 | - |
+| xianxia | 24 | 24 | 0 | - |
+| **Total** | **66** | **66** | **0** | |
 
 ## Regressions
 

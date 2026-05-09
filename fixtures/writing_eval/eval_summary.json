@@ -1,28 +1,28 @@
 {
-  "timestamp": "2026-05-09T08:45:22.087490400+00:00",
+  "timestamp": "2026-05-09T13:42:18.840629100+00:00",
   "mode": "full",
   "profiles": {
     "mystery": {
-      "task_count": 15,
-      "pass": 15,
+      "task_count": 21,
+      "pass": 21,
       "fail": 0,
       "failing_tasks": []
     },
     "scifi": {
-      "task_count": 15,
-      "pass": 15,
+      "task_count": 21,
+      "pass": 21,
       "fail": 0,
       "failing_tasks": []
     },
     "xianxia": {
-      "task_count": 18,
-      "pass": 18,
+      "task_count": 24,
+      "pass": 24,
       "fail": 0,
       "failing_tasks": []
     }
   },
-  "total_tasks": 48,
-  "total_pass": 48,
+  "total_tasks": 66,
+  "total_pass": 66,
   "total_fail": 0,
   "regressions": []
 }

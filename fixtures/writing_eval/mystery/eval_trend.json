@@ -2,21 +2,21 @@
   "profile": "mystery",
   "current": {
     "profile": "mystery",
-    "timestamp": "2026-05-09T08:45:22.096190500+00:00",
-    "task_count": 15,
-    "pass": 15,
+    "timestamp": "2026-05-09T13:42:18.848432400+00:00",
+    "task_count": 21,
+    "pass": 21,
     "fail": 0,
-    "average_after_score": 0.57964855,
+    "average_after_score": 0.5899837,
     "average_score_delta": 0.0,
     "metric_after_average": {
-      "anchor_carry": 0.25,
-      "dialogue_function": 0.625,
-      "ending_hook": 0.5,
-      "exposition_ratio": 0.9,
-      "length_compliance": 0.57935,
+      "anchor_carry": 0.20000002,
+      "dialogue_function": 0.64285713,
+      "ending_hook": 0.5714286,
+      "exposition_ratio": 0.90000004,
+      "length_compliance": 0.6475143,
       "promise_progress": 0.5,
-      "scene_causality": 0.6,
-      "style_drift": 0.82
+      "scene_causality": 0.55714285,
+      "style_drift": 0.7942857
     },
     "craft_rule_trends": {
       "dialogue_function": {
@@ -33,8 +33,10 @@
       }
     },
     "task_status": {
+      "canon_conflict:第三章": "pass",
       "canon_conflict:第二章": "pass",
       "chapter_generation:第一章": "pass",
+      "chapter_generation:第三章": "pass",
       "chapter_generation:第二章": "pass",
       "continuity_diagnostic:第一章": "pass",
       "craft_memory:第二章": "pass",
@@ -43,40 +45,48 @@
       "negative_missing_anchor:第一章": "pass",
       "negative_style_drift:第一章": "pass",
       "planning_review:第三章": "pass",
+      "promise_progression:第三章": "pass",
       "promise_progression:第二章": "pass",
       "quality_evaluation:第一章": "pass",
+      "quality_evaluation:第三章": "pass",
       "quality_evaluation:第二章": "pass",
+      "quality_signals:第三章": "pass",
       "quality_signals:第二章": "pass",
+      "targeted_revision:第三章": "pass",
       "targeted_revision:第二章": "pass"
     },
     "task_after_score": {
       "chapter_generation:第一章": 0.59886,
+      "chapter_generation:第三章": 0.61776006,
       "chapter_generation:第二章": 0.54194003,
       "manual_craft_edit:第二章": 0.55200005,
       "quality_evaluation:第一章": 0.59886,
+      "quality_evaluation:第三章": 0.61776006,
       "quality_evaluation:第二章": 0.54194003,
+      "quality_signals:第三章": 0.61776006,
       "quality_signals:第二章": 0.54194003,
+      "targeted_revision:第三章": 0.579,
       "targeted_revision:第二章": 0.682
     },
     "failing_tasks": []
   },
   "previous": {
     "profile": "mystery",
-    "timestamp": "2026-05-09T08:42:14.165357300+00:00",
-    "task_count": 15,
-    "pass": 15,
+    "timestamp": "2026-05-09T12:24:31.938517800+00:00",
+    "task_count": 21,
+    "pass": 21,
     "fail": 0,
-    "average_after_score": 0.57964855,
+    "average_after_score": 0.5899837,
     "average_score_delta": 0.0,
     "metric_after_average": {
-      "anchor_carry": 0.25,
-      "dialogue_function": 0.625,
-      "ending_hook": 0.5,
-      "exposition_ratio": 0.9,
-      "length_compliance": 0.57935,
+      "anchor_carry": 0.20000002,
+      "dialogue_function": 0.64285713,
+      "ending_hook": 0.5714286,
+      "exposition_ratio": 0.90000004,
+      "length_compliance": 0.6475143,
       "promise_progress": 0.5,
-      "scene_causality": 0.6,
-      "style_drift": 0.82
+      "scene_causality": 0.55714285,
+      "style_drift": 0.7942857
     },
     "craft_rule_trends": {
       "dialogue_function": {
@@ -93,8 +103,10 @@
       }
     },
     "task_status": {
+      "canon_conflict:第三章": "pass",
       "canon_conflict:第二章": "pass",
       "chapter_generation:第一章": "pass",
+      "chapter_generation:第三章": "pass",
       "chapter_generation:第二章": "pass",
       "continuity_diagnostic:第一章": "pass",
       "craft_memory:第二章": "pass",
@@ -103,19 +115,27 @@
       "negative_missing_anchor:第一章": "pass",
       "negative_style_drift:第一章": "pass",
       "planning_review:第三章": "pass",
+      "promise_progression:第三章": "pass",
       "promise_progression:第二章": "pass",
       "quality_evaluation:第一章": "pass",
+      "quality_evaluation:第三章": "pass",
       "quality_evaluation:第二章": "pass",
+      "quality_signals:第三章": "pass",
       "quality_signals:第二章": "pass",
+      "targeted_revision:第三章": "pass",
       "targeted_revision:第二章": "pass"
     },
     "task_after_score": {
       "chapter_generation:第一章": 0.59886,
+      "chapter_generation:第三章": 0.61776006,
       "chapter_generation:第二章": 0.54194003,
       "manual_craft_edit:第二章": 0.55200005,
       "quality_evaluation:第一章": 0.59886,
+      "quality_evaluation:第三章": 0.61776006,
       "quality_evaluation:第二章": 0.54194003,
+      "quality_signals:第三章": 0.61776006,
       "quality_signals:第二章": 0.54194003,
+      "targeted_revision:第三章": 0.579,
       "targeted_revision:第二章": 0.682
     },
     "failing_tasks": []

@@ -1757,3 +1757,221 @@ Milestone D：趋势进入日常工作流。
 - P2 + P3 至少完成一个且可恢复测试通过：上调到 76% 到 78%。
 - P4 + P5 + P6 至少完成两个且 eval matrix 达到 30+ tasks：上调到 80% 左右。
 - P7 完成后不单独大幅上调核心完成度，但会提高长期维护可信度。
+
+## 2026-05-09 性能瓶颈与写作能力提升计划
+
+### 证据边界
+
+本计划基于当前仓库实现、`plan.md` 已记录的真实 OpenRouter 全量测试、以及本地 `reports/real_author_session_thirty_chapter_gate.json` 的三十章 gate 报告。已知证据：
+
+- OpenRouter `deepseek/deepseek-v4-flash` 全量 `api_integration_tests` 12/12 通过，耗时约 1364 秒。
+- 三十章真实写作 gate：`chapters=30`、`avg_chars=1980`、`min_carry_rate=0.60`、`avg_anchor_hit=0.94`。
+- 三十章报告统计：`avg_carry=0.913`、`repaired_count=1`、`min_chars=531`、`max_chars=3652`。
+- 三十章报告出现 4 组相邻或近邻 preview 重复：1/2、13/14、19/20/21、24/25/26。
+- 结论：当前质量 gate 能约束锚点承接，但不能充分约束长篇推进、重复场景和新信息密度。
+
+### 总体判断
+
+性能瓶颈主要在真实 provider 串行生成与修复追加调用，不在本地 Rust 计算。写作能力已经具备“写作工艺注入、质量诊断、定向修订、Craft Memory 回流、eval 趋势”的闭环，但长篇连续创作仍缺少剧情状态推进约束。
+
+### P8 Provider Latency 与调用链路遥测
+
+目标：把“慢在哪里”从日志观察升级为结构化数据，区分 provider 延迟、context 装配、质量诊断、修订、保存和 checkpoint 开销。
+
+涉及模块：
+
+- `agent-writer-backend/src/llm_runtime.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/chapter_generation/draft_and_save.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+- `reports/*`
+
+交付物：
+
+- 每次 provider 调用记录 `profile`、`latency_ms`、`input_chars`、`output_chars`、`usage`、`retry_count`、`repaired`。
+- 章节生成报告新增 phase timing：context_built、draft_produced、length_repair、quality_report、targeted_revision、save_prepared、saved。
+- `real_author_session_thirty_chapter_gate.json` 或同类报告记录每章 provider 调用次数与总耗时。
+- retry 事件区分 request error、429/5xx、JSON decode transient，不与质量失败混为一谈。
+
+验收：
+
+- 单测覆盖 telemetry builder 不泄露 API key。
+- 真实 gated test 能输出每章 latency summary。
+- 全量报告能计算 p50/p90/p95 chapter latency、平均 provider calls per chapter。
+
+风险与非目标：
+
+- 风险是 telemetry 太吵；报告默认输出 summary，详细事件留 JSON。
+- 非目标是做精确计费系统，成本估算仍由 provider budget 模块负责。
+
+### P9 只读上下文检索并行落地
+
+目标：减少非 provider 等待时间，把 Project Brain、lore、前文摘要、promise/canon 状态等只读来源并行预取，再走确定性装配。
+
+涉及模块：
+
+- `agent-writer-backend/src/writer_agent/context/assembly.in.rs`
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop.rs`
+- `agent-harness-core/src/context_pack.rs`
+
+交付物：
+
+- 章节生成上下文构建改为 read-only source fetch 并行化，输出仍按固定 priority 排序。
+- `ContextSourceReport` 的 `elapsed_ms` / `retrieval_status` 在真实调用点填充，不再主要停留在结构字段。
+- 单个 source 失败时保留 status 和 action code，不吞掉其他成功来源。
+- preflight 把慢 source 和缺 source 分开提示。
+
+验收：
+
+- 单测证明并行预取后 source order 稳定。
+- 单测覆盖一个 source timeout/失败时其他 source 仍进入 context pack。
+- 真实或模拟测试能看到 source 级 elapsed_ms 非零。
+
+风险与非目标：
+
+- 风险是并发读引入顺序不稳定；装配层必须排序。
+- 非目标是并行写入、并行保存或并行修改 memory。
+
+### P10 长篇推进去重 Gate
+
+目标：解决真实三十章里出现的场景/段落重复问题。锚点承接合格不代表剧情推进合格，必须新增重复检测和推进检测。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+- `fixtures/writing_eval/*/eval_tasks.jsonl`
+- `reports/real_author_session_thirty_chapter_gate.json`
+
+交付物：
+
+- 新增 `scene_repetition` metric：检测相邻章节开头、场景动作、核心问答、关键意象是否高重复。
+- 新增 `plot_progression` metric：检测本章是否改变至少一个剧情状态、关系状态、债务状态或信息状态。
+- 新增 `new_information_density` metric：检测正文是否只复述前文，而没有新增证据、选择、后果或代价。
+- 三十章 gate 报告加入重复组、重复章节号、重复片段摘要。
+
+验收：
+
+- 单测覆盖完全重复、轻微改写重复、合法呼应、必要 recap 四类情况。
+- eval fixture 增加“锚点承接合格但剧情没有推进”的负例。
+- 真实三十章 gate 中如果出现 3 章连续同场景重复，应进入 warning 或 fail，阈值由配置控制。
+
+风险与非目标：
+
+- 风险是把有意回环、复调、仪式化重复误判为失败；因此第一阶段只 warning，不直接硬阻断。
+- 非目标是替代人工编辑判断，目标是捕捉明显机械重复。
+
+### P11 Story State Delta 明确化
+
+目标：让模型每章不只“带着锚点写”，还要知道本章必须改变什么状态。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/craft_prompt.rs`
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/writer_agent/memory.rs`
+- `agent-writer-backend/src/writer_agent/story_impact/*`
+
+交付物：
+
+- `BuiltChapterContext` 增加 `required_state_deltas`，来源包括 outline beat、open promise、chapter mission、canon constraint、previous chapter result。
+- draft prompt 增加短约束：本章必须至少改变一个 state delta，不能只复述上一章压力。
+- quality report 输出 `state_delta_coverage`：covered / weak / missing。
+- Revision prompt 能针对 missing delta 要求补写行动、选择、代价或新证据。
+
+验收：
+
+- 单测证明有 required delta 但正文未改变状态时会降分。
+- 单测证明正文只提到锚点但没有状态变化时，`anchor_carry` 可合格但 `state_delta_coverage` 不合格。
+- eval runner 新增任务验证 promise/canon/mission delta 能进入 prompt 与 quality report。
+
+风险与非目标：
+
+- 风险是状态 delta 设计过细导致 prompt 僵硬；先限制为 1-3 条高优先级 delta。
+- 非目标是自动规划整卷剧情，只做本章级推进约束。
+
+### P12 长链路质量报告升级
+
+目标：让真实三章/三十章 gate 不只看 `anchor_carry`，还看重复率、推进率、修复率和长度稳定性。
+
+涉及模块：
+
+- `agent-writer-backend/src/api_integration_tests.rs`
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `reports/*`
+- `plan.md`
+
+交付物：
+
+- 三十章 gate 报告新增 `duplicatePreviewGroups`、`repairRate`、`minChars`、`maxChars`、`avgCarryRate`。
+- gate summary 增加 `qualityWarnings`，区分 fail 与 warning。
+- `plan.md` 的完成度估算以后必须引用长链路质量指标，而不是只引用 pass/fail。
+
+验收：
+
+- 真实 gated test 报告能列出重复章节组。
+- 如果 `repairRate` 明显升高或 `duplicatePreviewGroups` 超阈值，报告至少 warning。
+- 不影响默认非真实测试速度；真实长链路仍 gated。
+
+风险与非目标：
+
+- 风险是报告过度膨胀；正文 preview 继续截断，详细文本不默认写入。
+- 非目标是把真实长链路测试放进普通 CI。
+
+### P13 性能模式与质量模式分层
+
+目标：明确 fast draft、balanced、quality gate 三种运行模式，避免所有场景都承受三十章级质量成本。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/headless.rs`
+- `forge-agent-mcp/src/tools.rs`
+- `agent-writer-backend/src/writer_agent/supervised_sprint.rs`
+
+交付物：
+
+- `generation_quality_mode`：`fast`、`balanced`、`strict`。
+- fast：单次 draft + 基础长度校验 + 非阻断 warning。
+- balanced：draft + quality report + 必要时一次 targeted revision。
+- strict：balanced + repetition/state delta gate + 长链路报告。
+- MCP/headless 参数暴露模式，默认 balanced。
+
+验收：
+
+- 单测覆盖三种模式触发的 provider 调用上限。
+- 文档说明每种模式适用场景与成本。
+- sprint 能按章节目标选择模式，例如关键章 strict、过渡章 balanced。
+
+风险与非目标：
+
+- 风险是模式过多造成心智负担；只暴露 3 档，不暴露内部细项。
+- 非目标是让 fast 模式绕过保存安全和 revision conflict 检查。
+
+### 执行顺序
+
+1. P8 先做，因为没有 latency / call count / retry count，就无法精确优化性能。
+2. P10 与 P12 并行推进，先把真实报告里的重复问题变成可见指标。
+3. P11 接入 Story State Delta，让模型生成前就知道必须推进什么。
+4. P9 在上下文路径稳定后落地，减少非 provider 等待。
+5. P13 最后做模式分层，把性能和质量的取舍暴露给调用方。
+
+### 新完成度重估规则
+
+- P8 + P12 完成：性能可观测性从 6/10 提升到 7/10，写作长链路证据可信度提升。
+- P10 完成并接入三十章 gate：长篇连续创作能力从 7/10 提升到 7.8/10。
+- P11 完成并进入 prompt + quality report：长篇连续创作能力提升到 8.2/10 左右。
+- P9 完成真实调用点并行预取：性能吞吐视项目上下文规模提升，预估从 6/10 到 6.8/10。
+- P13 完成：产品可用性提升，因为用户能在速度和质量之间显式选择。
+
+### 近期优先验收目标
+
+下一轮最小闭环：
+
+1. 三十章 gate 报告能输出重复章节组和长度波动。
+2. `craft_quality` 能识别“锚点合格但场景重复”的负例。
+3. draft prompt 能收到 1-3 条 required state delta。
+4. `plan.md` 后续完成度估算引用 `duplicatePreviewGroups`、`repairRate`、`stateDeltaCoverage`，不再只引用 `anchor_carry`。

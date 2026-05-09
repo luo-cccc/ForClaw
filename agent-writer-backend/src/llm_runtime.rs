@@ -55,7 +55,7 @@ const DEFAULT_JSON_TEMPERATURE: f64 = 0.0;
 const DEFAULT_CHAT_MAX_TOKENS: u32 = 4_096;
 const DEFAULT_JSON_MAX_TOKENS: u32 = 1_024;
 const JSON_RETRY_MAX_TOKENS_CAP: u32 = 4_096;
-const CHAT_COMPLETION_TRANSIENT_RETRIES: usize = 1;
+const CHAT_COMPLETION_TRANSIENT_RETRIES: usize = 3;
 const CHAT_COMPLETION_RETRY_DELAY_MS: u64 = 750;
 
 #[derive(Debug, Deserialize)]
@@ -515,15 +515,14 @@ fn is_retryable_chat_status(status: reqwest::StatusCode) -> bool {
 }
 
 async fn sleep_before_chat_completion_retry(attempt: usize, error: &str) {
+    let delay_ms = CHAT_COMPLETION_RETRY_DELAY_MS.saturating_mul((attempt as u64) + 1);
     tracing::warn!(
-        "chat completion transient failure on attempt {}; retrying once: {}",
+        "chat completion transient failure on attempt {}; retrying after {}ms: {}",
         attempt + 1,
+        delay_ms,
         error
     );
-    tokio::time::sleep(std::time::Duration::from_millis(
-        CHAT_COMPLETION_RETRY_DELAY_MS,
-    ))
-    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 }
 
 fn chat_completion_text_and_usage(body: serde_json::Value) -> (String, LlmUsage) {
@@ -903,7 +902,9 @@ mod tests {
     #[test]
     fn retry_policy_only_retries_transient_chat_failures() {
         assert!(should_retry_chat_completion(0));
-        assert!(!should_retry_chat_completion(1));
+        assert!(should_retry_chat_completion(1));
+        assert!(should_retry_chat_completion(2));
+        assert!(!should_retry_chat_completion(3));
         assert!(is_retryable_chat_status(
             reqwest::StatusCode::TOO_MANY_REQUESTS
         ));
