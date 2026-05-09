@@ -348,6 +348,8 @@ pub async fn build_chapter_context(
         build_quality_anchor_keywords(&target, &selected_lore, &sources, input.compiled_input.as_ref());
     let author_voice_snapshot =
         build_quality_author_voice_snapshot(project.memory_path(), project.project_id());
+    let required_story_anchors =
+        build_required_story_anchors(project, &target, &selected_lore);
 
     if let Some(ref ci) = input.compiled_input {
         let evidence_text = ci.selected_evidence.join("\n");
@@ -510,6 +512,10 @@ pub async fn build_chapter_context(
                     included_chars: s.included_chars,
                     truncated: s.truncated,
                     score: s.score,
+                    taxonomy: s.taxonomy.clone(),
+                    role: s.role.clone(),
+                    elapsed_ms: s.elapsed_ms,
+                    retrieval_status: s.retrieval_status.clone(),
                 })
                 .collect(),
             budget: agent_harness_core::ContextBudgetReport {
@@ -537,7 +543,7 @@ pub async fn build_chapter_context(
                     reason.clone(),
                 ));
             }
-            agent_harness_core::ContextQualityRecommendation::Supplement { sources } => {
+            agent_harness_core::ContextQualityRecommendation::Supplement { sources, .. } => {
                 warnings.push(format!(
                     "Context quality suggests supplementing sources: {}",
                     if sources.is_empty() {
@@ -629,6 +635,7 @@ pub async fn build_chapter_context(
             .unwrap_or_default(),
         quality_anchor_keywords,
         author_voice_snapshot,
+        required_story_anchors,
     })
 }
 
@@ -891,6 +898,83 @@ fn build_quality_author_voice_snapshot(
     } else {
         Some(voice)
     }
+}
+
+fn build_required_story_anchors(
+    project: &dyn ChapterGenerationProject,
+    target: &ChapterTarget,
+    selected_lore: &[(f32, &storage::LoreEntry)],
+) -> Vec<StoryAnchor> {
+    let mut anchors = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // 1. Outline beat keywords
+    for term in extract_story_anchor_terms(&target.summary) {
+        if seen.insert(term.clone()) {
+            anchors.push(StoryAnchor {
+                anchor_id: term.clone(),
+                source: "outline_beat".to_string(),
+                description: format!("大纲节奏关键词: {}", term),
+                required: true,
+            });
+        }
+    }
+
+    // 2. Lore entries (not strictly required, but tracked)
+    for (_, entry) in selected_lore.iter().take(6) {
+        if seen.insert(entry.keyword.clone()) {
+            anchors.push(StoryAnchor {
+                anchor_id: entry.keyword.clone(),
+                source: "lore".to_string(),
+                description: snippet_text(&entry.content, 80),
+                required: false,
+            });
+        }
+    }
+
+    // 3. Open promises from Story OS
+    if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(project.memory_path()) {
+        if let Ok(promises) = memory.get_open_promise_summaries() {
+            for p in promises.iter().take(8) {
+                if seen.insert(p.title.clone()) {
+                    anchors.push(StoryAnchor {
+                        anchor_id: p.title.clone(),
+                        source: "open_promise".to_string(),
+                        description: format!("{}: {}", p.kind, p.description),
+                        required: true,
+                    });
+                }
+                // Also include related entities from promises
+                for entity in &p.related_entities {
+                    if seen.insert(entity.clone()) {
+                        anchors.push(StoryAnchor {
+                            anchor_id: entity.clone(),
+                            source: "open_promise".to_string(),
+                            description: format!("承诺关联实体: {}", entity),
+                            required: true,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 4. Canon entities from Story OS
+        if let Ok(entities) = memory.list_canon_entities() {
+            for entity in entities.iter().take(10) {
+                if seen.insert(entity.name.clone()) {
+                    anchors.push(StoryAnchor {
+                        anchor_id: entity.name.clone(),
+                        source: "canon_constraint".to_string(),
+                        description: format!("{} ({})", entity.summary, entity.kind),
+                        required: entity.confidence >= 0.7,
+                    });
+                }
+            }
+        }
+    }
+
+    anchors.truncate(24);
+    anchors
 }
 
 fn build_chapter_intent_artifact(

@@ -168,6 +168,34 @@ pub enum RevisionTargetChangeStatus {
     Regressed,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SentenceChangeKind {
+    Modified,
+    Inserted,
+    Deleted,
+    Moved,
+    Unaligned,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SentenceChangeConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentenceChange {
+    pub before_sentence: String,
+    pub after_sentence: String,
+    pub change_kind: SentenceChangeKind,
+    pub target_metric: String,
+    pub confidence: SentenceChangeConfidence,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevisionTargetChange {
@@ -184,6 +212,8 @@ pub struct RevisionTargetChange {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub changed_excerpt_after: String,
     pub text_change_summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sentence_changes: Vec<SentenceChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

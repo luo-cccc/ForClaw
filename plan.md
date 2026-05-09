@@ -1433,3 +1433,304 @@ scripts\run-writing-eval.cmd
 ```
 
 当前 writing eval 结果：13 tasks，13 pass，0 fail。
+
+## 2026-05-09 全量路线 69% 到 80% 提升计划
+
+### 目标边界
+
+本计划只针对“全量路线完成度”从 69% 推到约 80% 的真实缺口，不重复 ForClaw MVP 已完成内容。判断依据来自当前仓库中已经存在的模块与记录：`agent-harness-core/src/budget_calibration.rs`、`agent-harness-core/src/agent_loop.rs`、`agent-harness-core/src/execution_plan.rs`、`agent-harness-core/src/context_quality.rs`、`agent-writer-backend/src/writer_agent/provider_budget.rs`、`agent-writer-backend/src/writer_agent/kernel/run_loop.rs`、`agent-writer-backend/src/writer_agent/run_preflight.rs`、`agent-writer-backend/src/bin/eval_runner.rs` 和 `fixtures/writing_eval/*`。
+
+完成后预期：
+
+- `plan.md 全量路线` 从 69% 提升到 78% 到 82%。
+- `Context quality / preflight 可操作性` 从 72% 提升到 82% 左右。
+- `写作质量证据闭环` 从 95% 提升到 96% 到 97%，主要来自更强 fixture 与语义化修订映射，而不是新增概念。
+
+不在本轮承诺：
+
+- 不引入新的主生成链路。
+- 不把所有质量判断交给 LLM judge。
+- 不追求大而全的技法库扩写。
+- 不做 UI 大改版，除非为了展示已有趋势证据所需的最小入口。
+
+### P0 Provider Usage Calibration
+
+目标：让 provider 预算不再只靠静态估算，而是能用真实运行 usage 反校准输入 token、输出 token 和成本阈值。
+
+涉及模块：
+
+- `agent-harness-core/src/budget_calibration.rs`
+- `agent-writer-backend/src/writer_agent/provider_budget.rs`
+- `agent-writer-backend/src/chapter_generation/draft_and_save.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+- `agent-writer-backend/src/headless.rs`
+
+交付物：
+
+- 在 writer provider budget 层接入 `BudgetCalibrationStore` 或同等持久化记录。
+- 每次 provider 调用完成后记录 estimated input、actual input、actual output、model、task、decision。
+- `evaluate_provider_budget` 输出 calibrated estimate、confidence 和 fallback reason。
+- trace event 和 headless response 中保留校准前后差异，方便复盘。
+
+验收：
+
+- 单测覆盖“无历史数据时走默认估算”“有历史数据时使用校准倍率”“异常 usage 不污染校准”。
+- 章节生成、Project Brain query、ExternalResearch 至少三类任务能写入 usage calibration。
+- `cargo test -p agent-harness-core` 和 `cargo test -p agent-writer --lib` 通过。
+
+风险与非目标：
+
+- 风险是不同 provider 返回 usage 字段不一致；本轮只做可选字段和保守 fallback。
+- 非目标是精确计费系统；目标是降低预算误判和审批噪音。
+
+### P1 Context Source Timing、Taxonomy Mapping 与只读检索并行
+
+目标：让 context quality 从“能判断是否够用”升级为“知道慢在哪里、缺哪类源、下一步该补什么”，同时让只读上下文检索具备安全并行能力。
+
+涉及模块：
+
+- `agent-harness-core/src/context_pack.rs`
+- `agent-harness-core/src/context_quality.rs`
+- `agent-writer-backend/src/writer_agent/context/assembly.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/context_pack.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop.rs`
+- `agent-writer-backend/src/writer_agent/run_preflight.rs`
+
+交付物：
+
+- `ContextSourceReport` 增加 source taxonomy、source role、elapsed_ms、retrieval_status。
+- Story OS / Project Brain / lore / prior chapters / promises / canon 映射为稳定 taxonomy，而不是只靠字符串名称。
+- context quality recommendation 增加 action code，例如 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore`。
+- 只读 retrieval 阶段允许并行收集 Project Brain、设定集、前文摘要、promise/canon 状态；落盘和状态突变仍保持串行。
+
+验收：
+
+- context quality 测试覆盖“缺 canon”“缺 prior chapter”“低价值 lore 占比过高”“某类 source 超时”。
+- preflight block/warning 能展示 action code，而不是只有自然语言原因。
+- 并行检索测试证明 source report 顺序稳定，失败源不会吞掉其他成功源。
+
+风险与非目标：
+
+- 风险是并行读引入不稳定顺序；必须在输出层排序。
+- 非目标是并行写入或并行保存章节。
+
+### P2 Planner-Aware AgentLoop 可执行语义
+
+目标：把当前存在的 `ExecutionPlan`、`compile_plan` 和 AgentLoop 计划字段推进到可恢复、可观测的执行语义，而不是只作为结构化描述。
+
+涉及模块：
+
+- `agent-harness-core/src/execution_plan.rs`
+- `agent-harness-core/src/agent_loop.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop_spine.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+
+交付物：
+
+- 每个 execution step 具备明确 lifecycle：planned、ready、running、blocked、completed、failed、skipped。
+- `StepFailureAction` 与真实恢复动作绑定，例如 retry、request_context_supplement、pause_for_approval、abort。
+- run trace 记录 step transition、失败原因、输入上下文摘要和恢复建议。
+- AgentLoop 可以从未完成 plan 恢复到第一个 ready / blocked step，而不是重新编译整条 plan。
+
+验收：
+
+- 单测覆盖 step 成功、失败重试、blocked 等待补充、恢复执行。
+- trace 中能重建一次 run 的 step 时间线。
+- 不破坏现有章节生成和 headless manual request。
+
+风险与非目标：
+
+- 风险是把 AgentLoop 做成复杂 workflow engine；本轮只实现写作任务需要的最小 step 状态机。
+- 非目标是支持任意 DAG 调度。
+
+### P3 长任务 Checkpoint Recovery
+
+目标：把已有 sprint checkpoint 能力扩展为长任务通用恢复能力，减少生成、批量冲刺、Project Brain rebuild 中断后的重复成本。
+
+涉及模块：
+
+- `agent-writer-backend/src/writer_agent/supervised_sprint.rs`
+- `agent-writer-backend/src/writer_agent/memory/sprint_methods.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop.rs`
+- `agent-writer-backend/src/headless.rs`
+- `agent-writer-backend/src/writer_agent/memory/schema.in.rs`
+
+交付物：
+
+- 定义 `LongTaskCheckpoint`，记录 task_id、task_kind、current_step、safe_resume_payload、budget_spent、artifact_refs。
+- 章节生成在 context built、draft produced、quality report produced、save prepared 后写 checkpoint。
+- 批量冲刺恢复时能跳过已保存章节，只继续未完成章节。
+- checkpoint 与 provider budget trace 关联，恢复后预算继续累计。
+
+验收：
+
+- 单测覆盖 sprint checkpoint 恢复、章节生成中断恢复、checkpoint 与 project id 不匹配时拒绝恢复。
+- headless API 能查询 latest checkpoint 和 resume candidate。
+- 恢复不会重复落盘同一章节版本。
+
+风险与非目标：
+
+- 风险是恢复点不安全导致重复写入；所有会写文件的恢复点必须重新走 save conflict 检查。
+- 非目标是支持任意历史版本回滚。
+
+### P4 Required Anchors 从 Project Brain / Story OS 明确产出
+
+目标：解决当前锚点抽取仍偏启发式的问题，让质量报告知道“本章必须承载什么”，而不是只从文本中猜。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/brain_service/*`
+- `agent-writer-backend/src/writer_agent/story_impact/*`
+- `fixtures/writing_eval/project.json`
+
+交付物：
+
+- BuiltChapterContext 增加 `required_story_anchors`，来源包括 outline beat、open promise、canon constraint、Project Brain cross reference。
+- `anchor_carry` 优先使用 required anchors；没有 required anchors 时才 fallback 到现有启发式提取。
+- quality report 区分 missing required anchor、weakly carried anchor、optional anchor。
+- eval fixture 增加“明确要求锚点但正文没有承载”的负例。
+
+验收：
+
+- 单测证明 required anchor 缺失会降低 anchor_carry，并给出具体 anchor id/source。
+- eval runner 新增任务验证 promise/canon/outline anchor 能进入 quality signals。
+- 没有 required anchor 的旧项目仍可生成，不出现硬阻断。
+
+风险与非目标：
+
+- 风险是过度阻断创作自由；本轮只把 required anchor 用于评分和建议，是否阻断由 preflight/quality gate 配置决定。
+- 非目标是让 Project Brain 自动发明新伏笔。
+
+### P5 Writing Eval Matrix 扩展
+
+目标：把 13-task 小型 fixture 扩成可证明质量不退化的矩阵，覆盖类型、章节跨度、负例与恢复路径。
+
+涉及模块：
+
+- `fixtures/writing_eval/project.json`
+- `fixtures/writing_eval/eval_tasks.jsonl`
+- `fixtures/writing_eval/README.md`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+- `agent-writer-backend/tests/writing_eval_test.rs`
+
+交付物：
+
+- 至少三个项目 profile：仙侠长篇、悬疑调查、现代职场或科幻。
+- 每个 profile 至少覆盖 outline planning、chapter quality、targeted revision、canon conflict、promise progression。
+- 负例矩阵覆盖：缺锚点、风格漂移、canon 冲突、伏笔未推进、修订无文本变化、Craft Memory 注入错误。
+- eval 输出按 profile、task kind、metric、craft rule 汇总趋势。
+
+验收：
+
+- eval task 数量从 13 提升到 30 以上。
+- `scripts\run-writing-eval.cmd` 输出 profile 维度 summary。
+- 任一 profile 出现核心指标回退时 runner 失败。
+
+风险与非目标：
+
+- 风险是 fixture 太大拖慢本地反馈；本轮保留 smoke 子集和 full matrix 两种模式。
+- 非目标是用 fixture 代替人工文学判断；它只保证关键能力不退化。
+
+### P6 Sentence-Level / Semantic Revision Diff
+
+目标：把 `RevisionTargetChange` 从片段级映射升级为句级变化解释，能说明“哪一句为了哪个修订目标发生了什么变化”。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/chapter_generation/craft_types.rs`
+- `agent-writer-backend/tests/writing_eval_test.rs`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+
+交付物：
+
+- 新增 sentence segmentation 和 normalized sentence alignment。
+- `RevisionTargetChange` 增加 `sentence_changes`，包含 before sentence、after sentence、change_kind、target_metric、confidence。
+- 对于无法可靠对齐的变化，明确标记 low confidence，不硬解释。
+- eval runner 统计 improved target 中有句级映射的比例。
+
+验收：
+
+- 单测覆盖改写、插入、删除、移动、无法对齐。
+- targeted revision eval 要求关键 target 至少有一条 high 或 medium confidence sentence change。
+- 低置信度不会被写成确定性因果结论。
+
+风险与非目标：
+
+- 风险是中文分句和语义对齐误判；本轮先用规则分句加保守相似度，不引入重型 embedding 依赖。
+- 非目标是生成完整文学批注系统。
+
+### P7 Craft Trend 接入 Companion / CI 可见面
+
+目标：让 Craft Memory 和 eval trend 不只停留在 JSON 文件里，而是进入日常开发和作者使用可见面。
+
+涉及模块：
+
+- `agent-writer-backend/src/bin/eval_runner.rs`
+- `fixtures/writing_eval/eval_trend.json`
+- `agent-writer-backend/src/headless.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+- Companion 相关入口以仓库实际 UI 模块为准，先做最小 API 暴露。
+
+交付物：
+
+- eval runner 输出 Markdown summary，列出 profile 回退、metric 回退、craft rule 回退。
+- headless 增加查询 craft trend / eval trend 的只读方法。
+- CI 可直接运行 writing eval full matrix，并在失败时输出最高风险项。
+- Companion 或调用方可以读取趋势 summary，不需要解析完整 JSON。
+
+验收：
+
+- 本地运行 eval 后生成 JSONL、trend JSON、Markdown summary。
+- CI 模式下 regression 会失败并打印 task id、metric、craft rule。
+- headless trend API 不触发生成、不写入 Craft Memory。
+
+风险与非目标：
+
+- 风险是展示层过早复杂化；本轮只做可读 summary 和 API，不做复杂图表。
+- 非目标是替代 plan.md 的人工审查。
+
+### 执行顺序
+
+1. 先做 P0 和 P1，因为它们直接影响预算判断、preflight 阻断和后续长任务恢复的可靠性。
+2. 再做 P2 和 P3，把 AgentLoop 与 checkpoint 从“有结构”推进到“能恢复”。
+3. 接着做 P4 和 P6，补强写作质量证据的精度。
+4. 最后做 P5 和 P7，让证据矩阵和趋势展示支撑长期迭代。
+
+### 里程碑验收
+
+Milestone A：Context 与预算可信度提升。
+
+- P0、P1 完成。
+- `cargo test -p agent-harness-core`、`cargo test -p agent-writer --lib` 通过。
+- preflight report 能输出 calibrated budget、source timing、taxonomy action code。
+
+Milestone B：执行恢复能力提升。
+
+- P2、P3 完成。
+- AgentLoop trace 能重建 step timeline。
+- 长任务中断后能从安全 checkpoint 恢复，并且不会重复保存章节。
+
+Milestone C：写作证据密度提升。
+
+- P4、P5、P6 完成。
+- writing eval 达到 30+ tasks，并覆盖多 profile 与负例矩阵。
+- RevisionReport 能输出句级 target change，低置信度明确标记。
+
+Milestone D：趋势进入日常工作流。
+
+- P7 完成。
+- eval trend 同时有 JSON 与 Markdown summary。
+- CI / Companion 能消费趋势摘要，开发者不必手工翻 JSON。
+
+### 完成度重估规则
+
+只有满足以下条件才把全量路线从 69% 上调：
+
+- P0 + P1 完成并有测试：上调到 73% 到 75%。
+- P2 + P3 至少完成一个且可恢复测试通过：上调到 76% 到 78%。
+- P4 + P5 + P6 至少完成两个且 eval matrix 达到 30+ tasks：上调到 80% 左右。
+- P7 完成后不单独大幅上调核心完成度，但会提高长期维护可信度。

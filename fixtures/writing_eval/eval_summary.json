@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-05-09T08:45:22.087490400+00:00",
+  "mode": "full",
+  "profiles": {
+    "mystery": {
+      "task_count": 15,
+      "pass": 15,
+      "fail": 0,
+      "failing_tasks": []
+    },
+    "scifi": {
+      "task_count": 15,
+      "pass": 15,
+      "fail": 0,
+      "failing_tasks": []
+    },
+    "xianxia": {
+      "task_count": 18,
+      "pass": 18,
+      "fail": 0,
+      "failing_tasks": []
+    }
+  },
+  "total_tasks": 48,
+  "total_pass": 48,
+  "total_fail": 0,
+  "regressions": []
+}

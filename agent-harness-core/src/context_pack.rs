@@ -11,7 +11,29 @@ pub struct ContextSourceReport {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+    // P1: source taxonomy, timing and retrieval status
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub taxonomy: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub retrieval_status: String,
 }
+
+// P1: stable source taxonomy constants
+pub const TAXONOMY_OUTLINE: &str = "outline";
+pub const TAXONOMY_LORE: &str = "lore";
+pub const TAXONOMY_PRIOR_CHAPTER: &str = "prior_chapter";
+pub const TAXONOMY_PROJECT_BRAIN: &str = "project_brain";
+pub const TAXONOMY_PROMISE: &str = "promise";
+pub const TAXONOMY_CANON: &str = "canon";
+pub const TAXONOMY_MEMORY: &str = "memory";
+pub const TAXONOMY_INSTRUCTION: &str = "instruction";
+pub const TAXONOMY_AUTHOR_VOICE: &str = "author_voice";
+pub const TAXONOMY_SCENE_PLAN: &str = "scene_plan";
+pub const TAXONOMY_UNKNOWN: &str = "unknown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +121,10 @@ impl ContextPacker {
             included_chars,
             truncated,
             score,
+            taxonomy: String::new(),
+            role: String::new(),
+            elapsed_ms: 0,
+            retrieval_status: String::new(),
         });
     }
 

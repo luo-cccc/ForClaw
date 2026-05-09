@@ -328,6 +328,14 @@ pub struct ChapterContextSource {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub taxonomy: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub retrieval_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -686,6 +694,15 @@ pub struct ChapterLengthTelemetry {
     pub phase_telemetry: LengthPhaseTelemetry,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryAnchor {
+    pub anchor_id: String,
+    pub source: String,
+    pub description: String,
+    pub required: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScenePlanEntry {
@@ -740,6 +757,8 @@ pub struct BuiltChapterContext {
     pub quality_anchor_keywords: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_voice_snapshot: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
+    #[serde(default)]
+    pub required_story_anchors: Vec<StoryAnchor>,
 }
 
 #[derive(Debug, Clone)]

@@ -18,7 +18,11 @@ pub struct ContextQualityReport {
 #[serde(rename_all = "snake_case")]
 pub enum ContextQualityRecommendation {
     Sufficient,
-    Supplement { sources: Vec<String> },
+    Supplement {
+        sources: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        actions: Vec<String>,
+    },
     Critical { reason: String },
 }
 
@@ -74,6 +78,7 @@ pub fn evaluate_context_quality(
         ));
     }
 
+    let actions = action_codes_for_missing_sources(&missing_evidence, truncation_risk);
     let recommendation = if overall_score < 0.4 {
         ContextQualityRecommendation::Critical {
             reason: format!(
@@ -85,6 +90,7 @@ pub fn evaluate_context_quality(
     } else if !missing_evidence.is_empty() || truncation_risk > 0.3 {
         ContextQualityRecommendation::Supplement {
             sources: missing_evidence.clone(),
+            actions,
         }
     } else {
         ContextQualityRecommendation::Sufficient
@@ -100,6 +106,33 @@ pub fn evaluate_context_quality(
         warnings,
         recommendation,
     }
+}
+
+fn action_codes_for_missing_sources(
+    missing_sources: &[String],
+    truncation_risk: f32,
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    for source in missing_sources {
+        let action = match source.as_str() {
+            "project_brief" => "fetch_project_brain_anchor",
+            "previous_chapter" => "refresh_prior_chapter_summary",
+            "outline" => "refresh_outline_anchor",
+            "canon" => "fetch_canon_anchor",
+            "promise" => "fetch_promise_anchor",
+            "chapter_mission" => "refresh_chapter_mission",
+            "next_beat" => "refresh_next_beat",
+            "lorebook" => "reduce_low_value_lore",
+            _ => "supplement_context",
+        };
+        if !actions.contains(&action.to_string()) {
+            actions.push(action.to_string());
+        }
+    }
+    if truncation_risk > 0.3 && !actions.contains(&"reduce_low_value_lore".to_string()) {
+        actions.push("reduce_low_value_lore".to_string());
+    }
+    actions
 }
 
 #[cfg(test)]
@@ -121,6 +154,10 @@ mod context_quality_tests {
                     included_chars: 100,
                     truncated: truncated_mask.get(i).copied().unwrap_or(false),
                     score: None,
+                    taxonomy: String::new(),
+                    role: String::new(),
+                    elapsed_ms: 0,
+                    retrieval_status: String::new(),
                 })
                 .collect(),
             budget: ContextBudgetReport {
@@ -189,5 +226,43 @@ mod context_quality_tests {
             report.recommendation,
             ContextQualityRecommendation::Critical { .. }
         ));
+    }
+
+    #[test]
+    fn missing_sources_generate_action_codes() {
+        let packed = make_packed(&["outline"], &[false]);
+        let report = evaluate_context_quality(
+            "r6",
+            &packed,
+            &["outline".into(), "project_brief".into(), "previous_chapter".into()],
+        );
+        match report.recommendation {
+            ContextQualityRecommendation::Supplement { actions, .. } => {
+                assert!(
+                    actions.contains(&"fetch_project_brain_anchor".to_string()),
+                    "missing project_brief should trigger fetch_project_brain_anchor"
+                );
+                assert!(
+                    actions.contains(&"refresh_prior_chapter_summary".to_string()),
+                    "missing previous_chapter should trigger refresh_prior_chapter_summary"
+                );
+            }
+            other => panic!("expected Supplement recommendation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn truncation_risk_generates_reduce_lore_action() {
+        let packed = make_packed(&["outline", "lorebook", "chapter"], &[true, true, true]);
+        let report = evaluate_context_quality("r7", &packed, &[]);
+        match report.recommendation {
+            ContextQualityRecommendation::Supplement { actions, .. } => {
+                assert!(
+                    actions.contains(&"reduce_low_value_lore".to_string()),
+                    "high truncation risk should trigger reduce_low_value_lore"
+                );
+            }
+            other => panic!("expected Supplement recommendation, got {:?}", other),
+        }
     }
 }

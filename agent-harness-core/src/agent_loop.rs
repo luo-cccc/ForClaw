@@ -78,17 +78,33 @@ pub enum AgentLoopEvent {
         step_id: String,
         evidence: Vec<String>,
     },
+    #[serde(rename = "step_blocked")]
+    StepBlocked {
+        step_id: String,
+        reason: String,
+        context_summary: Vec<String>,
+        recovery_suggestion: String,
+    },
     #[serde(rename = "step_failed")]
     StepFailed {
         step_id: String,
         reason: String,
         action: String,
+        input_context_summary: Vec<String>,
+        recovery_suggestion: String,
+    },
+    #[serde(rename = "step_transition")]
+    StepTransition {
+        step_id: String,
+        from: String,
+        to: String,
     },
     #[serde(rename = "plan_completed")]
     PlanCompleted {
         plan_id: String,
         steps_completed: usize,
         steps_failed: usize,
+        steps_skipped: usize,
     },
     #[serde(rename = "failure_bundle")]
     FailureBundle {
@@ -571,20 +587,62 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         plan: &mut ExecutionPlan,
         user_message: &str,
     ) -> Result<String, String> {
+        self.run_plan_inner(plan, user_message, false).await
+    }
+
+    /// Resume an incomplete plan from the first non-terminal step.
+    /// Completed, Failed, and Skipped steps are skipped.
+    pub async fn resume_plan(
+        &mut self,
+        plan: &mut ExecutionPlan,
+        user_message: &str,
+    ) -> Result<String, String> {
+        self.run_plan_inner(plan, user_message, true).await
+    }
+
+    async fn run_plan_inner(
+        &mut self,
+        plan: &mut ExecutionPlan,
+        user_message: &str,
+        is_resume: bool,
+    ) -> Result<String, String> {
         let step_goals: Vec<String> = plan.steps.iter().map(|s| s.goal.clone()).collect();
-        self.emit(AgentLoopEvent::PlanStarted {
-            plan_id: plan.plan_id.clone(),
-            steps: step_goals,
-        });
+        if !is_resume {
+            self.emit(AgentLoopEvent::PlanStarted {
+                plan_id: plan.plan_id.clone(),
+                steps: step_goals,
+            });
+        }
         plan.status = PlanStatus::Running;
 
         let mut final_text = String::new();
         let mut steps_completed = 0usize;
         let mut steps_failed = 0usize;
+        let mut steps_skipped = 0usize;
         let mut completed_step_ids: Vec<String> = Vec::new();
 
         for step in &mut plan.steps {
-            step.status = StepStatus::Active;
+            // Skip terminal steps on resume
+            if step.is_terminal() {
+                match &step.status {
+                    StepStatus::Completed { .. } => steps_completed += 1,
+                    StepStatus::Failed { .. } => steps_failed += 1,
+                    StepStatus::Skipped { .. } => steps_skipped += 1,
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Lifecycle: Ready -> Running
+            let previous_status = format!("{:?}", step.status);
+            step.status = StepStatus::Ready;
+            self.emit(AgentLoopEvent::StepTransition {
+                step_id: step.step_id.clone(),
+                from: previous_status,
+                to: "ready".to_string(),
+            });
+
+            step.status = StepStatus::Running;
             self.emit(AgentLoopEvent::StepStarted {
                 step_id: step.step_id.clone(),
                 index: step.index,
@@ -615,113 +673,186 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         evidence: vec![],
                     });
                 }
-                Err(e) => match step.on_failure {
-                    StepFailureAction::Skip => {
-                        steps_failed += 1;
-                        step.status = StepStatus::Skipped { reason: e.clone() };
-                        self.emit(AgentLoopEvent::StepFailed {
-                            step_id: step.step_id.clone(),
-                            reason: e.clone(),
-                            action: "skip".into(),
-                        });
-                        continue;
-                    }
-                    StepFailureAction::Stop => {
-                        steps_failed += 1;
-                        step.status = StepStatus::Failed { reason: e.clone() };
-                        self.emit(AgentLoopEvent::StepFailed {
-                            step_id: step.step_id.clone(),
-                            reason: e.clone(),
-                            action: "stop".into(),
-                        });
-                        plan.status = PlanStatus::Failed {
-                            failed_step: step.step_id.clone(),
-                            reason: e.clone(),
-                        };
-                        self.emit(AgentLoopEvent::PlanCompleted {
-                            plan_id: plan.plan_id.clone(),
-                            steps_completed,
-                            steps_failed,
-                        });
-                        // Emit failure bundle before returning error
-                        let bundle =
-                            classify_failure(&plan.plan_id, &e, &step.step_id, &completed_step_ids);
-                        self.emit(AgentLoopEvent::FailureBundle {
-                            run_id: bundle.run_id,
-                            failed_step: bundle.failed_step,
-                            error_kind: bundle.error_kind,
-                            completed_steps: bundle.completed_steps,
-                            suggested_action: format!("{:?}", bundle.suggested_action),
-                        });
-                        return Err(e);
-                    }
-                    StepFailureAction::Retry { max_retries } => {
-                        let mut retry_remaining = max_retries;
-                        loop {
-                            let retry_result = self.run(user_message, true, true).await;
-                            match retry_result {
-                                Ok(text) => {
-                                    steps_completed += 1;
-                                    completed_step_ids.push(step.step_id.clone());
-                                    final_text = text;
-                                    step.status = StepStatus::Completed { evidence: vec![] };
-                                    self.emit(AgentLoopEvent::StepCompleted {
-                                        step_id: step.step_id.clone(),
-                                        evidence: vec![],
-                                    });
-                                    break; // success -- exit retry loop, next plan step
-                                }
-                                Err(retry_error) => {
-                                    if retry_remaining == 0 {
-                                        steps_failed += 1;
-                                        step.status = StepStatus::Failed {
-                                            reason: retry_error.clone(),
-                                        };
-                                        self.emit(AgentLoopEvent::StepFailed {
+                Err(e) => {
+                    let input_summary = vec![format!("step: {}", step.goal)];
+                    let recovery = format!("{:?}", step.on_failure);
+                    match &step.on_failure {
+                        StepFailureAction::Skip => {
+                            steps_skipped += 1;
+                            step.status = StepStatus::Skipped { reason: e.clone() };
+                            self.emit(AgentLoopEvent::StepFailed {
+                                step_id: step.step_id.clone(),
+                                reason: e.clone(),
+                                action: "skip".into(),
+                                input_context_summary: input_summary,
+                                recovery_suggestion: recovery,
+                            });
+                            continue;
+                        }
+                        StepFailureAction::Stop | StepFailureAction::Abort => {
+                            steps_failed += 1;
+                            step.status = StepStatus::Failed {
+                                reason: e.clone(),
+                                input_context_summary: input_summary.clone(),
+                                recovery_suggestion: recovery.clone(),
+                            };
+                            self.emit(AgentLoopEvent::StepFailed {
+                                step_id: step.step_id.clone(),
+                                reason: e.clone(),
+                                action: "abort".into(),
+                                input_context_summary: input_summary,
+                                recovery_suggestion: recovery,
+                            });
+                            plan.status = PlanStatus::Failed {
+                                failed_step: step.step_id.clone(),
+                                reason: e.clone(),
+                            };
+                            self.emit(AgentLoopEvent::PlanCompleted {
+                                plan_id: plan.plan_id.clone(),
+                                steps_completed,
+                                steps_failed,
+                                steps_skipped,
+                            });
+                            let bundle =
+                                classify_failure(&plan.plan_id, &e, &step.step_id, &completed_step_ids);
+                            self.emit(AgentLoopEvent::FailureBundle {
+                                run_id: bundle.run_id,
+                                failed_step: bundle.failed_step,
+                                error_kind: bundle.error_kind,
+                                completed_steps: bundle.completed_steps,
+                                suggested_action: format!("{:?}", bundle.suggested_action),
+                            });
+                            return Err(e);
+                        }
+                        StepFailureAction::RequestContextSupplement { sources } => {
+                            steps_failed += 1;
+                            step.status = StepStatus::Blocked {
+                                reason: e.clone(),
+                                context_summary: sources.clone(),
+                                recovery_suggestion: format!(
+                                    "Supplement context sources: {}",
+                                    sources.join(", ")
+                                ),
+                            };
+                            self.emit(AgentLoopEvent::StepBlocked {
+                                step_id: step.step_id.clone(),
+                                reason: e.clone(),
+                                context_summary: sources.clone(),
+                                recovery_suggestion: format!(
+                                    "Supplement context sources: {}",
+                                    sources.join(", ")
+                                ),
+                            });
+                            plan.status = PlanStatus::Failed {
+                                failed_step: step.step_id.clone(),
+                                reason: e.clone(),
+                            };
+                            self.emit(AgentLoopEvent::PlanCompleted {
+                                plan_id: plan.plan_id.clone(),
+                                steps_completed,
+                                steps_failed,
+                                steps_skipped,
+                            });
+                            return Err(e);
+                        }
+                        StepFailureAction::PauseForApproval => {
+                            steps_failed += 1;
+                            step.status = StepStatus::Blocked {
+                                reason: e.clone(),
+                                context_summary: vec!["Awaiting author approval".to_string()],
+                                recovery_suggestion: "Resume after author approves this step."
+                                    .to_string(),
+                            };
+                            self.emit(AgentLoopEvent::StepBlocked {
+                                step_id: step.step_id.clone(),
+                                reason: e.clone(),
+                                context_summary: vec!["Awaiting author approval".to_string()],
+                                recovery_suggestion: "Resume after author approves this step."
+                                    .to_string(),
+                            });
+                            plan.status = PlanStatus::Failed {
+                                failed_step: step.step_id.clone(),
+                                reason: e.clone(),
+                            };
+                            self.emit(AgentLoopEvent::PlanCompleted {
+                                plan_id: plan.plan_id.clone(),
+                                steps_completed,
+                                steps_failed,
+                                steps_skipped,
+                            });
+                            return Err(e);
+                        }
+                        StepFailureAction::Retry { max_retries } => {
+                            let mut retry_remaining = *max_retries;
+                            loop {
+                                let retry_result = self.run(user_message, true, true).await;
+                                match retry_result {
+                                    Ok(text) => {
+                                        steps_completed += 1;
+                                        completed_step_ids.push(step.step_id.clone());
+                                        final_text = text;
+                                        step.status = StepStatus::Completed { evidence: vec![] };
+                                        self.emit(AgentLoopEvent::StepCompleted {
                                             step_id: step.step_id.clone(),
-                                            reason: format!(
-                                                "Retry exhausted ({} attempts): {}",
-                                                max_retries, retry_error
-                                            ),
-                                            action: "stop".into(),
+                                            evidence: vec![],
                                         });
-                                        plan.status = PlanStatus::Failed {
-                                            failed_step: step.step_id.clone(),
-                                            reason: retry_error.clone(),
-                                        };
-                                        self.emit(AgentLoopEvent::PlanCompleted {
-                                            plan_id: plan.plan_id.clone(),
-                                            steps_completed,
-                                            steps_failed,
-                                        });
-                                        // Emit failure bundle before returning error
-                                        let bundle = classify_failure(
-                                            &plan.plan_id,
-                                            &retry_error,
-                                            &step.step_id,
-                                            &completed_step_ids,
-                                        );
-                                        self.emit(AgentLoopEvent::FailureBundle {
-                                            run_id: bundle.run_id,
-                                            failed_step: bundle.failed_step,
-                                            error_kind: bundle.error_kind,
-                                            completed_steps: bundle.completed_steps,
-                                            suggested_action: format!(
-                                                "{:?}",
-                                                bundle.suggested_action
-                                            ),
-                                        });
-                                        return Err(retry_error);
+                                        break;
                                     }
-                                    retry_remaining -= 1;
-                                    // Brief delay between retries
-                                    tokio::time::sleep(std::time::Duration::from_millis(1000))
-                                        .await;
+                                    Err(retry_error) => {
+                                        if retry_remaining == 0 {
+                                            steps_failed += 1;
+                                            step.status = StepStatus::Failed {
+                                                reason: retry_error.clone(),
+                                                input_context_summary: input_summary.clone(),
+                                                recovery_suggestion: recovery.clone(),
+                                            };
+                                            self.emit(AgentLoopEvent::StepFailed {
+                                                step_id: step.step_id.clone(),
+                                                reason: format!(
+                                                    "Retry exhausted ({} attempts): {}",
+                                                    max_retries, retry_error
+                                                ),
+                                                action: "abort".into(),
+                                                input_context_summary: input_summary.clone(),
+                                                recovery_suggestion: recovery.clone(),
+                                            });
+                                            plan.status = PlanStatus::Failed {
+                                                failed_step: step.step_id.clone(),
+                                                reason: retry_error.clone(),
+                                            };
+                                            self.emit(AgentLoopEvent::PlanCompleted {
+                                                plan_id: plan.plan_id.clone(),
+                                                steps_completed,
+                                                steps_failed,
+                                                steps_skipped,
+                                            });
+                                            let bundle = classify_failure(
+                                                &plan.plan_id,
+                                                &retry_error,
+                                                &step.step_id,
+                                                &completed_step_ids,
+                                            );
+                                            self.emit(AgentLoopEvent::FailureBundle {
+                                                run_id: bundle.run_id,
+                                                failed_step: bundle.failed_step,
+                                                error_kind: bundle.error_kind,
+                                                completed_steps: bundle.completed_steps,
+                                                suggested_action: format!(
+                                                    "{:?}",
+                                                    bundle.suggested_action
+                                                ),
+                                            });
+                                            return Err(retry_error);
+                                        }
+                                        retry_remaining -= 1;
+                                        tokio::time::sleep(std::time::Duration::from_millis(1000))
+                                            .await;
+                                    }
                                 }
                             }
                         }
                     }
-                },
+                }
             }
         }
 
@@ -730,6 +861,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             plan_id: plan.plan_id.clone(),
             steps_completed,
             steps_failed,
+            steps_skipped,
         });
 
         Ok(final_text)
@@ -965,8 +1097,37 @@ mod tests {
             step_id: "step-1".into(),
             reason: "timeout".into(),
             action: "stop".into(),
+            input_context_summary: vec!["step: draft".to_string()],
+            recovery_suggestion: "retry".to_string(),
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["action"], "stop");
+        assert!(json["input_context_summary"].is_array());
+    }
+
+    #[test]
+    fn step_blocked_event_serializes() {
+        let event = AgentLoopEvent::StepBlocked {
+            step_id: "step-1".into(),
+            reason: "awaiting approval".into(),
+            context_summary: vec!["awaiting author approval".to_string()],
+            recovery_suggestion: "Resume after approval".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "step_blocked");
+        assert_eq!(json["reason"], "awaiting approval");
+    }
+
+    #[test]
+    fn step_transition_event_serializes() {
+        let event = AgentLoopEvent::StepTransition {
+            step_id: "step-1".into(),
+            from: "planned".into(),
+            to: "ready".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "step_transition");
+        assert_eq!(json["from"], "planned");
+        assert_eq!(json["to"], "ready");
     }
 }

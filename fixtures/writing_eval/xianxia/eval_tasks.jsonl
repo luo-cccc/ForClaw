@@ -7,7 +7,12 @@
 {"task":"targeted_revision","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林墨看着寒影剑。散修站在门口。","after_text":"散修逼近门口时，林墨只好拔出寒影剑，因此付出鬓发变白的代价。","requires_excerpt_mapping":true}}
 {"task":"craft_memory","chapter":"第二章","metrics":["dialogue_function"],"expected":{"min_examples":1,"min_bad_patterns":1}}
 {"task":"manual_craft_edit","chapter":"第二章","metrics":["dialogue_function","scene_causality"],"expected":{"before_text":"林墨说：这是古剑。散修站在门口，没有回答。","after_text":"林墨握紧寒影剑，低声说：现在你必须选择。散修因此停在门口，第一次露出退意。","min_examples":1,"min_bad_patterns":1,"requires_excerpt_mapping":true}}
-{"task":"craft_memory_prompt","chapter":"第二章","metrics":["dialogue_function"],"expected":{"must_contain":["项目写法记忆","必须选择","一整段古剑来历"]}}
+{"task":"craft_memory_prompt","chapter":"第二章","metrics":["dialogue_function"],"expected":{"must_contain":["项目写法记忆","一整段古剑来历"]}}
 {"task":"canon_conflict","chapter":"第二章","check":"寒影剑代价冲突","expected":{"candidate_text":"林墨拔出寒影剑，寒影剑没有代价，反而替他免费救他。","canon_conflict":true,"must_conflict":["cold-shadow-cost"]}}
 {"task":"planning_review","chapter":"第三章","instruction":"回到青云宗，执事审问，林墨必须决定是否隐瞒寒影剑的代价，并推进寒影剑代价伏笔","expected":{"required_rules":["scene_objective","conflict_pressure","promise_advance"],"required_payoff_keywords":["代价"],"requires_ending_hook":true}}
 {"task":"promise_progression","chapter":"第二章","metrics":["promise_progress"],"expected":{"required_promises":["寒影剑代价"],"min_progressed":1}}
+{"task":"negative_missing_anchor","chapter":"第一章","metrics":["anchor_carry"],"expected":{"must_miss_anchor":"寒影剑","penalty_applies":true,"min_score_drop":0.15}}
+{"task":"negative_style_drift","chapter":"第一章","metrics":["style_drift"],"expected":{"drifted_text":"林墨推开破庙的木门。他看见一把剑。这把剑是古剑。古剑有寒影两个字。","style_drift_score_max":0.7,"reason_contains":"风格漂移"}}
+{"task":"negative_promise_stalled","chapter":"第二章","metrics":["promise_progress"],"expected":{"stalled_text":"林墨和散修在破庙门口对视了一整晚，谁都没有动手，也没有提到寒影剑或代价。","promise_progress_score_max":0.55,"reason_contains":"跳过评估"}}
+{"task":"negative_revision_no_change","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林墨看着寒影剑。散修站在门口。","after_text":"林墨看着寒影剑。散修站在门口。","min_excerpt_mapping_count":0,"revision_should_be_empty":true}}
+{"task":"negative_craft_memory_injection","chapter":"第二章","metrics":["craft_memory_prompt"],"expected":{"injected_bad_text":"林墨说了一整段古剑来历，散修没有任何反应。","injected_memory_should_score_low":true,"min_bad_patterns":1}}

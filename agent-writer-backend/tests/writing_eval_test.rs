@@ -24,19 +24,17 @@ struct EvalTask {
     expected: serde_json::Value,
 }
 
-fn load_fixture() -> serde_json::Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../fixtures/writing_eval/project.json"
-    );
+fn fixture_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/writing_eval"))
+}
+
+fn load_fixture(profile: &str) -> serde_json::Value {
+    let path = fixture_dir().join(profile).join("project.json");
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-fn load_tasks() -> Vec<EvalTask> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../fixtures/writing_eval/eval_tasks.jsonl"
-    );
+fn load_tasks(profile: &str) -> Vec<EvalTask> {
+    let path = fixture_dir().join(profile).join("eval_tasks.jsonl");
     std::fs::read_to_string(path)
         .unwrap()
         .lines()
@@ -45,9 +43,19 @@ fn load_tasks() -> Vec<EvalTask> {
         .collect()
 }
 
+fn all_tasks() -> Vec<(String, EvalTask)> {
+    let mut all = Vec::new();
+    for profile in ["xianxia", "mystery", "scifi"] {
+        for task in load_tasks(profile) {
+            all.push((profile.to_string(), task));
+        }
+    }
+    all
+}
+
 #[test]
-fn eval_fixture_chapter_exists() {
-    let fixture = load_fixture();
+fn eval_xianxia_fixture_chapter_exists() {
+    let fixture = load_fixture("xianxia");
     let chapter1 = fixture["chapters"]["第一章"].as_str().unwrap();
     assert!(!chapter1.is_empty());
     assert!(chapter1.contains("林墨"));
@@ -55,8 +63,8 @@ fn eval_fixture_chapter_exists() {
 }
 
 #[test]
-fn eval_fixture_lorebook_has_required_entities() {
-    let fixture = load_fixture();
+fn eval_xianxia_fixture_lorebook_has_required_entities() {
+    let fixture = load_fixture("xianxia");
     let lorebook = fixture["lorebook"].as_array().unwrap();
     assert!(lorebook.len() >= 5);
     let keywords: Vec<&str> = lorebook
@@ -71,8 +79,8 @@ fn eval_fixture_lorebook_has_required_entities() {
 }
 
 #[test]
-fn eval_fixture_outline_has_two_chapters() {
-    let fixture = load_fixture();
+fn eval_xianxia_fixture_outline_has_two_chapters() {
+    let fixture = load_fixture("xianxia");
     let outline = fixture["outline"].as_array().unwrap();
     assert!(outline.len() >= 4);
     assert_eq!(outline[0]["chapterTitle"], "第一章");
@@ -82,8 +90,8 @@ fn eval_fixture_outline_has_two_chapters() {
 }
 
 #[test]
-fn eval_chapter_generation_task() {
-    let tasks = load_tasks();
+fn eval_xianxia_chapter_generation_task() {
+    let tasks = load_tasks("xianxia");
     let gen_task = tasks
         .iter()
         .find(|t| t.task == "chapter_generation")
@@ -95,8 +103,8 @@ fn eval_chapter_generation_task() {
 }
 
 #[test]
-fn eval_continuity_diagnostic_task() {
-    let tasks = load_tasks();
+fn eval_xianxia_continuity_diagnostic_task() {
+    let tasks = load_tasks("xianxia");
     let diag_task = tasks
         .iter()
         .find(|t| t.task == "continuity_diagnostic")
@@ -107,8 +115,8 @@ fn eval_continuity_diagnostic_task() {
 }
 
 #[test]
-fn eval_quality_evaluation_task() {
-    let tasks = load_tasks();
+fn eval_xianxia_quality_evaluation_task() {
+    let tasks = load_tasks("xianxia");
     let qual_task = tasks
         .iter()
         .find(|t| t.task == "quality_evaluation")
@@ -118,7 +126,7 @@ fn eval_quality_evaluation_task() {
     assert!(metrics.contains(&"ending_hook".to_string()));
 
     // Run actual quality evaluation on fixture chapter
-    let fixture = load_fixture();
+    let fixture = load_fixture("xianxia");
     let chapter_text = fixture["chapters"]["第一章"].as_str().unwrap();
     let plan = SceneCraftPlan::default();
     let report = evaluate_chapter_quality(chapter_text, "第一章", &plan, &[], 500, 2000);
@@ -148,11 +156,102 @@ fn eval_quality_evaluation_task() {
 }
 
 #[test]
-fn eval_fixture_has_expanded_task_coverage() {
-    let tasks = load_tasks();
+fn eval_matrix_has_three_profiles() {
+    for profile in ["xianxia", "mystery", "scifi"] {
+        let fixture = load_fixture(profile);
+        assert!(
+            fixture["chapters"].as_object().map(|o| !o.is_empty()).unwrap_or(false),
+            "profile {} should have chapters",
+            profile
+        );
+        let tasks = load_tasks(profile);
+        assert!(
+            !tasks.is_empty(),
+            "profile {} should have eval tasks",
+            profile
+        );
+    }
+}
+
+#[test]
+fn eval_matrix_has_30_plus_tasks() {
+    let total = all_tasks().len();
+    assert!(
+        total >= 30,
+        "eval matrix should have at least 30 tasks, got {}",
+        total
+    );
+}
+
+#[test]
+fn eval_matrix_covers_required_task_types() {
+    let all = all_tasks();
+    let task_types: std::collections::HashSet<String> = all
+        .iter()
+        .map(|(_, task)| task.task.clone())
+        .collect();
+
+    let required = [
+        "chapter_generation",
+        "quality_evaluation",
+        "quality_signals",
+        "targeted_revision",
+        "craft_memory",
+        "manual_craft_edit",
+        "craft_memory_prompt",
+        "canon_conflict",
+        "planning_review",
+        "promise_progression",
+        "continuity_diagnostic",
+    ];
+    for req in &required {
+        assert!(
+            task_types.contains(*req),
+            "eval matrix missing task type: {}",
+            req
+        );
+    }
+}
+
+#[test]
+fn eval_matrix_has_negative_cases() {
+    let all = all_tasks();
+    let negative_types: Vec<String> = all
+        .iter()
+        .filter(|(_, task)| task.task.starts_with("negative_"))
+        .map(|(_, task)| task.task.clone())
+        .collect();
+
+    assert!(
+        negative_types.iter().any(|t| t == "negative_missing_anchor"),
+        "should have negative_missing_anchor"
+    );
+    assert!(
+        negative_types.iter().any(|t| t == "negative_style_drift"),
+        "should have negative_style_drift"
+    );
+    assert!(
+        negative_types.iter().any(|t| t == "negative_promise_stalled"),
+        "should have negative_promise_stalled"
+    );
+    assert!(
+        negative_types.iter().any(|t| t == "negative_revision_no_change"),
+        "should have negative_revision_no_change"
+    );
+    assert!(
+        negative_types
+            .iter()
+            .any(|t| t == "negative_craft_memory_injection"),
+        "should have negative_craft_memory_injection"
+    );
+}
+
+#[test]
+fn eval_xianxia_has_expanded_task_coverage() {
+    let tasks = load_tasks("xianxia");
     assert!(
         tasks.len() >= 13,
-        "eval fixture should cover more than the initial 3 shallow tasks"
+        "xianxia eval fixture should cover more than the initial 13 tasks"
     );
     assert!(tasks
         .iter()
@@ -187,8 +286,8 @@ fn eval_fixture_has_expanded_task_coverage() {
 }
 
 #[test]
-fn eval_fixture_has_canon_and_promise_coverage() {
-    let fixture = load_fixture();
+fn eval_xianxia_fixture_has_canon_and_promise_coverage() {
+    let fixture = load_fixture("xianxia");
     let canon = fixture["canon"].as_array().expect("canon fixture");
     assert!(canon.iter().any(|rule| {
         rule["id"] == "cold-shadow-cost"
@@ -209,7 +308,7 @@ fn eval_fixture_has_canon_and_promise_coverage() {
 
 #[test]
 fn eval_second_chapter_quality_has_metric_thresholds() {
-    let tasks = load_tasks();
+    let tasks = load_tasks("xianxia");
     let qual_task = tasks
         .iter()
         .find(|t| t.task == "quality_evaluation" && t.chapter == "第二章")
@@ -218,7 +317,7 @@ fn eval_second_chapter_quality_has_metric_thresholds() {
     assert!(metric_min.contains_key("dialogue_function"));
     assert!(metric_min.contains_key("ending_hook"));
 
-    let fixture = load_fixture();
+    let fixture = load_fixture("xianxia");
     let chapter_text = fixture["chapters"]["第二章"].as_str().unwrap();
     let plan = SceneCraftPlan::default();
     let report =
@@ -240,8 +339,8 @@ fn eval_second_chapter_quality_has_metric_thresholds() {
 }
 
 #[test]
-fn eval_chapter_entity_consistency() {
-    let fixture = load_fixture();
+fn eval_xianxia_chapter_entity_consistency() {
+    let fixture = load_fixture("xianxia");
     let chapter = fixture["chapters"]["第一章"].as_str().unwrap();
     let lorebook = fixture["lorebook"].as_array().unwrap();
 
@@ -262,8 +361,8 @@ fn eval_chapter_entity_consistency() {
 }
 
 #[test]
-fn eval_chapter_has_dialogue_and_action() {
-    let fixture = load_fixture();
+fn eval_xianxia_chapter_has_dialogue_and_action() {
+    let fixture = load_fixture("xianxia");
     let chapter = fixture["chapters"]["第一章"].as_str().unwrap();
 
     // Chapter should contain dialogue markers
@@ -282,8 +381,8 @@ fn eval_chapter_has_dialogue_and_action() {
 }
 
 #[test]
-fn eval_craft_prompt_for_fixture_objective() {
-    let fixture = load_fixture();
+fn eval_xianxia_craft_prompt_for_fixture_objective() {
+    let fixture = load_fixture("xianxia");
     let outline = fixture["outline"].as_array().unwrap();
     let summary = outline[0]["summary"].as_str().unwrap();
 
@@ -302,7 +401,7 @@ fn eval_craft_prompt_for_fixture_objective() {
 
 #[test]
 fn eval_quality_signals_use_real_anchor_and_voice_metrics() {
-    let fixture = load_fixture();
+    let fixture = load_fixture("xianxia");
     let chapter_text = fixture["chapters"]["第二章"].as_str().unwrap();
     let plan = SceneCraftPlan::default();
     let signals = fixture_quality_signals();
@@ -377,6 +476,7 @@ fn fixture_quality_signals() -> ChapterQualitySignals {
             ],
             last_updated_ms: 0,
         }),
+        required_anchors: Vec::new(),
     }
 }
 

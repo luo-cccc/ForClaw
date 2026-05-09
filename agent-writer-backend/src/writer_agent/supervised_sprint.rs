@@ -70,6 +70,59 @@ pub struct SprintCheckpoint {
     pub source: String,
 }
 
+/// General-purpose checkpoint for long-running tasks (chapter generation,
+/// batch sprint, Project Brain rebuild, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LongTaskCheckpoint {
+    pub checkpoint_id: String,
+    pub task_id: String,
+    pub task_kind: String, // "chapter_generation" | "batch_sprint" | "project_brain_rebuild" | ...
+    pub current_step: String,
+    pub safe_resume_payload: serde_json::Value,
+    pub budget_spent_micros: u64,
+    pub artifact_refs: Vec<String>,
+    pub source: String,
+    pub created_at_ms: u64,
+}
+
+impl LongTaskCheckpoint {
+    pub fn new(
+        checkpoint_id: impl Into<String>,
+        task_id: impl Into<String>,
+        task_kind: impl Into<String>,
+        current_step: impl Into<String>,
+        safe_resume_payload: serde_json::Value,
+    ) -> Self {
+        Self {
+            checkpoint_id: checkpoint_id.into(),
+            task_id: task_id.into(),
+            task_kind: task_kind.into(),
+            current_step: current_step.into(),
+            safe_resume_payload,
+            budget_spent_micros: 0,
+            artifact_refs: Vec::new(),
+            source: String::new(),
+            created_at_ms: crate::agent_runtime::now_ms(),
+        }
+    }
+
+    pub fn with_budget(mut self, budget_spent_micros: u64) -> Self {
+        self.budget_spent_micros = budget_spent_micros;
+        self
+    }
+
+    pub fn with_artifacts(mut self, artifact_refs: Vec<String>) -> Self {
+        self.artifact_refs = artifact_refs;
+        self
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = source.into();
+        self
+    }
+}
+
 /// Create a supervised sprint plan from a list of chapter titles.
 pub fn create_sprint_plan(
     sprint_id: &str,
@@ -237,6 +290,43 @@ pub fn restore_from_checkpoint(
             .unwrap_or(sprint.checkpoint_count),
     );
     true
+}
+
+/// Skip chapters that are already saved/settled according to a
+/// `LongTaskCheckpoint` safe-resume payload. The payload should contain
+/// `saved_chapters: ["chapter_title", ...]`. Returns how many chapters
+/// were skipped.
+pub fn skip_saved_chapters_from_checkpoint(
+    sprint: &mut SupervisedSprintPlan,
+    checkpoint: &LongTaskCheckpoint,
+) -> usize {
+    let saved: Vec<String> = checkpoint
+        .safe_resume_payload
+        .get("saved_chapters")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if saved.is_empty() {
+        return 0;
+    }
+    let mut skipped = 0usize;
+    for chapter in &mut sprint.chapters {
+        if saved.contains(&chapter.chapter_title) && chapter.status != "settled" {
+            chapter.status = "settled".to_string();
+            skipped += 1;
+        }
+    }
+    // Advance current_index past settled chapters
+    while sprint.current_index < sprint.total_chapters
+        && sprint.chapters[sprint.current_index].status == "settled"
+    {
+        sprint.current_index += 1;
+    }
+    skipped
 }
 
 pub fn update_current_chapter_state(
@@ -518,5 +608,40 @@ mod tests {
         assert!(!budget_ceiling_reached(&sprint));
         assert!(!record_budget_usage(&mut sprint, 600));
         assert!(!can_advance_to_next_chapter(&sprint));
+    }
+
+    #[test]
+    fn skip_saved_chapters_advances_index() {
+        let mut sprint = create_sprint_plan(
+            "skip-test",
+            &["Ch1".to_string(), "Ch2".to_string(), "Ch3".to_string()],
+            false,
+        );
+        sprint.chapters[0].status = "saved".to_string();
+        sprint.current_index = 0;
+
+        let checkpoint = LongTaskCheckpoint::new(
+            "cp-1",
+            "task-1",
+            "batch_sprint",
+            "save_prepared",
+            serde_json::json!({"saved_chapters": ["Ch1", "Ch2"]}),
+        );
+        let skipped = skip_saved_chapters_from_checkpoint(&mut sprint, &checkpoint);
+        assert_eq!(skipped, 2); // Ch1 and Ch2 both matched saved_chapters
+        assert_eq!(sprint.current_index, 2); // advanced past Ch1 and Ch2
+        assert_eq!(sprint.chapters[0].status, "settled");
+        assert_eq!(sprint.chapters[1].status, "settled");
+    }
+
+    #[test]
+    fn long_task_checkpoint_builder() {
+        let cp = LongTaskCheckpoint::new("cp-1", "t1", "chapter_generation", "draft", serde_json::json!({}))
+            .with_budget(1_200_000)
+            .with_artifacts(vec!["a.txt".to_string()])
+            .with_source("test");
+        assert_eq!(cp.budget_spent_micros, 1_200_000);
+        assert_eq!(cp.artifact_refs, vec!["a.txt"]);
+        assert_eq!(cp.source, "test");
     }
 }

@@ -103,14 +103,28 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
     ensure_provider_budget_allowed(context, &budget_report)?;
     record_model_started(context, &budget_report);
 
-    let content = llm_runtime::chat_text_profile(
+    let (content, usage) = llm_runtime::chat_text_profile_with_usage(
         settings,
-        messages,
+        messages.clone(),
         llm_runtime::LlmRequestProfile::ChapterDraft,
         PROVIDER_TIMEOUT_SECS,
     )
     .await
     .map_err(map_provider_error)?;
+
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+        .map(|c| c.chars().count())
+        .sum();
+    agent_harness_core::record_full_usage(
+        &settings.model,
+        budget_report.estimated_input_tokens,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        input_chars,
+        content.chars().count(),
+    );
 
     let content = content.trim().to_string();
     validate_generated_content_basics(&content)?;
@@ -200,15 +214,30 @@ The finished chapter should move toward {} Chinese characters and must never exc
     ensure_provider_budget_allowed(context, &budget_report)?;
     record_model_started(context, &budget_report);
 
-    let content = llm_runtime::chat_text_profile(
+    let (content, usage) = llm_runtime::chat_text_profile_with_usage(
         settings,
-        messages,
+        messages.clone(),
         llm_runtime::LlmRequestProfile::ChapterContinuation,
         PROVIDER_TIMEOUT_SECS,
     )
     .await
-    .map(|text| text.trim().to_string())
     .map_err(map_provider_error)?;
+
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+        .map(|c| c.chars().count())
+        .sum();
+    agent_harness_core::record_full_usage(
+        &settings.model,
+        budget_report.estimated_input_tokens,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        input_chars,
+        content.chars().count(),
+    );
+
+    let content = content.trim().to_string();
     validate_generated_content_basics(&content)?;
     Ok(ChapterDraftRepairOutput {
         output_chars: char_count(&content),
@@ -358,15 +387,30 @@ Write only the full revised chapter prose. Keep the chapter within {}-{} Chinese
     ensure_provider_budget_allowed(context, &budget_report)?;
     record_model_started(context, &budget_report);
 
-    let content = llm_runtime::chat_text_profile(
+    let (content, usage) = llm_runtime::chat_text_profile_with_usage(
         settings,
-        messages,
+        messages.clone(),
         llm_runtime::LlmRequestProfile::ChapterCompress,
         PROVIDER_TIMEOUT_SECS,
     )
     .await
-    .map(|text| text.trim().to_string())
     .map_err(map_provider_error)?;
+
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+        .map(|c| c.chars().count())
+        .sum();
+    agent_harness_core::record_full_usage(
+        &settings.model,
+        budget_report.estimated_input_tokens,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        input_chars,
+        content.chars().count(),
+    );
+
+    let content = content.trim().to_string();
     validate_generated_content_basics(&content)?;
     Ok(ChapterDraftRepairOutput {
         output_chars: char_count(&content),
@@ -410,12 +454,22 @@ pub fn chapter_generation_provider_budget_for_profile(
         .collect::<Vec<_>>();
     let estimated_input_tokens =
         agent_harness_core::context_window_guard::estimate_request_tokens(&converted, None);
-    evaluate_provider_budget(WriterProviderBudgetRequest::new(
-        WriterProviderBudgetTask::ChapterGeneration,
-        settings.model.clone(),
-        estimated_input_tokens,
-        u64::from(llm_runtime::request_options(settings, profile).max_tokens),
-    ))
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+        .map(|c| c.chars().count())
+        .sum();
+    let profile_options = llm_runtime::request_options(settings, profile);
+    let expected_output_chars = profile_options.max_tokens as usize * 2;
+    evaluate_provider_budget(
+        WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ChapterGeneration,
+            settings.model.clone(),
+            estimated_input_tokens,
+            u64::from(profile_options.max_tokens),
+        )
+        .with_chars(input_chars, expected_output_chars),
+    )
 }
 
 pub fn provider_budget_error(

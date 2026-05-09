@@ -38,6 +38,11 @@ pub struct WriterProviderBudgetRequest {
     pub max_total_tokens_without_approval: u64,
     pub max_estimated_cost_micros_without_approval: u64,
     pub already_approved: bool,
+    // P0: calibration support
+    #[serde(default)]
+    pub input_chars: usize,
+    #[serde(default)]
+    pub expected_output_chars: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +60,15 @@ pub struct WriterProviderBudgetReport {
     pub approval_required: bool,
     pub reasons: Vec<String>,
     pub remediation: Vec<String>,
+    // Calibration fields (P0)
+    #[serde(default)]
+    pub calibrated_input_tokens: u64,
+    #[serde(default)]
+    pub calibrated_output_tokens: u64,
+    #[serde(default)]
+    pub calibration_confidence: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_fallback_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,7 +99,15 @@ impl WriterProviderBudgetRequest {
             max_estimated_cost_micros_without_approval: defaults
                 .max_estimated_cost_micros_without_approval,
             already_approved: false,
+            input_chars: 0,
+            expected_output_chars: 0,
         }
+    }
+
+    pub fn with_chars(mut self, input_chars: usize, expected_output_chars: usize) -> Self {
+        self.input_chars = input_chars;
+        self.expected_output_chars = expected_output_chars;
+        self
     }
 }
 
@@ -142,6 +164,8 @@ pub fn default_provider_budget_limits(
         max_total_tokens_without_approval: tokens,
         max_estimated_cost_micros_without_approval: cost_micros,
         already_approved: false,
+        input_chars: 0,
+        expected_output_chars: 0,
     }
 }
 
@@ -185,6 +209,31 @@ pub fn evaluate_provider_budget(
         reasons.push("long-running provider task is near approval-free budget".to_string());
     }
 
+    // P0: usage calibration
+    let (calibrated_input, calibrated_output, calibration_confidence, calibration_fallback) =
+        if request.input_chars > 0 {
+            let est = agent_harness_core::estimate_with_confidence(
+                &request.model,
+                request.input_chars,
+                request
+                    .expected_output_chars
+                    .max(request.requested_output_tokens as usize * 2),
+            );
+            (
+                est.input_tokens,
+                est.output_tokens,
+                format!("{:?}", est.confidence),
+                est.fallback_reason,
+            )
+        } else {
+            (
+                request.estimated_input_tokens,
+                request.requested_output_tokens,
+                "unknown".to_string(),
+                Some("input_chars not provided; using static token estimate".to_string()),
+            )
+        };
+
     let decision = if estimated_total_tokens == 0 {
         WriterProviderBudgetDecision::Blocked
     } else if reasons.is_empty() {
@@ -211,6 +260,10 @@ pub fn evaluate_provider_budget(
         approval_required,
         reasons,
         remediation,
+        calibrated_input_tokens: calibrated_input,
+        calibrated_output_tokens: calibrated_output,
+        calibration_confidence,
+        calibration_fallback_reason: calibration_fallback,
     }
 }
 

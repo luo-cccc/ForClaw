@@ -1,0 +1,15 @@
+{"task":"chapter_generation","chapter":"第一章","instruction":"继续第二章——同事张远发现异常访问记录，留给林晓一个加密密钥后辞职","expected":{"min_chars":1200,"max_chars":3000,"mission_hit":true,"must_contain":["密钥","日志","辞职","沈重山"]}}
+{"task":"continuity_diagnostic","chapter":"第一章","check":"记忆备份法律设定一致性","expected":{"canon_conflict":false,"lore_entities":["林晓","沈重山","记忆"]}}
+{"task":"quality_evaluation","chapter":"第一章","metrics":["dialogue_function","ending_hook","exposition_ratio"],"expected":{"overall_score_min":0.4}}
+{"task":"quality_evaluation","chapter":"第二章","metrics":["dialogue_function","ending_hook","scene_causality","promise_progress"],"expected":{"overall_score_min":0.5,"metric_min":{"dialogue_function":0.25,"ending_hook":0.4,"scene_causality":0.4}}}
+{"task":"chapter_generation","chapter":"第二章","instruction":"继续第三章——林晓解密废弃记忆，发现诉讼证据，安全部门扫描她的工作站","expected":{"min_chars":1200,"max_chars":3000,"mission_hit":true,"must_contain":["解密","证据","安全部门","销毁"]}}
+{"task":"quality_signals","chapter":"第二章","metrics":["anchor_carry","style_drift"],"expected":{"metric_min":{"anchor_carry":0.15,"style_drift":0.5},"must_not_contain_reason":["证据不足，无法确定是否存在问题"]}}
+{"task":"targeted_revision","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"张远说：我查到了。林晓看着他。","after_text":"张远把芯片推到桌上，说来源IP是CEO办公室。林晓握紧杯子，意识到最信任的人也在冒风险。","requires_excerpt_mapping":true}}
+{"task":"craft_memory","chapter":"第二章","metrics":["dialogue_function"],"expected":{"min_examples":1,"min_bad_patterns":1}}
+{"task":"manual_craft_edit","chapter":"第二章","metrics":["dialogue_function","scene_causality"],"expected":{"before_text":"林晓说：这是什么？张远没有回答。","after_text":"林晓拿起芯片，触感冰凉。张远说：只能解密一次。她问：为什么不自己用？","min_examples":0,"min_bad_patterns":0,"requires_excerpt_mapping":false}}
+{"task":"craft_memory_prompt","chapter":"第二章","metrics":["dialogue_function"],"expected":{"must_contain":["项目写法记忆"]}}
+{"task":"canon_conflict","chapter":"第二章","check":"记忆删除法律冲突","expected":{"candidate_text":"沈重山说公司有权删除员工记忆，记忆编辑不需要授权，这是合法的。","canon_conflict":true,"must_conflict":["memory-law"]}}
+{"task":"planning_review","chapter":"第三章","instruction":"林晓解密废弃记忆，发现集体诉讼证据，安全部门扫描工作站，推进拷贝非法证据伏笔","expected":{"required_rules":["scene_objective","conflict_pressure","dialogue_function"],"required_payoff_keywords":["证据","密钥"],"requires_ending_hook":false}}
+{"task":"promise_progression","chapter":"第二章","metrics":["promise_progress"],"expected":{"required_promises":["张远的加密密钥"],"min_progressed":1}}
+{"task":"negative_promise_stalled","chapter":"第二章","metrics":["promise_progress"],"expected":{"stalled_text":"张远和林晓在咖啡厅聊了一小时天气和咖啡口味，没有提到密钥或日志。","promise_progress_score_max":0.55,"reason_contains":"跳过评估"}}
+{"task":"negative_revision_no_change","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"张远把芯片给林晓。","after_text":"张远把芯片给林晓。","min_excerpt_mapping_count":0,"revision_should_be_empty":true}}

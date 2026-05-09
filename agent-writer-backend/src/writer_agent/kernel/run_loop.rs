@@ -128,6 +128,10 @@ impl WriterAgentKernel {
                     included_chars: source.char_count,
                     truncated: source.truncated,
                     score: None,
+                    taxonomy: taxonomy_for_source(&source.source).to_string(),
+                    role: String::new(),
+                    elapsed_ms: 0,
+                    retrieval_status: "sync".to_string(),
                 })
                 .collect(),
             budget: agent_harness_core::ContextBudgetReport {
@@ -173,7 +177,7 @@ impl WriterAgentKernel {
                         .to_string(),
                 );
             }
-            agent_harness_core::ContextQualityRecommendation::Supplement { sources } => {
+            agent_harness_core::ContextQualityRecommendation::Supplement { sources, actions } => {
                 warnings.push(crate::writer_agent::run_preflight::PreflightItem {
                     code: "context_quality_supplement".to_string(),
                     reason: format!(
@@ -189,6 +193,9 @@ impl WriterAgentKernel {
                     "Supplement missing context sources or accept lower grounding confidence."
                         .to_string(),
                 );
+                for action in actions {
+                    next_actions.push(format!("Action: {}", action));
+                }
             }
             agent_harness_core::ContextQualityRecommendation::Sufficient => {}
         }
@@ -656,6 +663,32 @@ fn context_quality_source_type(
         ContextSource::NeighborText => "neighbor_text",
         ContextSource::StoryImpactRadius => "story_impact",
         ContextSource::ReaderCompensation => "reader_compensation",
+    }
+}
+
+fn taxonomy_for_source(
+    source: &crate::writer_agent::context::ContextSource,
+) -> &'static str {
+    use crate::writer_agent::context::ContextSource;
+    use agent_harness_core::{
+        TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON, TAXONOMY_INSTRUCTION, TAXONOMY_LORE,
+        TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER, TAXONOMY_PROJECT_BRAIN,
+        TAXONOMY_PROMISE, TAXONOMY_SCENE_PLAN, TAXONOMY_UNKNOWN,
+    };
+    match source {
+        ContextSource::ProjectBrief => TAXONOMY_PROJECT_BRAIN,
+        ContextSource::ChapterMission | ContextSource::NextBeat => TAXONOMY_SCENE_PLAN,
+        ContextSource::CanonSlice => TAXONOMY_CANON,
+        ContextSource::PromiseSlice => TAXONOMY_PROMISE,
+        ContextSource::DecisionSlice => TAXONOMY_MEMORY,
+        ContextSource::AuthorStyle => TAXONOMY_AUTHOR_VOICE,
+        ContextSource::OutlineSlice | ContextSource::StoryImpactRadius => TAXONOMY_OUTLINE,
+        ContextSource::PreviousChapter => TAXONOMY_PRIOR_CHAPTER,
+        ContextSource::BookState | ContextSource::ArcSnapshot | ContextSource::VolumeSnapshot => {
+            TAXONOMY_LORE
+        }
+        ContextSource::SystemContract => TAXONOMY_INSTRUCTION,
+        _ => TAXONOMY_UNKNOWN,
     }
 }
 

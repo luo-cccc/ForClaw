@@ -20,7 +20,10 @@ pub mod tool_registry;
 pub mod vector_db;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
-pub use budget_calibration::{estimate_tokens, record_usage, BudgetCalibration, CalibrationStore};
+pub use budget_calibration::{
+    estimate_tokens, estimate_with_confidence, record_full_usage, record_usage, BudgetCalibration,
+    BudgetCalibrationConfidence, CalibratedEstimate, CalibrationStore,
+};
 pub use compaction::{
     anchor_latest_user_message, compact_messages, compact_messages_with_trigger,
     estimate_message_tokens, find_safe_boundary, should_compact, CompactionConfig,
@@ -28,7 +31,9 @@ pub use compaction::{
 };
 pub use context_pack::{
     char_count, truncate_text_report, ContextBudgetReport, ContextPacker, ContextSourceReport,
-    PackedContext,
+    PackedContext, TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON, TAXONOMY_INSTRUCTION, TAXONOMY_LORE,
+    TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER, TAXONOMY_PROJECT_BRAIN,
+    TAXONOMY_PROMISE, TAXONOMY_SCENE_PLAN, TAXONOMY_UNKNOWN,
 };
 pub use context_quality::{
     evaluate_context_quality, ContextQualityRecommendation, ContextQualityReport,

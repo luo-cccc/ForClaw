@@ -83,6 +83,20 @@ where
 
     record_task_packet(&context);
 
+    // Checkpoint 1: context built
+    let mut checkpoint_counter: usize = 0;
+    let mut budget_spent_micros: u64 = 0;
+    write_chapter_generation_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        "context_built",
+        &context.target.title,
+        budget_spent_micros,
+        &[],
+    );
+
     emit(ChapterGenerationEvent {
         request_id: request_id.clone(),
         phase: PHASE_PREFLIGHT.to_string(),
@@ -149,6 +163,8 @@ where
     {
         Ok(draft) => {
             record_provider_budget(&context, &draft.provider_budget);
+            budget_spent_micros = budget_spent_micros
+                .saturating_add(draft.provider_budget.estimated_cost_micros);
             draft
         }
         Err(error) => {
@@ -324,6 +340,18 @@ where
         return PipelineTerminal::Failed(error);
     }
 
+    // Checkpoint 2: draft produced (after length repairs)
+    write_chapter_generation_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        "draft_produced",
+        &context.target.title,
+        budget_spent_micros,
+        &[format!("draft:{}", request_id).as_str()],
+    );
+
     // Quality evaluation: always evaluate draft quality after length repairs.
     let scene_craft_plan = context
         .craft_plan
@@ -333,6 +361,7 @@ where
     let quality_signals = ChapterQualitySignals {
         anchor_keywords: context.quality_anchor_keywords.clone(),
         author_voice: context.author_voice_snapshot.clone(),
+        required_anchors: context.required_story_anchors.clone(),
     };
     let quality_report_before = evaluate_chapter_quality_with_signals(
         &draft.content,
@@ -479,6 +508,23 @@ where
         craft_memory_updates,
     };
 
+    // Checkpoint 3: quality report produced
+    let quality_artifact_ref_1 = format!("quality_report.before:{}", request_id);
+    let quality_artifact_ref_2 = format!("revision_report:{}", request_id);
+    write_chapter_generation_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        "quality_report_produced",
+        &context.target.title,
+        budget_spent_micros,
+        &[
+            quality_artifact_ref_1.as_str(),
+            quality_artifact_ref_2.as_str(),
+        ],
+    );
+
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
         PHASE_SAVE,
@@ -513,6 +559,19 @@ where
             return PipelineTerminal::Failed(error);
         }
     };
+
+    // Checkpoint 4: save prepared
+    let save_artifact_ref = format!("saved:{}/{}", saved.chapter_title, saved.new_revision);
+    write_chapter_generation_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        "save_prepared",
+        &saved.chapter_title,
+        budget_spent_micros,
+        &[save_artifact_ref.as_str()],
+    );
 
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
@@ -886,6 +945,7 @@ pub fn record_manual_craft_edit_feedback(
     let quality_signals = ChapterQualitySignals {
         anchor_keywords: request.anchor_keywords.clone(),
         author_voice: request.author_voice.clone(),
+        required_anchors: Vec::new(),
     };
     let min_chars = request.target_min_chars.unwrap_or(0);
     let max_chars = request.target_max_chars.unwrap_or_else(|| {
@@ -1125,6 +1185,9 @@ fn build_manual_craft_edit_target_changes(
             after_text,
             &before_metric.metric,
         );
+        let sentence_changes = crate::chapter_generation::compute_sentence_changes(
+            before_text, after_text, &before_metric.metric,
+        );
         changes.push(RevisionTargetChange {
             metric: before_metric.metric.clone(),
             revision_hint: before_metric.revision_hint.clone(),
@@ -1146,6 +1209,7 @@ fn build_manual_craft_edit_target_changes(
                 "Author manual edit improved {} by {:+.2}.",
                 before_metric.metric, delta
             ),
+            sentence_changes,
         });
     }
     changes
@@ -1573,6 +1637,39 @@ impl ChapterGenerationEvent {
             quality_report: None,
             warnings: vec![],
         }
+    }
+}
+
+fn write_chapter_generation_checkpoint(
+    memory_path: &std::path::Path,
+    project_id: &str,
+    request_id: &str,
+    counter: &mut usize,
+    step: &str,
+    chapter_title: &str,
+    budget_spent_micros: u64,
+    artifact_refs: &[&str],
+) {
+    *counter = counter.saturating_add(1);
+    let checkpoint_id = format!("{}-cp-{}", request_id, counter);
+    let payload = serde_json::json!({
+        "chapter_title": chapter_title,
+        "request_id": request_id,
+        "step": step,
+    });
+    let checkpoint = crate::writer_agent::supervised_sprint::LongTaskCheckpoint::new(
+        &checkpoint_id,
+        request_id,
+        "chapter_generation",
+        step,
+        payload,
+    )
+    .with_budget(budget_spent_micros)
+    .with_artifacts(artifact_refs.iter().map(|s| s.to_string()).collect())
+    .with_source("pipeline");
+
+    if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(memory_path) {
+        let _ = memory.insert_long_task_checkpoint(project_id, &checkpoint);
     }
 }
 

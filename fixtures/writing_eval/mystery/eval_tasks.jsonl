@@ -1,0 +1,15 @@
+{"task":"chapter_generation","chapter":"第一章","instruction":"继续第二章——法医发现烫伤疤痕与孤儿院火灾有关，陈默走访旧城区","expected":{"min_chars":1200,"max_chars":3000,"mission_hit":true,"must_contain":["疤痕","孤儿院","档案","隐瞒"]}}
+{"task":"continuity_diagnostic","chapter":"第一章","check":"铜钥匙设定一致性","expected":{"canon_conflict":false,"lore_entities":["铜钥匙","晨光孤儿院","陈默","07"]}}
+{"task":"quality_evaluation","chapter":"第一章","metrics":["dialogue_function","ending_hook","exposition_ratio"],"expected":{"overall_score_min":0.4}}
+{"task":"quality_evaluation","chapter":"第二章","metrics":["dialogue_function","ending_hook","scene_causality","promise_progress"],"expected":{"overall_score_min":0.5,"metric_min":{"dialogue_function":0.25,"ending_hook":0.4,"scene_causality":0.4}}}
+{"task":"chapter_generation","chapter":"第二章","instruction":"继续第三章——陈默潜入孤儿院地下室，发现更多钥匙，被人锁在地下室","expected":{"min_chars":1200,"max_chars":3000,"mission_hit":true,"must_contain":["地下室","钥匙","锁","孤儿院"]}}
+{"task":"quality_signals","chapter":"第二章","metrics":["anchor_carry","style_drift"],"expected":{"metric_min":{"anchor_carry":0.15,"style_drift":0.5},"must_not_contain_reason":["证据不足，无法确定是否存在问题"]}}
+{"task":"targeted_revision","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"陈默看着档案。老李头站在旁边。","after_text":"陈默把档案拍在桌上时，老李头的脸色变了，因为尘封的火灾报告已经被涂黑。","requires_excerpt_mapping":true}}
+{"task":"craft_memory","chapter":"第二章","metrics":["dialogue_function"],"expected":{"min_examples":1,"min_bad_patterns":1}}
+{"task":"manual_craft_edit","chapter":"第二章","metrics":["dialogue_function","scene_causality"],"expected":{"before_text":"陈默说：档案在哪里？老李头没有回答。","after_text":"陈默把档案拍在桌上：三条人命，你跟我说封存？老李头叹了口气，从抽屉深处摸出一个牛皮纸袋。","min_examples":0,"min_bad_patterns":0,"requires_excerpt_mapping":false}}
+{"task":"craft_memory_prompt","chapter":"第二章","metrics":["dialogue_function"],"expected":{"must_contain":["项目写法记忆"]}}
+{"task":"canon_conflict","chapter":"第二章","check":"孤儿院火灾死亡人数冲突","expected":{"candidate_text":"法医说火灾只死了七个人，官方记录完全准确，没有任何隐瞒。","canon_conflict":true,"must_conflict":["orphanage-fire-death-count"]}}
+{"task":"planning_review","chapter":"第三章","instruction":"陈默潜入孤儿院地下室，找到第七把钥匙，被人锁在铁门内，推进火灾真相伏笔","expected":{"required_rules":["scene_objective","conflict_pressure","dialogue_function"],"required_payoff_keywords":["钥匙","火灾"],"requires_ending_hook":false}}
+{"task":"promise_progression","chapter":"第二章","metrics":["promise_progress"],"expected":{"required_promises":["孤儿院火灾真相"],"min_progressed":1}}
+{"task":"negative_missing_anchor","chapter":"第一章","metrics":["anchor_carry"],"expected":{"must_miss_anchor":"07","penalty_applies":true,"min_score_drop":0.15}}
+{"task":"negative_style_drift","chapter":"第一章","metrics":["style_drift"],"expected":{"drifted_text":"陈默推开警戒线，然后他发现女尸，这很糟糕。他报了警。","style_drift_score_max":0.7,"reason_contains":"风格漂移"}}

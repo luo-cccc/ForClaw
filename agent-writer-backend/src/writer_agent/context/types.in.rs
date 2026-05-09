@@ -8,7 +8,7 @@ pub struct ContextExcerpt {
     pub evidence_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ContextSource {
     SystemContract,
     ProjectBrief,

@@ -296,6 +296,10 @@ mod tests {
                 included_chars: 5,
                 truncated: false,
                 score: None,
+                taxonomy: String::new(),
+                role: String::new(),
+                elapsed_ms: 0,
+                retrieval_status: String::new(),
             }],
             10,
         );
@@ -360,6 +364,7 @@ mod tests {
             changed_excerpt_before: "他说了背景。".to_string(),
             changed_excerpt_after: "他说：你现在必须选择。".to_string(),
             text_change_summary: "Draft text changed".to_string(),
+            sentence_changes: Vec::new(),
         }];
         let matched_metrics = vec!["dialogue_function".to_string()];
 

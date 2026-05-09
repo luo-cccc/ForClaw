@@ -234,6 +234,12 @@ pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Resul
             backend.dispatch("record_sprint_budget_usage", arguments)
         }
         "forge_set_sprint_quality_gate" => backend.dispatch("set_sprint_quality_gate", arguments),
+        "forge_latest_chapter_generation_checkpoint" => {
+            backend.dispatch("latest_chapter_generation_checkpoint", arguments)
+        }
+        "forge_chapter_generation_resume_candidates" => {
+            backend.dispatch("chapter_generation_resume_candidates", json!({}))
+        }
         "forge_project_graph_data" => backend.dispatch("project_graph_data", json!({})),
         "forge_project_storage_diagnostics" => {
             backend.dispatch("project_storage_diagnostics", json!({}))

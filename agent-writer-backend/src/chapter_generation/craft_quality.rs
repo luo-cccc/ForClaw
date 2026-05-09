@@ -13,6 +13,7 @@ const OVERALL_WEIGHTS: &[(&str, f32)] = &[
 pub struct ChapterQualitySignals {
     pub anchor_keywords: Vec<String>,
     pub author_voice: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
+    pub required_anchors: Vec<crate::chapter_generation::StoryAnchor>,
 }
 
 pub fn evaluate_chapter_quality(
@@ -50,7 +51,7 @@ pub fn evaluate_chapter_quality_with_signals(
         metric_ending_hook(chapter_text, scene_plan),
         metric_scene_causality(chapter_text, scene_plan),
         metric_promise_progress(chapter_text, open_promise_keywords),
-        metric_anchor_carry(chapter_text, &signals.anchor_keywords),
+        metric_anchor_carry(chapter_text, &signals.anchor_keywords, &signals.required_anchors),
         metric_style_drift(chapter_text, chapter_title, signals.author_voice.as_ref()),
     ];
 
@@ -115,8 +116,12 @@ pub fn evaluate_chapter_quality_with_signals(
     }
 }
 
-fn metric_anchor_carry(text: &str, anchors: &[String]) -> QualityMetricResult {
-    if anchors.is_empty() {
+fn metric_anchor_carry(
+    text: &str,
+    anchors: &[String],
+    required_anchors: &[crate::chapter_generation::StoryAnchor],
+) -> QualityMetricResult {
+    let all_anchor_keywords: Vec<String> = if anchors.is_empty() && required_anchors.is_empty() {
         return gated_metric(
             "anchor_carry",
             0.5,
@@ -125,10 +130,38 @@ fn metric_anchor_carry(text: &str, anchors: &[String]) -> QualityMetricResult {
             "需要项目级锚点数据，本次评估跳过",
             "在完整写作项目中重新运行",
         );
+    } else if anchors.is_empty() {
+        required_anchors.iter().map(|a| a.anchor_id.clone()).collect()
+    } else {
+        anchors.to_vec()
+    };
+
+    let report = crate::writer_agent::anchor_carry::score_anchor_carry(text, &all_anchor_keywords);
+    let mut score = report.carry_rate as f32;
+
+    // Check required anchors separately
+    let mut required_missing = Vec::new();
+    let mut required_weak = Vec::new();
+    for req in required_anchors {
+        let item = report.items.iter().find(|i| i.anchor == req.anchor_id);
+        match item {
+            None => {
+                required_missing.push(req.anchor_id.clone());
+            }
+            Some(i) if !i.carried => {
+                required_weak.push(req.anchor_id.clone());
+            }
+            _ => {}
+        }
     }
 
-    let report = crate::writer_agent::anchor_carry::score_anchor_carry(text, anchors);
-    let score = report.carry_rate as f32;
+    // Penalize missing or weak required anchors
+    if !required_missing.is_empty() || !required_weak.is_empty() {
+        let penalty = ((required_missing.len() + required_weak.len()) as f32 * 0.25)
+            .min(0.6);
+        score = (score - penalty).max(0.0);
+    }
+
     let evidence = report
         .items
         .iter()
@@ -144,10 +177,23 @@ fn metric_anchor_carry(text: &str, anchors: &[String]) -> QualityMetricResult {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let reason = format!(
-        "锚点承载率 {}/{}，提及率 {}/{}",
-        report.carried_count, report.anchor_count, report.mentioned_count, report.anchor_count
-    );
+
+    let reason = if !required_missing.is_empty() || !required_weak.is_empty() {
+        format!(
+            "锚点承载率 {}/{}，提及率 {}/{}；必需锚点缺失 [{}]，弱承载 [{}]",
+            report.carried_count,
+            report.anchor_count,
+            report.mentioned_count,
+            report.anchor_count,
+            required_missing.join(", "),
+            required_weak.join(", ")
+        )
+    } else {
+        format!(
+            "锚点承载率 {}/{}，提及率 {}/{}",
+            report.carried_count, report.anchor_count, report.mentioned_count, report.anchor_count
+        )
+    };
 
     gated_metric(
         "anchor_carry",
@@ -687,6 +733,12 @@ pub fn build_revision_target_changes_with_text(
                     }
                     _ => None,
                 };
+            let sentence_changes = match (draft_before, draft_after) {
+                (Some(before_text), Some(after_text)) => {
+                    compute_sentence_changes(before_text, after_text, &target.metric)
+                }
+                _ => Vec::new(),
+            };
             RevisionTargetChange {
                 metric: target.metric.clone(),
                 revision_hint: target.revision_hint.clone(),
@@ -711,6 +763,7 @@ pub fn build_revision_target_changes_with_text(
                         (change.0.as_str(), change.1.as_str())
                     }),
                 ),
+                sentence_changes,
                 evidence_after,
             }
         })
@@ -781,6 +834,132 @@ fn summarize_revision_text_change(
             delta
         )
     }
+}
+
+pub fn compute_sentence_changes(
+    before_text: &str,
+    after_text: &str,
+    metric: &str,
+) -> Vec<crate::chapter_generation::SentenceChange> {
+    use crate::chapter_generation::{
+        SentenceChange, SentenceChangeConfidence, SentenceChangeKind,
+    };
+
+    if before_text == after_text {
+        return Vec::new();
+    }
+
+    let before_sentences = split_revision_units(before_text);
+    let after_sentences = split_revision_units(after_text);
+    if before_sentences.is_empty() || after_sentences.is_empty() {
+        return vec![SentenceChange {
+            before_sentence: snippet_for_report(before_text, 120),
+            after_sentence: snippet_for_report(after_text, 120),
+            change_kind: SentenceChangeKind::Unaligned,
+            target_metric: metric.to_string(),
+            confidence: SentenceChangeConfidence::Low,
+        }];
+    }
+
+    let mut used_before = std::collections::HashSet::new();
+    let mut changes: Vec<SentenceChange> = Vec::new();
+
+    for (after_idx, after_sent) in after_sentences.iter().enumerate() {
+        let mut best_match: Option<(usize, f32)> = None;
+        for (before_idx, before_sent) in before_sentences.iter().enumerate() {
+            if used_before.contains(&before_idx) {
+                continue;
+            }
+            let sim = sentence_similarity(before_sent, after_sent);
+            if sim > 0.4 && best_match.map_or(true, |(_, best_sim)| sim > best_sim) {
+                best_match = Some((before_idx, sim));
+            }
+        }
+
+        if let Some((before_idx, sim)) = best_match {
+            used_before.insert(before_idx);
+            let before_sent = &before_sentences[before_idx];
+            let is_moved = before_idx != after_idx
+                && before_sentences.len() == after_sentences.len()
+                && sentence_similarity(before_sent, after_sent) > 0.7;
+            if before_sent != after_sent || is_moved {
+                let confidence = if sim >= 0.8 {
+                    SentenceChangeConfidence::High
+                } else if sim >= 0.6 {
+                    SentenceChangeConfidence::Medium
+                } else {
+                    SentenceChangeConfidence::Low
+                };
+                let kind = if is_moved {
+                    SentenceChangeKind::Moved
+                } else {
+                    SentenceChangeKind::Modified
+                };
+                changes.push(SentenceChange {
+                    before_sentence: before_sent.clone(),
+                    after_sentence: after_sent.clone(),
+                    change_kind: kind,
+                    target_metric: metric.to_string(),
+                    confidence,
+                });
+            }
+        } else {
+            changes.push(SentenceChange {
+                before_sentence: String::new(),
+                after_sentence: after_sent.clone(),
+                change_kind: SentenceChangeKind::Inserted,
+                target_metric: metric.to_string(),
+                confidence: SentenceChangeConfidence::High,
+            });
+        }
+    }
+
+    for (before_idx, before_sent) in before_sentences.iter().enumerate() {
+        if !used_before.contains(&before_idx) {
+            changes.push(SentenceChange {
+                before_sentence: before_sent.clone(),
+                after_sentence: String::new(),
+                change_kind: SentenceChangeKind::Deleted,
+                target_metric: metric.to_string(),
+                confidence: SentenceChangeConfidence::High,
+            });
+        }
+    }
+
+    // Filter to metric-relevant changes when there are many
+    let needles = metric_change_needles(metric);
+    if !needles.is_empty() && changes.len() > 3 {
+        let filtered: Vec<SentenceChange> = changes
+            .iter()
+            .filter(|c| {
+                needles.iter().any(|n| {
+                    c.before_sentence.contains(n) || c.after_sentence.contains(n)
+                })
+            })
+            .cloned()
+            .collect();
+        if !filtered.is_empty() {
+            return filtered;
+        }
+    }
+
+    changes
+}
+
+fn sentence_similarity(a: &str, b: &str) -> f32 {
+    let a_chars: std::collections::HashSet<char> = a.chars().collect();
+    let b_chars: std::collections::HashSet<char> = b.chars().collect();
+    if a_chars.is_empty() && b_chars.is_empty() {
+        return 1.0;
+    }
+    let intersection: std::collections::HashSet<char> =
+        a_chars.intersection(&b_chars).copied().collect();
+    let union: std::collections::HashSet<char> =
+        a_chars.union(&b_chars).copied().collect();
+    if union.is_empty() {
+        return 0.0;
+    }
+    intersection.len() as f32 / union.len() as f32
 }
 
 fn changed_text_excerpt(
@@ -1057,6 +1236,7 @@ mod craft_quality_tests {
                 sample_refs: vec!["sample:chapter-1".to_string()],
                 last_updated_ms: 0,
             }),
+            required_anchors: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             "林墨只好拔出寒影剑，因此付出代价。",
@@ -1106,5 +1286,149 @@ mod craft_quality_tests {
                 && !change.changed_excerpt_after.is_empty()
                 && change.text_change_summary.contains("Draft text changed")
         }));
+    }
+
+    #[test]
+    fn required_anchors_penalize_missing_and_weak() {
+        let plan = SceneCraftPlan::default();
+        // Text mentions "寒影剑" but does not carry it (no action/dialogue/consequence)
+        let text = "本章出现寒影剑、张三、镜中墟和旧债。";
+        let signals = ChapterQualitySignals {
+            anchor_keywords: vec!["寒影剑".to_string(), "张三".to_string()],
+            author_voice: None,
+            required_anchors: vec![
+                crate::chapter_generation::StoryAnchor {
+                    anchor_id: "寒影剑".to_string(),
+                    source: "canon_constraint".to_string(),
+                    description: "must participate in action".to_string(),
+                    required: true,
+                },
+                crate::chapter_generation::StoryAnchor {
+                    anchor_id: "旧债".to_string(),
+                    source: "open_promise".to_string(),
+                    description: "must advance promise".to_string(),
+                    required: true,
+                },
+            ],
+        };
+        let report = evaluate_chapter_quality_with_signals(
+            text, "test-chapter", &plan, &[], 0, 500, &signals,
+        );
+        let anchor = report
+            .metric_results
+            .iter()
+            .find(|m| m.metric == "anchor_carry")
+            .unwrap();
+        // Both required anchors are only mentioned, not carried → penalty
+        assert!(anchor.score < 0.5, "expected low score due to weak required anchors, got {}", anchor.score);
+        assert!(anchor.reason.contains("必需锚点") || anchor.reason.contains("弱承载"));
+    }
+
+    #[test]
+    fn required_anchors_boost_when_all_carried() {
+        let plan = SceneCraftPlan::default();
+        // Text carries all required anchors through action and consequence
+        let text = "林墨拔出寒影刀逼问张三：“旧债今天要还。”镜中墟的门因此重新打开。";
+        let signals = ChapterQualitySignals {
+            anchor_keywords: vec!["寒影刀".to_string(), "张三".to_string(), "旧债".to_string()],
+            author_voice: None,
+            required_anchors: vec![
+                crate::chapter_generation::StoryAnchor {
+                    anchor_id: "寒影刀".to_string(),
+                    source: "canon_constraint".to_string(),
+                    description: "must participate in action".to_string(),
+                    required: true,
+                },
+                crate::chapter_generation::StoryAnchor {
+                    anchor_id: "旧债".to_string(),
+                    source: "open_promise".to_string(),
+                    description: "must advance promise".to_string(),
+                    required: true,
+                },
+            ],
+        };
+        let report = evaluate_chapter_quality_with_signals(
+            text, "test-chapter", &plan, &[], 0, 500, &signals,
+        );
+        let anchor = report
+            .metric_results
+            .iter()
+            .find(|m| m.metric == "anchor_carry")
+            .unwrap();
+        assert!(anchor.score >= 0.5, "expected decent score when required anchors are carried, got {}", anchor.score);
+    }
+
+    #[test]
+    fn sentence_diff_detects_inserted_sentence_for_major_rewrite() {
+        let before = "林墨看着寒影剑。散修站在门口。";
+        let after = "散修逼近门口时，林墨只好拔出寒影剑，因此付出鬓发变白的代价。";
+        let changes = compute_sentence_changes(before, after, "ending_hook");
+        assert!(!changes.is_empty(), "expected at least one sentence change");
+        // After is a completely new sentence → detected as Inserted (before sentences deleted)
+        let inserted = changes.iter().any(|c| c.change_kind == SentenceChangeKind::Inserted);
+        assert!(inserted, "expected an Inserted sentence change for major rewrite");
+    }
+
+    #[test]
+    fn sentence_diff_detects_insertion_and_deletion() {
+        let before = "林墨看着寒影剑。散修站在门口。";
+        let after = "林墨看着寒影剑。散修站在门口。他握紧了剑柄。";
+        let changes = compute_sentence_changes(before, after, "scene_causality");
+        let inserted = changes.iter().any(|c| c.change_kind == SentenceChangeKind::Inserted);
+        assert!(inserted, "expected an Inserted sentence change");
+    }
+
+    #[test]
+    fn sentence_diff_detects_moved_sentence() {
+        let before = "第一句。第二句。";
+        let after = "第二句。第一句。";
+        let changes = compute_sentence_changes(before, after, "dialogue_function");
+        let moved = changes.iter().any(|c| c.change_kind == SentenceChangeKind::Moved);
+        assert!(moved, "expected a Moved sentence change");
+    }
+
+    #[test]
+    fn sentence_diff_empty_for_identical_text() {
+        let text = "林墨看着寒影剑。散修站在门口。";
+        let changes = compute_sentence_changes(text, text, "anchor_carry");
+        assert!(changes.is_empty(), "expected no changes for identical text");
+    }
+
+    #[test]
+    fn sentence_diff_detects_deleted_and_inserted_for_unaligned() {
+        let before = "ABC。";
+        let after = "XYZ123。";
+        let changes = compute_sentence_changes(before, after, "style_drift");
+        let deleted = changes.iter().any(|c| c.change_kind == SentenceChangeKind::Deleted);
+        let inserted = changes.iter().any(|c| c.change_kind == SentenceChangeKind::Inserted);
+        assert!(deleted, "expected Deleted for original sentence");
+        assert!(inserted, "expected Inserted for new sentence");
+    }
+
+    #[test]
+    fn revision_target_changes_include_sentence_changes() {
+        let plan = SceneCraftPlan::default();
+        let before_text = "林墨看着寒影剑。散修站在门口。";
+        let after_text = "散修逼近门口时，林墨只好拔出寒影剑，因此付出鬓发变白的代价。";
+        let before = evaluate_chapter_quality(before_text, "test-chapter", &plan, &[], 0, 500);
+        let after = evaluate_chapter_quality(after_text, "test-chapter", &plan, &[], 0, 500);
+
+        let changes = build_revision_target_changes_with_text(
+            &before,
+            Some(&after),
+            true,
+            false,
+            Some(before_text),
+            Some(after_text),
+        );
+
+        let has_sentence_changes = changes.iter().any(|change| {
+            !change.sentence_changes.is_empty()
+                && change.sentence_changes.iter().any(|sc| {
+                    sc.confidence == SentenceChangeConfidence::High
+                        || sc.confidence == SentenceChangeConfidence::Medium
+                })
+        });
+        assert!(has_sentence_changes, "expected at least one high/medium confidence sentence change in revision target changes");
     }
 }

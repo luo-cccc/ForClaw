@@ -110,6 +110,21 @@ pub struct HeadlessProjectGraphData {
     pub chapters: Vec<HeadlessGraphChapter>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileEvalTrend {
+    pub profile: String,
+    pub trend: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalTrendSummary {
+    pub summary: Option<serde_json::Value>,
+    pub profile_trends: Vec<ProfileEvalTrend>,
+    pub markdown_summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskAgentRequest {
@@ -2116,6 +2131,29 @@ Output ONLY the JSON object, no explanation outside. Example:
         })
     }
 
+    /// Query the latest chapter-generation checkpoint for a given task.
+    pub fn latest_chapter_generation_checkpoint(
+        &self,
+        task_id: String,
+    ) -> Result<Option<crate::writer_agent::supervised_sprint::LongTaskCheckpoint>, String> {
+        let kernel = self.lock_kernel()?;
+        kernel
+            .memory
+            .get_latest_long_task_checkpoint(&self.project.id, &task_id)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Query resume candidates: latest active checkpoints for chapter generation.
+    pub fn chapter_generation_resume_candidates(
+        &self,
+    ) -> Result<Vec<crate::writer_agent::supervised_sprint::LongTaskCheckpoint>, String> {
+        let kernel = self.lock_kernel()?;
+        kernel
+            .memory
+            .list_long_task_checkpoints(&self.project.id, Some("chapter_generation"), 10)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn project_graph_data(&self) -> Result<HeadlessProjectGraphData, String> {
         let lore_entries = self.load_lorebook()?;
         let outline = self.load_outline()?;
@@ -2215,6 +2253,49 @@ Output ONLY the JSON object, no explanation outside. Example:
             entities,
             relationships,
             chapters,
+        })
+    }
+
+    pub fn eval_trend_summary(&self) -> Result<EvalTrendSummary, String> {
+        let eval_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+            .join("writing_eval");
+
+        let summary_path = eval_dir.join("eval_summary.json");
+        let summary: Option<serde_json::Value> = std::fs::read_to_string(&summary_path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok());
+
+        let mut profile_trends = Vec::new();
+        for profile_dir in std::fs::read_dir(&eval_dir).map_err(|e| e.to_string())? {
+            let entry = profile_dir.map_err(|e| e.to_string())?;
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let profile_name = entry.file_name().to_string_lossy().to_string();
+            let trend_path = entry.path().join("eval_trend.json");
+            if !trend_path.exists() {
+                continue;
+            }
+            let trend: Option<serde_json::Value> = std::fs::read_to_string(&trend_path)
+                .ok()
+                .and_then(|content| serde_json::from_str(&content).ok());
+            if let Some(trend) = trend {
+                profile_trends.push(ProfileEvalTrend {
+                    profile: profile_name,
+                    trend,
+                });
+            }
+        }
+
+        let md_path = eval_dir.join("eval_summary.md");
+        let markdown_summary = std::fs::read_to_string(&md_path).ok();
+
+        Ok(EvalTrendSummary {
+            summary,
+            profile_trends,
+            markdown_summary,
         })
     }
 
@@ -2800,7 +2881,20 @@ Output ONLY the JSON object, no explanation outside. Example:
                     .and_then(|v| v.as_bool());
                 to_value(self.set_sprint_quality_gate(minimum_quality_score, stop_on_fatal)?)
             }
+            "latest_chapter_generation_checkpoint" => {
+                let task_id = params
+                    .get("taskId")
+                    .or_else(|| params.get("task_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                to_value(self.latest_chapter_generation_checkpoint(task_id)?)
+            }
+            "chapter_generation_resume_candidates" => {
+                to_value(self.chapter_generation_resume_candidates()?)
+            }
             "project_graph_data" => to_value(self.project_graph_data()?),
+            "eval_trend_summary" => to_value(self.eval_trend_summary()?),
             "project_storage_diagnostics" => to_value(self.project_storage_diagnostics()?),
             "export_writer_agent_trajectory" => {
                 let limit = optional_usize(&params, "limit");
@@ -4019,13 +4113,27 @@ async fn answer_project_brain_query(
     if budget_report.approval_required {
         return Err("PROJECT_BRAIN_PROVIDER_BUDGET_APPROVAL_REQUIRED".to_string());
     }
-    crate::llm_runtime::chat_text_profile(
+    let (text, usage) = crate::llm_runtime::chat_text_profile_with_usage(
         settings,
-        messages,
+        messages.clone(),
         crate::llm_runtime::LlmRequestProfile::ProjectBrainStream,
         60,
     )
-    .await
+    .await?;
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+        .map(|c| c.chars().count())
+        .sum();
+    agent_harness_core::record_full_usage(
+        &settings.model,
+        budget_report.estimated_input_tokens,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        input_chars,
+        text.chars().count(),
+    );
+    Ok(text)
 }
 
 fn project_brain_query_provider_budget(
@@ -4051,18 +4159,24 @@ fn project_brain_query_provider_budget(
         .collect::<Vec<_>>();
     let estimated_input_tokens =
         agent_harness_core::context_window_guard::estimate_request_tokens(&converted, None);
-    evaluate_provider_budget(WriterProviderBudgetRequest::new(
-        WriterProviderBudgetTask::ProjectBrainQuery,
-        settings.model.clone(),
-        estimated_input_tokens,
-        u64::from(
-            crate::llm_runtime::request_options(
-                settings,
-                crate::llm_runtime::LlmRequestProfile::ProjectBrainStream,
-            )
-            .max_tokens,
-        ),
-    ))
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+        .map(|c| c.chars().count())
+        .sum();
+    let profile_options = crate::llm_runtime::request_options(
+        settings,
+        crate::llm_runtime::LlmRequestProfile::ProjectBrainStream,
+    );
+    evaluate_provider_budget(
+        WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ProjectBrainQuery,
+            settings.model.clone(),
+            estimated_input_tokens,
+            u64::from(profile_options.max_tokens),
+        )
+        .with_chars(input_chars, profile_options.max_tokens as usize * 2),
+    )
 }
 
 fn load_project_brain_knowledge_index(

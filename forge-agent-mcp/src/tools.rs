@@ -671,6 +671,24 @@ pub(crate) fn tools() -> Vec<Value> {
             }),
         ),
         tool(
+            "forge_latest_chapter_generation_checkpoint",
+            "Latest Chapter Generation Checkpoint",
+            "Query the latest checkpoint for a chapter generation task.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "taskId": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            "forge_chapter_generation_resume_candidates",
+            "Chapter Generation Resume Candidates",
+            "List recent chapter generation checkpoints that could be used to resume interrupted work.",
+            empty_schema(),
+        ),
+        tool(
             "forge_craft_library",
             "Craft Library",
             "Return the loaded craft rule library with all available writing quality rules.",

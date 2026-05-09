@@ -27,6 +27,25 @@ pub struct ExecutionStep {
     pub status: StepStatus,
 }
 
+impl ExecutionStep {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            StepStatus::Completed { .. }
+                | StepStatus::Failed { .. }
+                | StepStatus::Skipped { .. }
+        )
+    }
+
+    pub fn is_runnable(&self) -> bool {
+        matches!(self.status, StepStatus::Ready | StepStatus::Planned)
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        matches!(self.status, StepStatus::Blocked { .. })
+    }
+}
+
 impl Default for ExecutionStep {
     fn default() -> Self {
         Self {
@@ -56,17 +75,27 @@ pub enum PlanStatus {
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     #[default]
-    Pending,
-    Active,
+    Planned,
+    Ready,
+    Running,
+    Blocked {
+        reason: String,
+        context_summary: Vec<String>,
+        recovery_suggestion: String,
+    },
     Completed {
         evidence: Vec<String>,
     },
     Failed {
         reason: String,
+        input_context_summary: Vec<String>,
+        recovery_suggestion: String,
     },
     Skipped {
         reason: String,
     },
+    /// Legacy alias — deserialized as Running.
+    Active,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,6 +104,47 @@ pub enum StepFailureAction {
     Stop,
     Retry { max_retries: u32 },
     Skip,
+    RequestContextSupplement { sources: Vec<String> },
+    PauseForApproval,
+    Abort,
+}
+
+impl ExecutionPlan {
+    /// Find the first step that is not in a terminal state.
+    /// Returns `None` if all steps are terminal (Completed, Failed, or Skipped).
+    pub fn first_runnable_step(&self,
+    ) -> Option<&ExecutionStep> {
+        self.steps.iter().find(|s| !s.is_terminal())
+    }
+
+    /// Initialize all non-terminal steps to `Ready`.
+    pub fn mark_ready(&mut self) {
+        for step in &mut self.steps {
+            if matches!(step.status, StepStatus::Planned | StepStatus::Active) {
+                step.status = StepStatus::Ready;
+            }
+        }
+    }
+
+    /// Count steps by terminal status.
+    pub fn summary(&self) -> (usize, usize, usize) {
+        let completed = self
+            .steps
+            .iter()
+            .filter(|s| matches!(s.status, StepStatus::Completed { .. }))
+            .count();
+        let failed = self
+            .steps
+            .iter()
+            .filter(|s| matches!(s.status, StepStatus::Failed { .. }))
+            .count();
+        let skipped = self
+            .steps
+            .iter()
+            .filter(|s| matches!(s.status, StepStatus::Skipped { .. }))
+            .count();
+        (completed, failed, skipped)
+    }
 }
 
 pub fn compile_plan(task: &TaskPacket, plan_id: &str, now_ms: u64) -> ExecutionPlan {
@@ -270,5 +340,64 @@ mod execution_plan_tests {
         let json = serde_json::to_string(&plan).unwrap();
         let decoded: ExecutionPlan = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.steps.len(), 4);
+    }
+
+    #[test]
+    fn new_steps_default_to_planned() {
+        let task = TaskPacket::new("t7", "test", TaskScope::Chapter, 1);
+        let plan = compile_plan(&task, "p7", 1);
+        for step in &plan.steps {
+            assert_eq!(step.status, StepStatus::Planned);
+        }
+    }
+
+    #[test]
+    fn first_runnable_step_skips_terminal() {
+        let task = TaskPacket::new("t8", "test", TaskScope::Chapter, 1);
+        let mut plan = compile_plan(&task, "p8", 1);
+        plan.steps[0].status = StepStatus::Completed { evidence: vec![] };
+        plan.steps[1].status = StepStatus::Completed { evidence: vec![] };
+        let runnable = plan.first_runnable_step();
+        assert!(runnable.is_some());
+        assert_eq!(runnable.unwrap().index, 2);
+    }
+
+    #[test]
+    fn resume_finds_no_runnable_when_all_terminal() {
+        let task = TaskPacket::new("t9", "test", TaskScope::Chapter, 1);
+        let mut plan = compile_plan(&task, "p9", 1);
+        for step in &mut plan.steps {
+            step.status = StepStatus::Completed { evidence: vec![] };
+        }
+        assert!(plan.first_runnable_step().is_none());
+        assert_eq!(plan.summary(), (4, 0, 0));
+    }
+
+    #[test]
+    fn blocked_step_is_not_terminal() {
+        let mut step = ExecutionStep::default();
+        step.status = StepStatus::Blocked {
+            reason: "awaiting approval".to_string(),
+            context_summary: vec![],
+            recovery_suggestion: "wait".to_string(),
+        };
+        assert!(!step.is_terminal());
+        assert!(step.is_blocked());
+    }
+
+    #[test]
+    fn step_failure_action_serialization_roundtrip() {
+        let actions = vec![
+            StepFailureAction::Abort,
+            StepFailureAction::PauseForApproval,
+            StepFailureAction::RequestContextSupplement {
+                sources: vec!["canon".to_string()],
+            },
+        ];
+        for action in actions {
+            let json = serde_json::to_string(&action).unwrap();
+            let decoded: StepFailureAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(action, decoded);
+        }
     }
 }

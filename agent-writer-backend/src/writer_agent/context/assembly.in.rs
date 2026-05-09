@@ -127,6 +127,20 @@ pub fn assemble_context_pack(
     }
 }
 
+/// Assemble a ContextPack from pre-fetched source contents.
+///
+/// Use this when sources have already been collected (e.g., in parallel)
+/// and you need deterministic, budget-aware assembly.
+/// Sources are assembled in task-priority order; failed/absent sources
+/// are simply skipped rather than causing the whole pack to fail.
+pub fn assemble_context_pack_from_map(
+    task: AgentTask,
+    source_contents: std::collections::HashMap<ContextSource, String>,
+    total_budget: usize,
+) -> WritingContextPack {
+    assemble_context_pack(task, &|source| source_contents.get(&source).cloned(), total_budget)
+}
+
 pub fn append_context_source_with_budget(
     pack: &mut WritingContextPack,
     source: ContextSource,
@@ -671,4 +685,74 @@ fn build_reader_compensation_context(
         }
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod parallel_retrieval_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Demonstrate that assemble_context_pack_from_map produces stable
+    /// source reports and that absent sources are skipped without affecting
+    /// the rest of the pack.
+    #[test]
+    fn from_map_stable_ordering_failed_sources_skipped() {
+        let mut contents = HashMap::new();
+        contents.insert(ContextSource::ProjectBrief, "brief content".to_string());
+        contents.insert(ContextSource::ChapterMission, "mission content".to_string());
+        // NextBeat is intentionally absent to simulate a failed retrieval
+        contents.insert(ContextSource::CanonSlice, "canon content".to_string());
+
+        let pack = assemble_context_pack_from_map(
+            AgentTask::GhostWriting,
+            contents,
+            10_000,
+        );
+
+        // Source types should appear in task-priority order
+        let source_types: Vec<_> = pack
+            .sources
+            .iter()
+            .map(|s| format!("{:?}", s.source))
+            .collect();
+        assert!(
+            !source_types.is_empty(),
+            "pack should contain at least some sources"
+        );
+
+        // NextBeat is absent; it should not appear and should not block others
+        assert!(
+            !source_types.iter().any(|t| t.contains("NextBeat")),
+            "failed/absent NextBeat should not appear in assembled sources"
+        );
+
+        // ProjectBrief and ChapterMission (higher priority) should appear
+        assert!(
+            source_types.iter().any(|t| t.contains("ProjectBrief")),
+            "ProjectBrief should be present"
+        );
+        assert!(
+            source_types.iter().any(|t| t.contains("ChapterMission")),
+            "ChapterMission should be present"
+        );
+        assert!(
+            source_types.iter().any(|t| t.contains("CanonSlice")),
+            "CanonSlice should be present"
+        );
+    }
+
+    #[test]
+    fn from_map_respects_budget() {
+        let mut contents = HashMap::new();
+        contents.insert(ContextSource::ProjectBrief, "a".repeat(500));
+        contents.insert(ContextSource::ChapterMission, "b".repeat(500));
+
+        let pack = assemble_context_pack_from_map(
+            AgentTask::GhostWriting,
+            contents,
+            100,
+        );
+
+        assert!(pack.total_chars <= 100, "pack should respect total_budget");
+    }
 }

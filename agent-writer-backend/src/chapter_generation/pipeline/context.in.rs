@@ -65,6 +65,10 @@ impl ContextComposer {
             included_chars,
             truncated,
             score,
+            taxonomy: String::new(),
+            role: String::new(),
+            elapsed_ms: 0,
+            retrieval_status: String::new(),
         });
     }
 

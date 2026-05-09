@@ -1,0 +1,151 @@
+{
+  "profile": "scifi",
+  "current": {
+    "profile": "scifi",
+    "timestamp": "2026-05-09T08:45:22.100581600+00:00",
+    "task_count": 15,
+    "pass": 15,
+    "fail": 0,
+    "average_after_score": 0.5798543,
+    "average_score_delta": 0.0,
+    "metric_after_average": {
+      "anchor_carry": 0.40000004,
+      "dialogue_function": 0.5,
+      "ending_hook": 0.55,
+      "exposition_ratio": 0.9,
+      "length_compliance": 0.579,
+      "promise_progress": 0.5,
+      "scene_causality": 0.5,
+      "style_drift": 0.82
+    },
+    "craft_rule_trends": {
+      "dialogue_function": {
+        "rule_id": "dialogue_function",
+        "accepted_updates": 0,
+        "rejected_updates": 0,
+        "stored_examples": 1,
+        "stored_bad_patterns": 1,
+        "prompt_examples": 1,
+        "prompt_bad_patterns": 1,
+        "score_delta_sample_count": 2,
+        "average_score_delta": 0.42,
+        "matched_metrics": {}
+      }
+    },
+    "task_status": {
+      "canon_conflict:第二章": "pass",
+      "chapter_generation:第一章": "pass",
+      "chapter_generation:第二章": "pass",
+      "continuity_diagnostic:第一章": "pass",
+      "craft_memory:第二章": "pass",
+      "craft_memory_prompt:第二章": "pass",
+      "manual_craft_edit:第二章": "pass",
+      "negative_promise_stalled:第二章": "pass",
+      "negative_revision_no_change:第二章": "pass",
+      "planning_review:第三章": "pass",
+      "promise_progression:第二章": "pass",
+      "quality_evaluation:第一章": "pass",
+      "quality_evaluation:第二章": "pass",
+      "quality_signals:第二章": "pass",
+      "targeted_revision:第二章": "pass"
+    },
+    "task_after_score": {
+      "chapter_generation:第一章": 0.49316007,
+      "chapter_generation:第二章": 0.66222,
+      "manual_craft_edit:第二章": 0.53400004,
+      "quality_evaluation:第一章": 0.49316007,
+      "quality_evaluation:第二章": 0.66222,
+      "quality_signals:第二章": 0.66222,
+      "targeted_revision:第二章": 0.55200005
+    },
+    "failing_tasks": []
+  },
+  "previous": {
+    "profile": "scifi",
+    "timestamp": "2026-05-09T08:42:14.168002200+00:00",
+    "task_count": 15,
+    "pass": 15,
+    "fail": 0,
+    "average_after_score": 0.5798543,
+    "average_score_delta": 0.0,
+    "metric_after_average": {
+      "anchor_carry": 0.40000004,
+      "dialogue_function": 0.5,
+      "ending_hook": 0.55,
+      "exposition_ratio": 0.9,
+      "length_compliance": 0.579,
+      "promise_progress": 0.5,
+      "scene_causality": 0.5,
+      "style_drift": 0.82
+    },
+    "craft_rule_trends": {
+      "dialogue_function": {
+        "rule_id": "dialogue_function",
+        "accepted_updates": 0,
+        "rejected_updates": 0,
+        "stored_examples": 1,
+        "stored_bad_patterns": 1,
+        "prompt_examples": 1,
+        "prompt_bad_patterns": 1,
+        "score_delta_sample_count": 2,
+        "average_score_delta": 0.42,
+        "matched_metrics": {}
+      }
+    },
+    "task_status": {
+      "canon_conflict:第二章": "pass",
+      "chapter_generation:第一章": "pass",
+      "chapter_generation:第二章": "pass",
+      "continuity_diagnostic:第一章": "pass",
+      "craft_memory:第二章": "pass",
+      "craft_memory_prompt:第二章": "pass",
+      "manual_craft_edit:第二章": "pass",
+      "negative_promise_stalled:第二章": "pass",
+      "negative_revision_no_change:第二章": "pass",
+      "planning_review:第三章": "pass",
+      "promise_progression:第二章": "pass",
+      "quality_evaluation:第一章": "pass",
+      "quality_evaluation:第二章": "pass",
+      "quality_signals:第二章": "pass",
+      "targeted_revision:第二章": "pass"
+    },
+    "task_after_score": {
+      "chapter_generation:第一章": 0.49316007,
+      "chapter_generation:第二章": 0.66222,
+      "manual_craft_edit:第二章": 0.53400004,
+      "quality_evaluation:第一章": 0.49316007,
+      "quality_evaluation:第二章": 0.66222,
+      "quality_signals:第二章": 0.66222,
+      "targeted_revision:第二章": 0.55200005
+    },
+    "failing_tasks": []
+  },
+  "delta": {
+    "pass_delta": 0,
+    "fail_delta": 0,
+    "average_after_score_delta": 0.0,
+    "average_score_delta_delta": 0.0,
+    "metric_after_average_delta": {
+      "anchor_carry": 0.0,
+      "dialogue_function": 0.0,
+      "ending_hook": 0.0,
+      "exposition_ratio": 0.0,
+      "length_compliance": 0.0,
+      "promise_progress": 0.0,
+      "scene_causality": 0.0,
+      "style_drift": 0.0
+    },
+    "craft_rule_trend_delta": {
+      "dialogue_function": {
+        "accepted_updates_delta": 0,
+        "rejected_updates_delta": 0,
+        "stored_examples_delta": 0,
+        "stored_bad_patterns_delta": 0,
+        "prompt_examples_delta": 0,
+        "prompt_bad_patterns_delta": 0,
+        "average_score_delta_delta": 0.0
+      }
+    }
+  },
+  "regressions": []
+}

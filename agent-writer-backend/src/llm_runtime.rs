@@ -19,6 +19,13 @@ pub enum StreamControl {
     Continue,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct LlmUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LlmRequestProfile {
     GeneralChat,
@@ -402,13 +409,34 @@ pub async fn chat_text_profile(
     .await
 }
 
-async fn chat_text_with_options(
+pub async fn chat_text_with_usage(
+    settings: &LlmSettings,
+    messages: Vec<serde_json::Value>,
+    json_mode: bool,
+    timeout_secs: u64,
+) -> Result<(String, LlmUsage), String> {
+    let options = chat_request_options(settings, json_mode);
+    chat_text_with_options_raw(settings, messages, json_mode, timeout_secs, options).await
+}
+
+pub async fn chat_text_profile_with_usage(
+    settings: &LlmSettings,
+    messages: Vec<serde_json::Value>,
+    profile: LlmRequestProfile,
+    timeout_secs: u64,
+) -> Result<(String, LlmUsage), String> {
+    let json_mode = profile == LlmRequestProfile::Json;
+    let options = request_options(settings, profile);
+    chat_text_with_options_raw(settings, messages, json_mode, timeout_secs, options).await
+}
+
+async fn chat_text_with_options_raw(
     settings: &LlmSettings,
     messages: Vec<serde_json::Value>,
     json_mode: bool,
     timeout_secs: u64,
     options: LlmRequestOptions,
-) -> Result<String, String> {
+) -> Result<(String, LlmUsage), String> {
     guard_chat_request(settings, &messages, u64::from(options.max_tokens))?;
     let client = client(timeout_secs)?;
     let mut payload = serde_json::json!({
@@ -447,10 +475,33 @@ async fn chat_text_with_options(
         .json()
         .await
         .map_err(|e| format!("JSON parse: {}", e))?;
-    Ok(body["choices"][0]["message"]["content"]
+    let content = body["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
-        .to_string())
+        .to_string();
+    let usage = body
+        .get("usage")
+        .map_or_else(LlmUsage::default, |u| LlmUsage {
+            prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        });
+    Ok((content, usage))
+}
+
+async fn chat_text_with_options(
+    settings: &LlmSettings,
+    messages: Vec<serde_json::Value>,
+    json_mode: bool,
+    timeout_secs: u64,
+    options: LlmRequestOptions,
+) -> Result<String, String> {
+    chat_text_with_options_raw(settings, messages, json_mode, timeout_secs, options)
+        .await
+        .map(|(content, _)| content)
 }
 
 #[derive(Deserialize)]

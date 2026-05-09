@@ -548,6 +548,20 @@ CREATE INDEX IF NOT EXISTS idx_volume_snapshots_project_volume ON volume_snapsho
 CREATE INDEX IF NOT EXISTS idx_arc_snapshots_project_volume ON arc_snapshots(project_id, volume_id);
 CREATE INDEX IF NOT EXISTS idx_supervised_sprints_project_status ON supervised_sprints(project_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_supervised_sprint_checkpoints_sprint ON supervised_sprint_checkpoints(project_id, sprint_id, created_at);
+
+CREATE TABLE IF NOT EXISTS long_task_checkpoints (
+    project_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    task_kind TEXT NOT NULL,
+    current_step TEXT NOT NULL DEFAULT '',
+    checkpoint_json TEXT NOT NULL,
+    source TEXT DEFAULT '',
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(project_id, checkpoint_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_long_task_checkpoints_task ON long_task_checkpoints(project_id, task_id, created_at);
 "#;
 
 const SCHEMA_V20_ALTERS: &str = r#"

@@ -1,33 +1,56 @@
 # Writing Eval Fixtures
 
-Manual eval project for Forge Agent regression testing.
+Multi-profile regression testing for Forge Agent writing quality.
 
-## Contents
+## Profiles
 
-- `project.json` — Small Chinese xianxia novel project (4 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, and open promises)
-- `eval_tasks.jsonl` — 13 eval task definitions covering generation, continuity, per-metric quality checks, targeted revision, craft memory, manual author-edit feedback, craft memory prompt injection, canon conflict, planning review, and promise progression
-- `eval_output.jsonl` — Generated per-task run output, ignored by git
-- `eval_trend.json` — Generated cross-run trend report comparing the latest run with the previous output, including per-metric and per-craft-rule evidence, ignored by git
+- `xianxia/` — Chinese xianxia novel (4 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, open promises, 18 eval tasks including negative cases)
+- `mystery/` — Detective/investigation story (3 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, open promises, 15 eval tasks including negative cases)
+- `scifi/` — Sci-fi corporate thriller (3 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, open promises, 15 eval tasks including negative cases)
+
+## Total Coverage
+
+- **48 eval tasks** across 3 profiles
+- Task types: chapter_generation, quality_evaluation, quality_signals, targeted_revision, craft_memory, manual_craft_edit, craft_memory_prompt, canon_conflict, planning_review, promise_progression, continuity_diagnostic
+- Negative cases: missing_anchor, style_drift, promise_stalled, revision_no_change, craft_memory_injection
 
 ## Running
 
 ```powershell
+# Full matrix (all 48 tasks)
 .\scripts\run-writing-eval.cmd
+
+# Smoke mode (representative subset, faster feedback)
+.\scripts\run-writing-eval.cmd --smoke
+
+# Run specific profile(s)
+cargo run -p agent-writer --bin eval_runner -- xianxia mystery
 ```
 
-## Automated tests
+## Output
 
-The following test suites exercise the eval-relevant modules:
+Per-profile files (ignored by git):
+- `{profile}/eval_output.jsonl` — Per-task run output
+- `{profile}/eval_trend.json` — Cross-run trend report with regression detection
+- `eval_summary.json` — Aggregate summary across all profiles
+
+## Regression Detection
+
+The eval runner fails (exit code 1) when:
+- Any task fails its assertions
+- A previously passing task regresses to fail/skip
+- Average metric score drops by more than 0.05
+- Craft rule average score delta drops by more than 0.05
+
+## Automated Tests
 
 ```powershell
-cargo test -p agent-writer --lib chapter_generation::craft_quality_tests
-cargo test -p agent-writer --lib chapter_generation::craft_prompt_tests
-cargo test -p agent-writer --lib writer_agent::anchor_carry
-cargo test -p agent-writer --lib writer_agent::diagnostics
+cargo test -p agent-writer --test writing_eval_test
 ```
 
-## Adding new eval tasks
+## Adding New Eval Tasks
 
-1. Add a JSONL line to `eval_tasks.jsonl`
-2. Run the eval script
-3. Compare `eval_output.jsonl` and `eval_trend.json` to expected values
+1. Add JSONL lines to `{profile}/eval_tasks.jsonl`
+2. Update `project.json` if new chapters/lore/canon/promises are needed
+3. Add corresponding test assertions in `tests/writing_eval_test.rs`
+4. Run the eval script and verify `eval_trend.json`
