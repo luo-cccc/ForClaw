@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn carry_score_detects_action_dialogue_and_payoff_pressure() {
         let report = score_anchor_carry(
-            "林墨拔出寒影刀逼问张三：“旧债今天要还。”镜中墟的门因此重新打开。",
+            "林墨拔出寒影刀逼问张三：旧债今天要还。镜中墟的门因此重新打开。",
             &anchors(),
         );
 
@@ -200,5 +200,49 @@ mod tests {
         assert!(report.items.iter().any(
             |item| item.anchor == "寒影刀" && item.carry_modes.contains(&"action".to_string())
         ));
+    }
+
+    #[test]
+    fn carry_score_marks_missing_required_anchor() {
+        // "旧债" is not mentioned at all
+        let report = score_anchor_carry(
+            "林墨拔出寒影刀。张三站在门口。镜中墟的门打开了。",
+            &anchors(),
+        );
+        let old_debt = report.items.iter().find(|i| i.anchor == "旧债").unwrap();
+        assert!(!old_debt.mentioned);
+        assert!(!old_debt.carried);
+    }
+
+    #[test]
+    fn carry_score_marks_weakly_carried_anchor() {
+        // "寒影刀" is mentioned but only as a bare reference, no action/dialogue/consequence
+        let report = score_anchor_carry(
+            "本章出现寒影刀。张三走了。镜中墟的门打开了。旧债要还。",
+            &anchors(),
+        );
+        let blade = report.items.iter().find(|i| i.anchor == "寒影刀").unwrap();
+        assert!(blade.mentioned);
+        assert!(!blade.carried);
+        assert!(blade.carry_modes.is_empty());
+    }
+
+    #[test]
+    fn carry_score_detects_dialogue_mode() {
+        let report = score_anchor_carry("林墨说：旧债今天要还。", &["旧债".to_string()]);
+        let old_debt = report.items.iter().find(|i| i.anchor == "旧债").unwrap();
+        assert!(old_debt.carried);
+        assert!(old_debt.carry_modes.contains(&"dialogue".to_string()));
+    }
+
+    #[test]
+    fn carry_score_detects_consequence_mode() {
+        let report = score_anchor_carry(
+            "寒影刀因此碎裂，林墨付出沉重代价。",
+            &["寒影刀".to_string()],
+        );
+        let blade = report.items.iter().find(|i| i.anchor == "寒影刀").unwrap();
+        assert!(blade.carried);
+        assert!(blade.carry_modes.contains(&"consequence".to_string()));
     }
 }

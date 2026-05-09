@@ -5786,3 +5786,14 @@ fn optional_usize(params: &serde_json::Value, key: &str) -> Option<usize> {
 fn to_value<T: Serialize>(value: T) -> Result<serde_json::Value, String> {
     serde_json::to_value(value).map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn budget_calibration_returns_default_budget() {
+        let budget = crate::chapter_generation::ChapterContextBudget::default();
+        assert!(budget.total_chars > 0);
+        assert!(budget.instruction_chars > 0);
+        assert!(budget.outline_chars > 0);
+    }
+}
