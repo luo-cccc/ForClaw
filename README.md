@@ -8,7 +8,7 @@ The repository is designed as a headless backend runtime. MCP clients and schedu
 
 ## Features
 
-- **MCP Server** — 83 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
+- **MCP Server** — 86 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
 - **Writer Agent Kernel** — Story ledger, proposals, typed operations, canon, promises, chapter missions, reader compensation, decision tracking, trace history.
 - **Chapter Generation Pipeline** — Context assembly → provider-budget checks → craft prompt injection → draft → quality evaluation → targeted revision → repair/compression → revision-safe save → settlement → artifact persistence.
 - **Writing Empowerment Engine** — 8-rule craft library, Prompt Compiler with scene-type inference, SceneCraftPlan artifact generation, 8-metric ChapterQualityReport with evidence gating, targeted revision with before/after quality comparison.
@@ -33,7 +33,7 @@ agent-writer-backend/     Forge writer backend — HeadlessBackend, chapter gene
                            memory (canon, promises, craft feedback), brain service,
                            supervised sprint, storage
 forge-agent-mcp/          MCP stdio server — main.rs (JSON-RPC core), dispatch.rs
-                           (tool dispatch), tools.rs (82 tool definitions), smoke tests
+                           (tool dispatch), tools.rs (86 tool definitions), smoke tests
 plugins/forge-writer-agent/ Codex plugin bundle and skill metadata
 scripts/                  Windows launchers and eval runner
 docs/                     Protocol contract (CONTEXT_CONTRACT.md), design specs, plans
@@ -101,7 +101,7 @@ Use `initialize`, then `tools/list`, then `tools/call` from an MCP client. `forg
 
 ### Tool Categories
 
-83 MCP tools across 12 categories:
+86 MCP tools across 12 categories:
 
 | Category | Tools |
 |----------|-------|
@@ -151,7 +151,7 @@ agent-harness-core (122 tests)
 ├── VectorDB (BM25 + cosine hybrid search)
 └── Provider (OpenAI-compat streaming + retry)
 
-agent-writer-backend (268 tests)
+agent-writer-backend (273 tests)
 ├── HeadlessBackend (all MCP action dispatch)
 ├── Chapter Generation Pipeline
 │   ├── Context assembly (async, parallelization-ready)
@@ -168,7 +168,7 @@ agent-writer-backend (268 tests)
 forge-agent-mcp (20 tests + 6 smoke)
 ├── main.rs (JSON-RPC core, 627 lines)
 ├── dispatch.rs (call_tool + call_backend_action, 320 lines)
-├── tools.rs (82 tool definitions, 1034 lines)
+├── tools.rs (86 tool definitions, 1034 lines)
 └── smoke_test.rs (6 process-level integration tests)
 ```
 
@@ -187,7 +187,7 @@ Individual crate checks:
 
 ```powershell
 cargo test -p agent-harness-core        # 122 tests
-cargo test -p agent-writer --lib        # 268 tests
+cargo test -p agent-writer --lib        # 273 tests
 cargo test -p agent-writer --test writing_eval_test  # 19 eval tests
 cargo test -p forge-agent-mcp           # 14 unit + 6 smoke
 ```
