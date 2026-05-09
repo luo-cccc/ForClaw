@@ -259,6 +259,72 @@ async fn chat_text_chinese_capability() {
 }
 
 #[tokio::test]
+async fn chat_text_usage_updates_budget_calibration() {
+    let Some(settings) = test_settings("chat_text_usage_updates_budget_calibration") else {
+        return;
+    };
+    let messages = vec![
+        serde_json::json!({"role": "system", "content": "你是中文写作系统的真实 provider smoke test。回复必须简短。"}),
+        serde_json::json!({"role": "user", "content": "用一句中文写出角色在压力下做选择。"}),
+    ];
+    let input_chars: usize = messages
+        .iter()
+        .filter_map(|message| message.get("content").and_then(|value| value.as_str()))
+        .map(|content| content.chars().count())
+        .sum();
+    let started = std::time::Instant::now();
+    let (text, usage) = llm_runtime::chat_text_with_usage(&settings, messages, false, 60)
+        .await
+        .unwrap_or_else(|e| panic!("chat_text_with_usage failed: {e}"));
+    assert!(!text.trim().is_empty(), "response empty");
+    assert!(
+        usage.prompt_tokens > 0,
+        "provider did not return prompt usage"
+    );
+    assert!(
+        usage.completion_tokens > 0,
+        "provider did not return completion usage"
+    );
+    assert!(
+        usage.total_tokens > 0,
+        "provider did not return total usage"
+    );
+
+    agent_harness_core::record_full_usage(
+        &settings.model,
+        usage.prompt_tokens,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        input_chars,
+        text.chars().count(),
+    );
+    let estimate = agent_harness_core::estimate_with_confidence(
+        &settings.model,
+        input_chars,
+        text.chars().count(),
+    );
+    assert!(
+        matches!(
+            estimate.confidence,
+            agent_harness_core::BudgetCalibrationConfidence::Low
+                | agent_harness_core::BudgetCalibrationConfidence::Medium
+                | agent_harness_core::BudgetCalibrationConfidence::High
+        ),
+        "expected real usage to create calibration confidence, got {:?}",
+        estimate.confidence
+    );
+    eprintln!(
+        "usage_calibration ok latency_ms={} prompt_tokens={} completion_tokens={} total_tokens={} confidence={:?} preview={}",
+        elapsed_ms(started),
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        usage.total_tokens,
+        estimate.confidence,
+        preview_text(&text, 180)
+    );
+}
+
+#[tokio::test]
 async fn chat_json_mode() {
     let Some(settings) = test_settings("chat_json_mode") else {
         return;

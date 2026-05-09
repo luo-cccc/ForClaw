@@ -1402,6 +1402,12 @@ P4：
    - `eval_runner` 新增三类规则评估：检测候选文本是否触发显式 canon forbidden pattern；验证第三章计划是否选中关键 craft rules、承载 open promise 并保留下一章钩子；验证第二章是否实际推进跨章节伏笔。
    - （历史快照）该阶段 writing eval 从 13 tasks 继续扩展到 48 tasks（3 profiles × 16 tasks），后续在 P5-P7 中完成。
 
+15. OpenRouter 真实 provider usage 校准验证
+   - 新增 gated 集成测试 `chat_text_usage_updates_budget_calibration`，只在 `FORGE_REAL_API_TESTS=1` 时调用真实 provider。
+   - 使用 OpenRouter `https://openrouter.ai/api/v1` + `deepseek/deepseek-v4-flash` 实测通过，返回 `prompt_tokens=28`、`completion_tokens=52`、`total_tokens=80`。
+   - 测试会调用 `chat_text_with_usage`，再把真实 usage 写入 `agent_harness_core::record_full_usage`，并验证 `estimate_with_confidence` 从无样本进入 `Low` 置信度。
+   - 同轮实测通过 `/models` health check、普通中文 chat、JSON mode、profile smoke（ChapterDraft / GhostPreview / Analysis / ParallelDraft / ManualRewrite / ToolContinuation）。
+
 ### 当前完成度估算
 
 | 范围 | 完成度 | 依据 |
@@ -1409,8 +1415,8 @@ P4：
 | Headless MCP 写作后端底座 | 86% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；进程级 smoke 已加固临时目录隔离；仍缺部分长任务恢复策略。 |
 | ForClaw 写作赋能 MVP | 98% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；Craft Memory 已能沉淀自动修订和作者手改样本，回流进生成 prompt，并进入 rule 级趋势证据；eval trend 已暴露为 MCP 只读工具。 |
 | 写作质量证据闭环 | 97% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、48-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进。 |
-| Context quality / preflight 可操作性 | 82% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告。短板是 provider usage 回写校准表尚未完整闭环，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
-| plan.md 全量路线 | 82% | P4 Required Anchors ✅、P5 Writing Eval Matrix（48 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P0 Provider Calibration（代码已存在，缺更多真实 usage 样本沉淀和端到端演练证据）⚠️、P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing 字段已存在，缺全链路并行检索启用和 provider usage 回写）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
+| Context quality / preflight 可操作性 | 84% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告；provider usage 已有 OpenRouter 真实样本回写 gated 测试。短板是 usage 校准仍需长期样本沉淀，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
+| plan.md 全量路线 | 84% | P4 Required Anchors ✅、P5 Writing Eval Matrix（48 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P0 Provider Calibration 已有真实 OpenRouter usage 回写验证 ✅/⚠️，仍需多模型多任务样本沉淀；P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing 字段和 provider usage smoke 已存在，缺全链路并行检索启用）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
 
 ### 剩余真实缺口
 
@@ -1418,7 +1424,7 @@ P4：
 - eval fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，并已有跨运行趋势报告；但仍只能算小样本规则回归，不能完全代表长篇真实生成质量，下一步应增加更大负例矩阵和 LLM judge 辅助验证。
 - Sentence-level semantic diff 已落地（Jaccard 对齐 + confidence 分级），复杂同义替换和语序大调仍可能标为 Low/Unaligned，这是轻量方案的设计权衡。
 - Craft Memory 趋势已接入 headless dispatch 和 MCP 只读工具（`forge_eval_trend_summary`），Companion/CI 可直接消费；下一步应增加趋势可视化而非 API 扩展。
-- Context quality taxonomy、action code、elapsed_ms、retrieval_status 字段和 preflight 绑定已就绪，但 provider usage 校准尚缺真实运行样本的持续回写闭环，read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。
+- Context quality taxonomy、action code、elapsed_ms、retrieval_status 字段和 preflight 绑定已就绪；provider usage 已有一次 OpenRouter 真实回写验证，但仍缺长期、多任务、多模型样本沉淀；read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。
 
 ### 本轮验证
 
@@ -1430,9 +1436,15 @@ cargo test -p agent-writer --lib
 cargo test -p agent-writer --test writing_eval_test
 cargo test -p forge-agent-mcp
 scripts\run-writing-eval.cmd
+FORGE_REAL_API_TESTS=1 cargo test -p agent-writer health_check_models_endpoint -- --nocapture
+FORGE_REAL_API_TESTS=1 cargo test -p agent-writer chat_text_usage_updates_budget_calibration -- --nocapture
+FORGE_REAL_API_TESTS=1 cargo test -p agent-writer chat_text_with_openrouter -- --nocapture
+FORGE_REAL_API_TESTS=1 cargo test -p agent-writer chat_json_mode -- --nocapture
+FORGE_REAL_API_TESTS=1 cargo test -p agent-writer profile_smoke_feature_text_calls -- --nocapture
 ```
 
 当前 writing eval 结果：48 tasks（mystery 15 + scifi 15 + xianxia 18），48 pass，0 fail。
+当前真实 provider 验证结果：OpenRouter `/models`、中文 chat、JSON mode、profile smoke、usage calibration 均通过；usage calibration 样本为 prompt 28 / completion 52 / total 80 tokens，校准置信度进入 Low。
 
 ## 2026-05-09 全量路线 69% 到 80% 提升计划
 
@@ -1453,7 +1465,7 @@ scripts\run-writing-eval.cmd
 - 不追求大而全的技法库扩写。
 - 不做 UI 大改版，除非为了展示已有趋势证据所需的最小入口。
 
-### P0 Provider Usage Calibration
+### P0 Provider Usage Calibration ✅/⚠️
 
 目标：让 provider 预算不再只靠静态估算，而是能用真实运行 usage 反校准输入 token、输出 token 和成本阈值。
 
@@ -1471,16 +1483,19 @@ scripts\run-writing-eval.cmd
 - 每次 provider 调用完成后记录 estimated input、actual input、actual output、model、task、decision。
 - `evaluate_provider_budget` 输出 calibrated estimate、confidence 和 fallback reason。
 - trace event 和 headless response 中保留校准前后差异，方便复盘。
+- 已新增真实 provider gated test：`chat_text_usage_updates_budget_calibration`，验证 OpenRouter 返回 usage 后能写入 `record_full_usage` 并改变 calibration confidence。
 
 验收：
 
 - 单测覆盖“无历史数据时走默认估算”“有历史数据时使用校准倍率”“异常 usage 不污染校准”。
+- gated 真实 API 测试覆盖 OpenRouter chat usage 回写：prompt 28 / completion 52 / total 80 tokens，confidence 进入 Low。
 - 章节生成、Project Brain query、ExternalResearch 至少三类任务能写入 usage calibration。
 - `cargo test -p agent-harness-core` 和 `cargo test -p agent-writer --lib` 通过。
 
 风险与非目标：
 
 - 风险是不同 provider 返回 usage 字段不一致；本轮只做可选字段和保守 fallback。
+- 当前真实样本只有 OpenRouter + DeepSeek 单模型单轮 smoke，足以证明链路可用，但不足以证明长期估算稳定。
 - 非目标是精确计费系统；目标是降低预算误判和审批噪音。
 
 ### P1 Context Source Timing、Taxonomy Mapping 与只读检索并行
