@@ -16,3 +16,9 @@
 {"task":"negative_promise_stalled","chapter":"第二章","metrics":["promise_progress"],"expected":{"stalled_text":"林墨和散修在破庙门口对视了一整晚，谁都没有动手，也没有提到寒影剑或代价。","promise_progress_score_max":0.55,"reason_contains":"跳过评估"}}
 {"task":"negative_revision_no_change","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林墨看着寒影剑。散修站在门口。","after_text":"林墨看着寒影剑。散修站在门口。","min_excerpt_mapping_count":0,"revision_should_be_empty":true}}
 {"task":"negative_craft_memory_injection","chapter":"第二章","metrics":["craft_memory_prompt"],"expected":{"injected_bad_text":"林墨说了一整段古剑来历，散修没有任何反应。","injected_memory_should_score_low":true,"min_bad_patterns":1}}
+{"task":"chapter_generation","chapter":"第三章","instruction":"写第三章——林墨带着寒影剑回到青云宗，在执事审问前决定是否隐瞒代价，执事发现白发异常","expected":{"min_chars":1500,"max_chars":3500,"mission_hit":true,"must_contain":["青云宗","执事","代价","白发"]}}
+{"task":"quality_evaluation","chapter":"第三章","metrics":["dialogue_function","ending_hook","scene_causality","promise_progress"],"expected":{"overall_score_min":0.55,"metric_min":{"dialogue_function":0.3,"ending_hook":0.5,"scene_causality":0.5}}}
+{"task":"quality_signals","chapter":"第三章","metrics":["anchor_carry","style_drift"],"expected":{"metric_min":{"anchor_carry":0.35,"style_drift":0.55},"must_not_contain_reason":["证据不足，无法确定是否存在问题"]}}
+{"task":"targeted_revision","chapter":"第三章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林墨回到青云宗。周长老看着他。","after_text":"周长老捏住林墨下巴，白发暴露在日光下，寒影剑在布包里震动，感知到杀意。","requires_excerpt_mapping":true}}
+{"task":"promise_progression","chapter":"第三章","metrics":["promise_progress"],"expected":{"required_promises":["寒影剑代价"],"min_progressed":1}}
+{"task":"canon_conflict","chapter":"第三章","check":"门规冲突","expected":{"candidate_text":"青云宗允许弟子私藏仙器，执事堂从不追查登记，门规只是摆设。","canon_conflict":true,"must_conflict":["sect-artifact-law"]}}

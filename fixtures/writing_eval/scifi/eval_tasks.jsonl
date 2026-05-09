@@ -13,3 +13,9 @@
 {"task":"promise_progression","chapter":"第二章","metrics":["promise_progress"],"expected":{"required_promises":["张远的加密密钥"],"min_progressed":1}}
 {"task":"negative_promise_stalled","chapter":"第二章","metrics":["promise_progress"],"expected":{"stalled_text":"张远和林晓在咖啡厅聊了一小时天气和咖啡口味，没有提到密钥或日志。","promise_progress_score_max":0.55,"reason_contains":"跳过评估"}}
 {"task":"negative_revision_no_change","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"张远把芯片给林晓。","after_text":"张远把芯片给林晓。","min_excerpt_mapping_count":0,"revision_should_be_empty":true}}
+{"task":"chapter_generation","chapter":"第三章","instruction":"写第三章——林晓用密钥解密废弃记忆，发现被删除的集体诉讼证据，安全部门扫描她的工作站","expected":{"min_chars":1200,"max_chars":3000,"mission_hit":true,"must_contain":["解密","证据","安全部门","销毁","苏雯"]}}
+{"task":"quality_evaluation","chapter":"第三章","metrics":["dialogue_function","ending_hook","scene_causality","promise_progress"],"expected":{"overall_score_min":0.5,"metric_min":{"dialogue_function":0.25,"ending_hook":0.4,"scene_causality":0.4}}}
+{"task":"quality_signals","chapter":"第三章","metrics":["anchor_carry","style_drift"],"expected":{"metric_min":{"anchor_carry":0.15,"style_drift":0.5},"must_not_contain_reason":["证据不足，无法确定是否存在问题"]}}
+{"task":"targeted_revision","chapter":"第三章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林晓解密了文件。她看到了证据。","after_text":"屏幕跳出十二段集体诉讼证词，每一段都以沈重山的签名结束，签字人的手在抖。","requires_excerpt_mapping":true}}
+{"task":"promise_progression","chapter":"第三章","metrics":["promise_progress"],"expected":{"required_promises":["拷贝非法证据"],"min_progressed":1}}
+{"task":"canon_conflict","chapter":"第三章","check":"CEO非法业务冲突","expected":{"candidate_text":"沈重山公开反对记忆编辑，从未参与任何非法业务，他一直致力于保护员工记忆。","canon_conflict":true,"must_conflict":["ceo-secret"]}}

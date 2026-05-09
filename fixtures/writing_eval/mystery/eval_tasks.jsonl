@@ -13,3 +13,9 @@
 {"task":"promise_progression","chapter":"第二章","metrics":["promise_progress"],"expected":{"required_promises":["孤儿院火灾真相"],"min_progressed":1}}
 {"task":"negative_missing_anchor","chapter":"第一章","metrics":["anchor_carry"],"expected":{"must_miss_anchor":"07","penalty_applies":true,"min_score_drop":0.15}}
 {"task":"negative_style_drift","chapter":"第一章","metrics":["style_drift"],"expected":{"drifted_text":"陈默推开警戒线，然后他发现女尸，这很糟糕。他报了警。","style_drift_score_max":0.7,"reason_contains":"风格漂移"}}
+{"task":"chapter_generation","chapter":"第三章","instruction":"写第三章——陈默潜入已废弃的晨光孤儿院，在地下室找到第七把同样的钥匙，有人在他身后锁上了铁门","expected":{"min_chars":1200,"max_chars":3000,"mission_hit":true,"must_contain":["地下室","钥匙","锁","孤儿院","白大褂"]}}
+{"task":"quality_evaluation","chapter":"第三章","metrics":["dialogue_function","ending_hook","scene_causality","promise_progress"],"expected":{"overall_score_min":0.5,"metric_min":{"dialogue_function":0.25,"ending_hook":0.4,"scene_causality":0.4}}}
+{"task":"quality_signals","chapter":"第三章","metrics":["anchor_carry","style_drift"],"expected":{"metric_min":{"anchor_carry":0.15,"style_drift":0.5},"must_not_contain_reason":["证据不足，无法确定是否存在问题"]}}
+{"task":"targeted_revision","chapter":"第三章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"陈默走进地下室。他看到了钥匙。","after_text":"陈默挪开木板，霉味扑面而来，他在第七排储物柜找到六把钥匙，加上口袋里的07，七把齐了。","requires_excerpt_mapping":true}}
+{"task":"promise_progression","chapter":"第三章","metrics":["promise_progress"],"expected":{"required_promises":["孤儿院火灾真相"],"min_progressed":1}}
+{"task":"canon_conflict","chapter":"第三章","check":"疤痕来源冲突","expected":{"candidate_text":"尸体手腕上的烫伤疤痕是后天伪造的，与孤儿院火灾完全无关。","canon_conflict":true,"must_conflict":["scar-origin"]}}
