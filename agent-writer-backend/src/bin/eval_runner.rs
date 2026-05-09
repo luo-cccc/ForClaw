@@ -61,6 +61,18 @@ struct EvalRunTrend {
     task_status: BTreeMap<String, String>,
     task_after_score: BTreeMap<String, f32>,
     failing_tasks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    duplicate_preview_groups: Vec<DuplicatePreviewGroup>,
+    #[serde(default)]
+    repair_rate: f32,
+    #[serde(default)]
+    min_chars: usize,
+    #[serde(default)]
+    max_chars: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    avg_carry_rate: Option<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    quality_warnings: Vec<QualityWarning>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -125,6 +137,8 @@ struct EvalSummary {
     total_pass: usize,
     total_fail: usize,
     regressions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    quality_warnings: Vec<QualityWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +147,31 @@ struct ProfileSummary {
     pass: usize,
     fail: usize,
     failing_tasks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    duplicate_preview_groups: Vec<DuplicatePreviewGroup>,
+    #[serde(default)]
+    repair_rate: f32,
+    #[serde(default)]
+    min_chars: usize,
+    #[serde(default)]
+    max_chars: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    avg_carry_rate: Option<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    quality_warnings: Vec<QualityWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DuplicatePreviewGroup {
+    preview: String,
+    chapters: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QualityWarning {
+    kind: String,
+    severity: String,
+    message: String,
 }
 
 fn fixture_dir() -> PathBuf {
@@ -1210,6 +1249,8 @@ fn run_negative_style_drift_eval(
             last_updated_ms: 0,
         }),
         required_anchors: Vec::new(),
+        required_state_deltas: Vec::new(),
+        prior_chapter_summaries: Vec::new(),
     };
     let report = evaluate_chapter_quality_with_signals(
         drifted_text,
@@ -1547,6 +1588,8 @@ fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySi
             last_updated_ms: 0,
         }),
         required_anchors: Vec::new(),
+        required_state_deltas: Vec::new(),
+        prior_chapter_summaries: Vec::new(),
     }
 }
 
@@ -1764,6 +1807,158 @@ fn average(values: &[f32]) -> Option<f32> {
     }
 }
 
+fn compute_duplicate_preview_groups(fixture: &serde_json::Value) -> Vec<DuplicatePreviewGroup> {
+    let Some(chapters) = fixture["chapters"].as_object() else {
+        return Vec::new();
+    };
+    let mut previews: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (chapter_title, value) in chapters {
+        let text = value.as_str().unwrap_or("");
+        let preview = text.chars().take(120).collect::<String>();
+        let normalized = preview.split_whitespace().collect::<Vec<_>>().join(" ");
+        previews
+            .entry(normalized)
+            .or_default()
+            .push(chapter_title.clone());
+    }
+    previews
+        .into_iter()
+        .filter(|(_, chapters)| chapters.len() > 1)
+        .map(|(preview, chapters)| DuplicatePreviewGroup { preview, chapters })
+        .collect()
+}
+
+fn compute_min_max_chars(fixture: &serde_json::Value) -> (usize, usize) {
+    let chapters = fixture["chapters"].as_object();
+    let lengths: Vec<usize> = chapters
+        .into_iter()
+        .flat_map(|map| map.values())
+        .filter_map(|value| value.as_str().map(|text| text.chars().count()))
+        .collect();
+    if lengths.is_empty() {
+        (0, 0)
+    } else {
+        (*lengths.iter().min().unwrap_or(&0), *lengths.iter().max().unwrap_or(&0))
+    }
+}
+
+fn compute_avg_carry_rate(results: &[EvalResult]) -> Option<f32> {
+    let scores: Vec<f32> = results
+        .iter()
+        .filter_map(|result| {
+            result.after.as_ref().and_then(|after| {
+                after
+                    .get("metric_results")
+                    .and_then(|metrics| metrics.as_object())
+                    .and_then(|map| map.get("anchor_carry"))
+                    .and_then(|value| value.as_f64().map(|f| f as f32))
+            })
+        })
+        .collect();
+    average(&scores)
+}
+
+fn compute_repair_rate(results: &[EvalResult]) -> f32 {
+    let revision_tasks: Vec<_> = results
+        .iter()
+        .filter(|result| {
+            result.task == "targeted_revision" || result.task == "manual_craft_edit"
+        })
+        .collect();
+    if revision_tasks.is_empty() {
+        return 0.0;
+    }
+    let repair_needed = revision_tasks
+        .iter()
+        .filter(|result| {
+            if result.status != "pass" {
+                return true;
+            }
+            if let Some(score) = result.delta.as_ref().and_then(|delta| {
+                delta
+                    .get("overall_score")
+                    .and_then(|value| value.as_f64().map(|f| f as f32))
+            }) {
+                score < 0.0
+            } else {
+                false
+            }
+        })
+        .count();
+    repair_needed as f32 / revision_tasks.len() as f32
+}
+
+fn build_quality_warnings(
+    duplicate_groups: &[DuplicatePreviewGroup],
+    repair_rate: f32,
+    min_chars: usize,
+    max_chars: usize,
+    avg_carry_rate: Option<f32>,
+) -> Vec<QualityWarning> {
+    let mut warnings = Vec::new();
+    for group in duplicate_groups {
+        warnings.push(QualityWarning {
+            kind: "duplicate_preview".to_string(),
+            severity: if group.chapters.len() >= 3 {
+                "fail".to_string()
+            } else {
+                "warning".to_string()
+            },
+            message: format!(
+                "{} chapters share similar opening preview: {}",
+                group.chapters.len(),
+                group.chapters.join(", ")
+            ),
+        });
+    }
+    if repair_rate > 0.3 {
+        warnings.push(QualityWarning {
+            kind: "high_repair_rate".to_string(),
+            severity: "fail".to_string(),
+            message: format!("repair rate {:.0}% exceeds threshold", repair_rate * 100.0),
+        });
+    } else if repair_rate > 0.15 {
+        warnings.push(QualityWarning {
+            kind: "elevated_repair_rate".to_string(),
+            severity: "warning".to_string(),
+            message: format!("repair rate {:.0}% is elevated", repair_rate * 100.0),
+        });
+    }
+    if min_chars == 0 {
+        warnings.push(QualityWarning {
+            kind: "missing_chapter_text".to_string(),
+            severity: "fail".to_string(),
+            message: "at least one chapter has empty text".to_string(),
+        });
+    }
+    if max_chars > 0 && min_chars > 0 && max_chars / min_chars > 5 {
+        warnings.push(QualityWarning {
+            kind: "length_variance".to_string(),
+            severity: "warning".to_string(),
+            message: format!(
+                "chapter length varies greatly: min={} max={}",
+                min_chars, max_chars
+            ),
+        });
+    }
+    if let Some(rate) = avg_carry_rate {
+        if rate < 0.4 {
+            warnings.push(QualityWarning {
+                kind: "low_carry_rate".to_string(),
+                severity: "fail".to_string(),
+                message: format!("avg anchor_carry {:.2} below threshold", rate),
+            });
+        } else if rate < 0.6 {
+            warnings.push(QualityWarning {
+                kind: "low_carry_rate".to_string(),
+                severity: "warning".to_string(),
+                message: format!("avg anchor_carry {:.2} below recommended", rate),
+            });
+        }
+    }
+    warnings
+}
+
 fn load_previous_eval_run(path: &Path) -> Option<PreviousEvalRun> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut timestamp = String::new();
@@ -1878,6 +2073,12 @@ fn build_eval_run_trend(profile: &str, timestamp: String, results: &[EvalResult]
         task_status,
         task_after_score,
         failing_tasks,
+        duplicate_preview_groups: Vec::new(),
+        repair_rate: 0.0,
+        min_chars: 0,
+        max_chars: 0,
+        avg_carry_rate: None,
+        quality_warnings: Vec::new(),
     }
 }
 
@@ -2157,7 +2358,20 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
 
     std::fs::write(&output_path, output).expect("write eval_output.jsonl");
 
-    let current_trend = build_eval_run_trend(profile, timestamp, &results);
+    let mut current_trend = build_eval_run_trend(profile, timestamp, &results);
+    let (min_chars, max_chars) = compute_min_max_chars(&fixture);
+    current_trend.duplicate_preview_groups = compute_duplicate_preview_groups(&fixture);
+    current_trend.repair_rate = compute_repair_rate(&results);
+    current_trend.min_chars = min_chars;
+    current_trend.max_chars = max_chars;
+    current_trend.avg_carry_rate = compute_avg_carry_rate(&results);
+    current_trend.quality_warnings = build_quality_warnings(
+        &current_trend.duplicate_preview_groups,
+        current_trend.repair_rate,
+        current_trend.min_chars,
+        current_trend.max_chars,
+        current_trend.avg_carry_rate,
+    );
     let previous_trend =
         previous_run.map(|run| build_eval_run_trend(profile, run.timestamp, &run.results));
     let trend_report = build_eval_trend_report(profile, current_trend, previous_trend);
@@ -2208,6 +2422,12 @@ fn main() {
                 pass: trend_report.current.pass,
                 fail: trend_report.current.fail,
                 failing_tasks: trend_report.current.failing_tasks.clone(),
+                duplicate_preview_groups: trend_report.current.duplicate_preview_groups.clone(),
+                repair_rate: trend_report.current.repair_rate,
+                min_chars: trend_report.current.min_chars,
+                max_chars: trend_report.current.max_chars,
+                avg_carry_rate: trend_report.current.avg_carry_rate,
+                quality_warnings: trend_report.current.quality_warnings.clone(),
             },
         );
         profile_trend_reports.insert(profile.to_string(), trend_report.clone());
@@ -2227,6 +2447,11 @@ fn main() {
     let total_pass = all_results.iter().filter(|r| r.status == "pass").count();
     let total_fail = all_results.len() - total_pass;
 
+    let quality_warnings: Vec<QualityWarning> = profile_summaries
+        .values()
+        .flat_map(|ps| ps.quality_warnings.clone())
+        .collect();
+
     let summary = EvalSummary {
         timestamp,
         mode: mode.to_string(),
@@ -2235,6 +2460,7 @@ fn main() {
         total_pass,
         total_fail,
         regressions: all_regressions.clone(),
+        quality_warnings,
     };
 
     // Write aggregate summary
@@ -2373,6 +2599,34 @@ fn build_markdown_summary(
         md.push_str("- No quality regressions detected. Safe to proceed.\n");
     }
     md.push('\n');
+
+    md.push_str("## Long-Chain Quality\n\n");
+    md.push_str("| Profile | Min Chars | Max Chars | Avg Carry | Repair Rate | Duplicate Groups | Warnings |\n");
+    md.push_str("|---------|-----------|-----------|-----------|-------------|------------------|----------|\n");
+    for (profile, ps) in &summary.profiles {
+        let avg_carry = ps
+            .avg_carry_rate
+            .map(|r| format!("{:.2}", r))
+            .unwrap_or_else(|| "-".to_string());
+        let dup_count = ps.duplicate_preview_groups.len();
+        let warn_count = ps.quality_warnings.len();
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {:.0}% | {} | {} |\n",
+            profile, ps.min_chars, ps.max_chars, avg_carry, ps.repair_rate * 100.0, dup_count, warn_count
+        ));
+    }
+    md.push('\n');
+
+    if !summary.quality_warnings.is_empty() {
+        md.push_str("## Quality Warnings\n\n");
+        for warning in &summary.quality_warnings {
+            md.push_str(&format!(
+                "- **[{}]** {}: {}\n",
+                warning.severity, warning.kind, warning.message
+            ));
+        }
+        md.push('\n');
+    }
 
     md.push_str("## Craft Rule Trends\n\n");
     md.push_str("| Profile | Rule | Avg Score Delta | Examples | Bad Patterns |\n");
@@ -2621,5 +2875,158 @@ mod tests {
             regression.kind == "craft_rule_average_score_delta"
                 && regression.subject == "scene_objective"
         }));
+    }
+
+    #[test]
+    fn compute_duplicate_preview_groups_detects_duplicates() {
+        let fixture = serde_json::json!({
+            "chapters": {
+                "第一章": "This is the first chapter with some unique content.",
+                "第二章": "This is the first chapter with some unique content.",
+                "第三章": "Something completely different here."
+            }
+        });
+        let groups = compute_duplicate_preview_groups(&fixture);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].chapters.len(), 2);
+        assert!(groups[0].chapters.contains(&"第一章".to_string()));
+        assert!(groups[0].chapters.contains(&"第二章".to_string()));
+    }
+
+    #[test]
+    fn compute_duplicate_preview_groups_empty_when_no_duplicates() {
+        let fixture = serde_json::json!({
+            "chapters": {
+                "第一章": "Unique content A.",
+                "第二章": "Unique content B."
+            }
+        });
+        let groups = compute_duplicate_preview_groups(&fixture);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn compute_min_max_chars_finds_bounds() {
+        let fixture = serde_json::json!({
+            "chapters": {
+                "short": "abc",
+                "medium": "abcdef",
+                "long": "abcdefghijklmnopqrstuvwxyz"
+            }
+        });
+        let (min, max) = compute_min_max_chars(&fixture);
+        assert_eq!(min, 3);
+        assert_eq!(max, 26);
+    }
+
+    #[test]
+    fn compute_min_max_chars_empty_fixture() {
+        let fixture = serde_json::json!({ "chapters": {} });
+        let (min, max) = compute_min_max_chars(&fixture);
+        assert_eq!(min, 0);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn compute_avg_carry_rate_with_scores() {
+        let results = vec![
+            EvalResult {
+                profile: "mystery".to_string(),
+                task: "quality_evaluation".to_string(),
+                chapter: "ch1".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: Some(serde_json::json!({
+                    "overall_score": 0.75,
+                    "metric_results": { "anchor_carry": 0.75 }
+                })),
+                delta: None,
+                message: String::new(),
+            },
+            EvalResult {
+                profile: "mystery".to_string(),
+                task: "quality_evaluation".to_string(),
+                chapter: "ch2".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: Some(serde_json::json!({
+                    "overall_score": 0.85,
+                    "metric_results": { "anchor_carry": 0.85 }
+                })),
+                delta: None,
+                message: String::new(),
+            },
+        ];
+        let avg = compute_avg_carry_rate(&results);
+        assert!(avg.is_some_and(|v| (v - 0.80).abs() < 0.01));
+    }
+
+    #[test]
+    fn compute_avg_carry_rate_ignores_missing_scores() {
+        let mut result_no_metric = eval_result_with_score("mystery", "quality_evaluation", "ch1", "pass", 0.5);
+        result_no_metric.after = Some(serde_json::json!({ "overall_score": 0.5 }));
+        let results = vec![result_no_metric];
+        let avg = compute_avg_carry_rate(&results);
+        assert!(avg.is_none());
+    }
+
+    #[test]
+    fn compute_repair_rate_zero_when_no_revision_tasks() {
+        let results = vec![eval_result_with_score("mystery", "quality_evaluation", "ch1", "pass", 0.8)];
+        assert_eq!(compute_repair_rate(&results), 0.0);
+    }
+
+    #[test]
+    fn compute_repair_rate_counts_failed_revisions() {
+        let results = vec![
+            EvalResult {
+                profile: "mystery".to_string(),
+                task: "targeted_revision".to_string(),
+                chapter: "ch1".to_string(),
+                status: "fail".to_string(),
+                before: None,
+                after: None,
+                delta: Some(serde_json::json!({ "overall_score": 0.3 })),
+                message: String::new(),
+            },
+            EvalResult {
+                profile: "mystery".to_string(),
+                task: "targeted_revision".to_string(),
+                chapter: "ch2".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: None,
+                delta: Some(serde_json::json!({ "overall_score": 0.3 })),
+                message: String::new(),
+            },
+        ];
+        assert_eq!(compute_repair_rate(&results), 0.5);
+    }
+
+    #[test]
+    fn compute_repair_rate_counts_negative_delta_scores() {
+        let results = vec![
+            EvalResult {
+                profile: "mystery".to_string(),
+                task: "manual_craft_edit".to_string(),
+                chapter: "ch1".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: None,
+                delta: Some(serde_json::json!({ "overall_score": -0.2 })),
+                message: String::new(),
+            },
+            EvalResult {
+                profile: "mystery".to_string(),
+                task: "manual_craft_edit".to_string(),
+                chapter: "ch2".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: None,
+                delta: Some(serde_json::json!({ "overall_score": 0.1 })),
+                message: String::new(),
+            },
+        ];
+        assert_eq!(compute_repair_rate(&results), 0.5);
     }
 }

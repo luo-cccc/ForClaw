@@ -24,6 +24,10 @@ pub struct LlmUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    pub provider_calls: u64,
+    pub provider_retries: u64,
+    /// Duration of the last provider call in milliseconds.
+    pub latency_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -455,7 +459,14 @@ async fn chat_text_with_options_raw(
     apply_provider_options(settings, &mut payload, options);
 
     let mut last_error = String::new();
+    let mut provider_calls: u64 = 0;
+    let mut provider_retries: u64 = 0;
     for attempt in 0..=CHAT_COMPLETION_TRANSIENT_RETRIES {
+        provider_calls += 1;
+        if attempt > 0 {
+            provider_retries += 1;
+        }
+        let call_t0 = std::time::Instant::now();
         let resp = match client
             .post(endpoint(&settings.api_base, "chat/completions"))
             .header("Authorization", format!("Bearer {}", settings.api_key))
@@ -501,7 +512,8 @@ async fn chat_text_with_options_raw(
                 return Err(last_error);
             }
         };
-        return Ok(chat_completion_text_and_usage(body));
+        let latency_ms = call_t0.elapsed().as_millis() as u64;
+        return Ok(chat_completion_text_and_usage(body, provider_calls, provider_retries, latency_ms));
     }
     Err(last_error)
 }
@@ -525,21 +537,37 @@ async fn sleep_before_chat_completion_retry(attempt: usize, error: &str) {
     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 }
 
-fn chat_completion_text_and_usage(body: serde_json::Value) -> (String, LlmUsage) {
+fn chat_completion_text_and_usage(
+    body: serde_json::Value,
+    provider_calls: u64,
+    provider_retries: u64,
+    latency_ms: u64,
+) -> (String, LlmUsage) {
     let content = body["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
         .to_string();
     let usage = body
         .get("usage")
-        .map_or_else(LlmUsage::default, |u| LlmUsage {
-            prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            completion_tokens: u
-                .get("completion_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        });
+        .map_or_else(
+            || LlmUsage {
+                provider_calls,
+                provider_retries,
+                latency_ms,
+                ..LlmUsage::default()
+            },
+            |u| LlmUsage {
+                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                completion_tokens: u
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                provider_calls,
+                provider_retries,
+                latency_ms,
+            },
+        );
     (content, usage)
 }
 
@@ -915,24 +943,32 @@ mod tests {
 
     #[test]
     fn chat_completion_text_and_usage_extracts_usage() {
-        let (text, usage) = chat_completion_text_and_usage(serde_json::json!({
-            "choices": [
-                {
-                    "message": {
-                        "content": "林墨选择拔刀。"
+        let (text, usage) = chat_completion_text_and_usage(
+            serde_json::json!({
+                "choices": [
+                    {
+                        "message": {
+                            "content": "林墨选择拔刀。"
+                        }
                     }
+                ],
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                    "total_tokens": 18
                 }
-            ],
-            "usage": {
-                "prompt_tokens": 11,
-                "completion_tokens": 7,
-                "total_tokens": 18
-            }
-        }));
+            }),
+            1,
+            0,
+            42,
+        );
 
         assert_eq!(text, "林墨选择拔刀。");
         assert_eq!(usage.prompt_tokens, 11);
         assert_eq!(usage.completion_tokens, 7);
+        assert_eq!(usage.provider_calls, 1);
+        assert_eq!(usage.provider_retries, 0);
+        assert_eq!(usage.latency_ms, 42);
         assert_eq!(usage.total_tokens, 18);
     }
 }

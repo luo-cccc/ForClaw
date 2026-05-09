@@ -287,6 +287,8 @@ pub struct BatchGenerateChapterRequest {
     pub summary: String,
     #[serde(default)]
     pub frontend_state: Option<crate::chapter_generation::FrontendChapterStateSnapshot>,
+    #[serde(default)]
+    pub quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -480,6 +482,9 @@ impl crate::chapter_generation::ChapterGenerationProject for HeadlessChapterGene
     }
     fn open_memory_db(&self) -> Option<rusqlite::Connection> {
         rusqlite::Connection::open(&self.memory_path).ok()
+    }
+    fn box_clone(&self) -> Box<dyn crate::chapter_generation::ChapterGenerationProject> {
+        Box::new(self.clone())
     }
 }
 
@@ -1319,6 +1324,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             chapter_summary_override: Some(request.summary),
             chapter_contract: None,
             provider_budget_approval: None,
+            quality_mode: request.quality_mode,
         };
         self.generate_chapter_autonomous(payload).await
     }
@@ -1334,10 +1340,23 @@ Output ONLY the JSON object, no explanation outside. Example:
             .request_id
             .clone()
             .unwrap_or_else(|| crate::chapter_generation::make_request_id("chapter"));
-        let payload = crate::chapter_generation::GenerateChapterAutonomousPayload {
+        let mut payload = crate::chapter_generation::GenerateChapterAutonomousPayload {
             request_id: Some(request_id.clone()),
             ..payload
         };
+        if payload.quality_mode.is_none() {
+            if let Ok(sprint_guard) = self.lock_sprint() {
+                if let Some(sprint) = sprint_guard.as_ref() {
+                    let sprint_mode = sprint.quality_mode.clone();
+                    let chapter_mode = sprint_current_chapter_title(sprint)
+                        .and_then(|title| {
+                            sprint.chapters.iter().find(|c| c.chapter_title == title)
+                        })
+                        .and_then(|ch| ch.quality_mode.clone());
+                    payload.quality_mode = chapter_mode.or(sprint_mode);
+                }
+            }
+        }
         let project = HeadlessChapterGenerationProject::new(&self.config, &self.project)?;
         let memory_path = project.memory_path.clone();
         let user_profile_entries = self.user_profile_entries();

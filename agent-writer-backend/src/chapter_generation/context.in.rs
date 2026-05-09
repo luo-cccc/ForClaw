@@ -91,6 +91,9 @@ pub async fn build_chapter_context(
         ));
     }
 
+    // P9: Open memory once and reuse across all read-only queries.
+    let memory = crate::writer_agent::memory::WriterMemory::open(project.memory_path()).ok();
+
     let outline = project.load_outline().map_err(|e| {
         ChapterGenerationError::with_details(
             "STORAGE_READ_FAILED",
@@ -108,26 +111,38 @@ pub async fn build_chapter_context(
     )?;
 
     // Parallelize independent read-only I/O: chapter_revision + lorebook
-    let (base_revision_result, lorebook_result) = {
-        let target_title = target.title.clone();
-        let rev = project.chapter_revision(&target_title).map_err(|e| {
+    let target_title = target.title.clone();
+    let rev_project = project.box_clone();
+    let rev_future = tokio::task::spawn_blocking(move || {
+        rev_project.chapter_revision(&target_title).map_err(|e| {
             ChapterGenerationError::with_details(
                 "STORAGE_READ_FAILED",
                 "Failed to read target chapter revision.",
                 true,
                 e,
             )
-        });
-        let lore = project.load_lorebook().map_err(|e| {
+        })
+    });
+    let lore_project = project.box_clone();
+    let lore_future = tokio::task::spawn_blocking(move || {
+        lore_project.load_lorebook().map_err(|e| {
             ChapterGenerationError::with_details(
                 "STORAGE_READ_FAILED",
                 "Failed to read lorebook.",
                 true,
                 e,
             )
-        });
-        futures_util::join!(async { rev }, async { lore })
-    };
+        })
+    });
+    let (base_revision_result, lorebook_result) =
+        futures_util::try_join!(rev_future, lore_future).map_err(|e| {
+            ChapterGenerationError::with_details(
+                "JOIN_ERROR",
+                &format!("Parallel read failed: {}", e),
+                true,
+                e.to_string(),
+            )
+        })?;
     let base_revision = base_revision_result?;
     let lore_entries = lorebook_result?;
 
@@ -141,6 +156,8 @@ pub async fn build_chapter_context(
         instruction,
         input.budget.instruction_chars,
         None,
+        0,
+        "ok",
     );
 
     let outline_text = if outline.is_empty() {
@@ -168,6 +185,8 @@ pub async fn build_chapter_context(
         &outline_text,
         input.budget.outline_chars,
         None,
+        0,
+        "ok",
     );
 
     composer.add_source(
@@ -177,12 +196,15 @@ pub async fn build_chapter_context(
         &build_target_beat_context(&target.summary),
         input.budget.outline_chars.min(2_000),
         None,
+        0,
+        "ok",
     );
 
     let mut previous_fulltext_upgrade_count: usize = 0;
     let mut previous_fulltext_upgrade_reason = String::new();
 
     if let Some(target_index) = target.number.map(|n| n - 1) {
+        let prev_t0 = std::time::Instant::now();
         let previous_nodes =
             select_previous_nodes(&outline, target_index, input.budget.previous_chapter_count);
         let mut previous_text = build_adjacent_chapter_context(project, previous_nodes.clone());
@@ -222,19 +244,28 @@ pub async fn build_chapter_context(
             }
             previous_fulltext_upgrade_reason = reasons.join("; ");
 
-            for node in &previous_nodes {
-                if let Ok(full) = project.load_chapter(&node.chapter_title) {
-                    if !full.trim().is_empty() {
-                        let snippet = snippet_text(&full, 1200);
-                        previous_text.push_str(&format!(
-                            "\n\n## Previous chapter fulltext: {} (risk upgrade)\n{}",
-                            node.chapter_title, snippet
-                        ));
-                        previous_fulltext_upgrade_count += 1;
-                    }
+            let fulltext_futures: Vec<_> = previous_nodes
+                .iter()
+                .map(|node| {
+                    let title = node.chapter_title.clone();
+                    let proj = project.box_clone();
+                    tokio::task::spawn_blocking(move || {
+                        proj.load_chapter(&title).ok().filter(|f| !f.trim().is_empty())
+                    })
+                })
+                .collect();
+            for (node, handle) in previous_nodes.iter().zip(fulltext_futures) {
+                if let Ok(Some(full)) = handle.await {
+                    let snippet = snippet_text(&full, 1200);
+                    previous_text.push_str(&format!(
+                        "\n\n## Previous chapter fulltext: {} (risk upgrade)\n{}",
+                        node.chapter_title, snippet
+                    ));
+                    previous_fulltext_upgrade_count += 1;
                 }
             }
         }
+        let prev_elapsed_ms = prev_t0.elapsed().as_millis() as u64;
 
         composer.add_source(
             "previous_chapters",
@@ -243,10 +274,14 @@ pub async fn build_chapter_context(
             &previous_text,
             input.budget.previous_chapters_chars,
             None,
+            prev_elapsed_ms,
+            "ok",
         );
 
+        let next_t0 = std::time::Instant::now();
         let next_nodes = select_next_nodes(&outline, target_index, input.budget.next_chapter_count);
         let next_text = build_next_chapter_context(next_nodes);
+        let next_elapsed_ms = next_t0.elapsed().as_millis() as u64;
         composer.add_source(
             "next_chapter",
             "next",
@@ -254,23 +289,49 @@ pub async fn build_chapter_context(
             &next_text,
             input.budget.next_chapter_chars,
             None,
+            next_elapsed_ms,
+            "ok",
         );
     }
 
-    if let Ok(existing) = project.load_chapter(&target.title) {
-        if !existing.trim().is_empty() {
-            composer.add_source(
-                "target_existing_text",
-                &target.title,
-                "Existing target chapter text",
-                &existing,
-                input.budget.target_existing_chars,
-                None,
-            );
-        }
+    // Parallelize target existing text + RAG chunks
+    let rag_t0 = std::time::Instant::now();
+    let target_title_existing = target.title.clone();
+    let existing_project = project.box_clone();
+    let existing_future = tokio::task::spawn_blocking(move || {
+        existing_project.load_chapter(&target_title_existing).ok().filter(|f| !f.trim().is_empty())
+    });
+    let query_rag = query.clone();
+    let rag_project = project.box_clone();
+    let rag_future = tokio::task::spawn_blocking(move || {
+        select_rag_chunks(&*rag_project,
+            &query_rag,
+            input.budget.rag_chunk_count,
+        )
+    });
+    let (existing_opt, rag_chunks_result) = futures_util::join!(existing_future, rag_future);
+    let rag_chunks = rag_chunks_result.unwrap_or_default();
+    let existing_elapsed_ms = if let Ok(Some(_)) = &existing_opt {
+        // timing is approximate since we join’d with RAG; use a small fixed estimate
+        1
+    } else {
+        0
+    };
+    if let Ok(Some(existing)) = existing_opt {
+        composer.add_source(
+            "target_existing_text",
+            &target.title,
+            "Existing target chapter text",
+            &existing,
+            input.budget.target_existing_chars,
+            None,
+            existing_elapsed_ms,
+            "ok",
+        );
     }
 
     // Read-only sources: lorebook pre-fetched in parallel with chapter_revision above
+    let lore_t0 = std::time::Instant::now();
     let selected_lore =
         select_lore_entries(&lore_entries, &query, input.budget.lorebook_entry_count);
     let lore_text = if selected_lore.is_empty() {
@@ -284,6 +345,7 @@ pub async fn build_chapter_context(
             .collect::<Vec<_>>()
             .join("\n\n")
     };
+    let lore_elapsed_ms = lore_t0.elapsed().as_millis() as u64;
     composer.add_source(
         "lorebook",
         "lorebook.json",
@@ -291,9 +353,11 @@ pub async fn build_chapter_context(
         &lore_text,
         input.budget.lorebook_chars,
         None,
+        lore_elapsed_ms,
+        "ok",
     );
 
-    let rag_chunks = select_rag_chunks(project, &query, input.budget.rag_chunk_count);
+    let rag_elapsed_ms = rag_t0.elapsed().as_millis() as u64;
     if !rag_chunks.is_empty() {
         let rag_text = rag_chunks
             .iter()
@@ -321,9 +385,12 @@ pub async fn build_chapter_context(
                     .map(|(score, _, _)| *score)
                     .unwrap_or_default(),
             ),
+            rag_elapsed_ms,
+            "ok",
         );
     }
 
+    let profile_t0 = std::time::Instant::now();
     let profile_text = input
         .user_profile_entries
         .iter()
@@ -331,6 +398,7 @@ pub async fn build_chapter_context(
         .cloned()
         .collect::<Vec<_>>()
         .join("\n");
+    let profile_elapsed_ms = profile_t0.elapsed().as_millis() as u64;
     if !profile_text.trim().is_empty() {
         composer.add_source(
             "user_profile",
@@ -339,6 +407,8 @@ pub async fn build_chapter_context(
             &profile_text,
             input.budget.user_profile_chars,
             None,
+            profile_elapsed_ms,
+            "ok",
         );
     }
 
@@ -346,10 +416,11 @@ pub async fn build_chapter_context(
     let warnings = budget_report.warnings.clone();
     let quality_anchor_keywords =
         build_quality_anchor_keywords(&target, &selected_lore, &sources, input.compiled_input.as_ref());
-    let author_voice_snapshot =
-        build_quality_author_voice_snapshot(project.memory_path(), project.project_id());
+    let author_voice_snapshot = memory
+        .as_ref()
+        .and_then(|mem| build_quality_author_voice_snapshot(mem, project.project_id()));
     let required_story_anchors =
-        build_required_story_anchors(project, &target, &selected_lore);
+        build_required_story_anchors(project, memory.as_ref(), &target, &selected_lore);
 
     if let Some(ref ci) = input.compiled_input {
         let evidence_text = ci.selected_evidence.join("\n");
@@ -363,7 +434,6 @@ pub async fn build_chapter_context(
     // Attempt story impact scoping: check whether we can drop non-impacted
     // evidence sources before building the final evidence artifact.
     let (impact_scoped, impact_filtered_count) = {
-        let memory = crate::writer_agent::memory::WriterMemory::open(project.memory_path()).ok();
         if let Some(ref mem) = memory {
             let has_impact = mem.get_open_promises().ok().map(|p| !p.is_empty()).unwrap_or(false)
                 || mem
@@ -397,7 +467,7 @@ pub async fn build_chapter_context(
 
     // Writing quality enrichment: enrich the chapter prompt with checklist and context.
     {
-        if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(project.memory_path()) {
+        if let Some(ref memory) = memory {
             let checklist = build_writing_checklist(&memory, &target.title);
             let checklist_str = checklist
                 .iter()
@@ -564,15 +634,15 @@ pub async fn build_chapter_context(
     }
 
     // Build SceneCraftPlan from intent and outline data
+    let next_summary = target
+        .number
+        .and_then(|n| outline.get(n)) // n is 1-indexed, outline.get(n) is the next chapter
+        .map(|node| node.summary.clone());
     let craft_plan = {
         let participants: Vec<String> = scene_plan
             .iter()
             .flat_map(|entry| entry.participants.clone())
             .collect();
-        let next_summary = target
-            .number
-            .and_then(|n| outline.get(n)) // n is 1-indexed, outline.get(n) is the next chapter
-            .map(|node| node.summary.as_str());
         let packet = compile_empowerment_prompt(
             &intent_artifact.goal,
             &target.summary,
@@ -587,11 +657,13 @@ pub async fn build_chapter_context(
             &intent_artifact.goal,
             &participants,
             &target.summary,
-            next_summary,
+            next_summary.as_deref(),
             &[],
             &packet,
         ))
     };
+    let required_state_deltas =
+        build_required_state_deltas(&target, &intent_artifact, memory.as_ref(), next_summary.as_deref());
 
     Ok(BuiltChapterContext {
         request_id,
@@ -620,22 +692,24 @@ pub async fn build_chapter_context(
         impact_truncated: false,
         generation_strategy: GenerationStrategy::default(),
         context_quality,
-        craft_rule_stats: project.open_memory_db().map(|conn| {
+        craft_rule_stats: memory.as_ref().map(|mem| {
+            let conn = mem.connection();
             let mut stats = std::collections::HashMap::new();
             for rule in craft_library_for_stats() {
-                if let Some(s) = crate::writer_agent::memory::get_craft_rule_stats(&conn, &rule.id) {
+                if let Some(s) = crate::writer_agent::memory::get_craft_rule_stats(conn, &rule.id) {
                     stats.insert(rule.id.clone(), s);
                 }
             }
             stats
         }),
-        craft_memory_prompt_samples: project
-            .open_memory_db()
-            .map(|conn| build_craft_memory_prompt_samples(&conn))
+        craft_memory_prompt_samples: memory
+            .as_ref()
+            .map(|mem| build_craft_memory_prompt_samples(mem.connection()))
             .unwrap_or_default(),
         quality_anchor_keywords,
         author_voice_snapshot,
         required_story_anchors,
+        required_state_deltas,
     })
 }
 
@@ -877,10 +951,9 @@ fn push_anchor_candidate(anchors: &mut Vec<String>, candidate: &str) {
 }
 
 fn build_quality_author_voice_snapshot(
-    memory_path: &std::path::Path,
+    memory: &crate::writer_agent::memory::WriterMemory,
     project_id: &str,
 ) -> Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot> {
-    let memory = crate::writer_agent::memory::WriterMemory::open(memory_path).ok()?;
     let sample_titles = memory
         .list_recent_chapter_results(project_id, 3)
         .unwrap_or_default()
@@ -901,7 +974,8 @@ fn build_quality_author_voice_snapshot(
 }
 
 fn build_required_story_anchors(
-    project: &dyn ChapterGenerationProject,
+    _project: &dyn ChapterGenerationProject,
+    memory: Option<&crate::writer_agent::memory::WriterMemory>,
     target: &ChapterTarget,
     selected_lore: &[(f32, &storage::LoreEntry)],
 ) -> Vec<StoryAnchor> {
@@ -933,7 +1007,7 @@ fn build_required_story_anchors(
     }
 
     // 3. Open promises from Story OS
-    if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(project.memory_path()) {
+    if let Some(memory) = memory {
         if let Ok(promises) = memory.get_open_promise_summaries() {
             for p in promises.iter().take(8) {
                 if seen.insert(p.title.clone()) {
@@ -975,6 +1049,155 @@ fn build_required_story_anchors(
 
     anchors.truncate(24);
     anchors
+}
+
+fn build_required_state_deltas(
+    target: &ChapterTarget,
+    intent_artifact: &ChapterIntentArtifact,
+    memory: Option<&crate::writer_agent::memory::WriterMemory>,
+    next_chapter_summary: Option<&str>,
+) -> Vec<StateDelta> {
+    let mut deltas = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Helper: scan text for state-change action patterns
+    let scan_for_deltas = |text: &str, source: &str, deltas: &mut Vec<StateDelta>, seen: &mut std::collections::HashSet<String>| {
+        let mut push = |delta_type: &str, description: &str, source: &str| {
+            let key = format!("{}:{}", delta_type, description);
+            if seen.insert(key) {
+                deltas.push(StateDelta {
+                    delta_type: delta_type.to_string(),
+                    description: description.to_string(),
+                    source: source.to_string(),
+                });
+            }
+        };
+
+        // Knowledge/information deltas
+        for (verb, delta_type) in [
+            ("发现", "knowledge"), ("揭示", "knowledge"), ("得知", "knowledge"),
+            ("了解", "knowledge"), ("明白", "knowledge"), ("知晓", "knowledge"),
+            ("泄露", "knowledge"), ("看穿", "knowledge"), ("识破", "knowledge"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("角色{}关键信息", verb), source);
+            }
+        }
+
+        // Relationship deltas
+        for (verb, delta_type) in [
+            ("背叛", "relationship"), ("信任", "relationship"), ("结盟", "relationship"),
+            ("反目", "relationship"), ("和解", "relationship"), ("决裂", "relationship"),
+            ("收服", "relationship"), ("投靠", "relationship"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("人物关系发生{}", verb), source);
+            }
+        }
+
+        // Possession deltas
+        for (verb, delta_type) in [
+            ("获得", "possession"), ("失去", "possession"), ("找到", "possession"),
+            ("丢失", "possession"), ("夺取", "possession"), ("交付", "possession"),
+            ("继承", "possession"), ("炼化", "possession"), ("觉醒", "possession"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("物品/能力{}", verb), source);
+            }
+        }
+
+        // Status/condition deltas
+        for (verb, delta_type) in [
+            ("死亡", "status"), ("受伤", "status"), ("康复", "status"),
+            ("突破", "status"), ("晋升", "status"), ("堕落", "status"),
+            ("蜕变", "status"), ("觉醒", "status"), ("进阶", "status"),
+            ("昏迷", "status"), ("复活", "status"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("角色状态{}", verb), source);
+            }
+        }
+
+        // Location deltas
+        for (verb, delta_type) in [
+            ("逃离", "location"), ("到达", "location"), ("离开", "location"),
+            ("进入", "location"), ("潜入", "location"), ("返回", "location"),
+            ("传送", "location"), ("降临", "location"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("场景位置{}", verb), source);
+            }
+        }
+
+        // Decision deltas
+        for (verb, delta_type) in [
+            ("决定", "decision"), ("选择", "decision"), ("答应", "decision"),
+            ("拒绝", "decision"), ("承诺", "decision"), ("立誓", "decision"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("角色做出{}", verb), source);
+            }
+        }
+
+        // Conflict deltas
+        for (verb, delta_type) in [
+            ("击败", "conflict"), ("战胜", "conflict"), ("投降", "conflict"),
+            ("逃亡", "conflict"), ("复仇", "conflict"), ("镇压", "conflict"),
+            ("反击", "conflict"), ("歼灭", "conflict"),
+        ] {
+            if text.contains(verb) {
+                push(delta_type, &format!("冲突{}", verb), source);
+            }
+        }
+    };
+
+    // 1. Target beat summary
+    scan_for_deltas(&target.summary, "outline_beat", &mut deltas, &mut seen);
+
+    // 2. Intent artifact goal
+    if !intent_artifact.goal.is_empty() {
+        scan_for_deltas(&intent_artifact.goal, "intent_goal", &mut deltas, &mut seen);
+    }
+
+    // 3. Open promises — advancing a promise is a state delta
+    if let Some(memory) = memory {
+        if let Ok(promises) = memory.get_open_promise_summaries() {
+            for p in promises.iter().take(6) {
+                let key = format!("promise:推进或兑现线索: {}", p.title);
+                if seen.insert(key) {
+                    deltas.push(StateDelta {
+                        delta_type: "promise".to_string(),
+                        description: format!("推进或兑现线索: {}", p.title),
+                        source: "open_promise".to_string(),
+                    });
+                }
+            }
+        }
+
+        // 4. Canon entities — changes to canon are state deltas
+        if let Ok(entities) = memory.list_canon_entities() {
+            for entity in entities.iter().take(6) {
+                if entity.kind.contains("character") || entity.kind.contains("人物") {
+                    let key = format!("canon:保持{}设定一致性", entity.name);
+                    if seen.insert(key) {
+                        deltas.push(StateDelta {
+                            delta_type: "canon".to_string(),
+                            description: format!("保持{}设定一致性", entity.name),
+                            source: "canon_constraint".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Next chapter summary — sets up required state transition
+    if let Some(next) = next_chapter_summary {
+        scan_for_deltas(next, "next_chapter", &mut deltas, &mut seen);
+    }
+
+    deltas.truncate(16);
+    deltas
 }
 
 fn build_chapter_intent_artifact(

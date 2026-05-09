@@ -1,12 +1,16 @@
 const OVERALL_WEIGHTS: &[(&str, f32)] = &[
-    ("anchor_carry", 0.15),
-    ("style_drift", 0.10),
-    ("length_compliance", 0.10),
-    ("dialogue_function", 0.15),
-    ("exposition_ratio", 0.15),
-    ("ending_hook", 0.15),
-    ("scene_causality", 0.10),
-    ("promise_progress", 0.10),
+    ("anchor_carry", 0.12),
+    ("style_drift", 0.08),
+    ("length_compliance", 0.08),
+    ("dialogue_function", 0.12),
+    ("exposition_ratio", 0.12),
+    ("ending_hook", 0.12),
+    ("scene_causality", 0.08),
+    ("promise_progress", 0.08),
+    ("scene_repetition", 0.08),
+    ("plot_progression", 0.08),
+    ("new_information_density", 0.08),
+    ("state_delta_coverage", 0.04),
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -14,6 +18,8 @@ pub struct ChapterQualitySignals {
     pub anchor_keywords: Vec<String>,
     pub author_voice: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
     pub required_anchors: Vec<crate::chapter_generation::StoryAnchor>,
+    pub required_state_deltas: Vec<crate::chapter_generation::StateDelta>,
+    pub prior_chapter_summaries: Vec<String>,
 }
 
 pub fn evaluate_chapter_quality(
@@ -53,6 +59,10 @@ pub fn evaluate_chapter_quality_with_signals(
         metric_promise_progress(chapter_text, open_promise_keywords),
         metric_anchor_carry(chapter_text, &signals.anchor_keywords, &signals.required_anchors),
         metric_style_drift(chapter_text, chapter_title, signals.author_voice.as_ref()),
+        metric_scene_repetition(chapter_text, &signals.prior_chapter_summaries),
+        metric_plot_progression(chapter_text),
+        metric_new_information_density(chapter_text, &signals.prior_chapter_summaries),
+        metric_state_delta_coverage(chapter_text, &signals.required_state_deltas),
     ];
 
     let overall_score: f32 = metric_results
@@ -603,6 +613,264 @@ fn metric_promise_progress(text: &str, keywords: &[String]) -> QualityMetricResu
     )
 }
 
+fn metric_scene_repetition(text: &str, prior_summaries: &[String]) -> QualityMetricResult {
+    let sentences: Vec<String> = text
+        .split(|c: char| c == '。' || c == '！' || c == '？' || c == '!' || c == '?' || c == '\n')
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.chars().count() >= 8)
+        .collect();
+
+    if sentences.len() < 2 {
+        return gated_metric(
+            "scene_repetition", 1.0, "",
+            "craft:scene_repetition",
+            "句子数量不足，无法评估重复", "",
+        );
+    }
+
+    let mut overlap_count = 0usize;
+    for window in sentences.windows(2) {
+        let a = &window[0];
+        let b = &window[1];
+        let a_chars: Vec<char> = a.chars().collect();
+        let b_chars: Vec<char> = b.chars().collect();
+        if a_chars.len() < 4 || b_chars.len() < 4 {
+            continue;
+        }
+        let a_ngrams: std::collections::HashSet<String> = a_chars
+            .windows(4)
+            .map(|w| w.iter().collect::<String>())
+            .collect();
+        let b_ngrams: std::collections::HashSet<String> = b_chars
+            .windows(4)
+            .map(|w| w.iter().collect::<String>())
+            .collect();
+        let intersection: std::collections::HashSet<String> = a_ngrams
+            .intersection(&b_ngrams)
+            .cloned()
+            .collect();
+        let union_count = a_ngrams.len() + b_ngrams.len() - intersection.len();
+        if union_count > 0 {
+            let jaccard = intersection.len() as f32 / union_count as f32;
+            if jaccard > 0.3 {
+                overlap_count += 1;
+            }
+        }
+    }
+
+    // Cross-chapter repetition: detect if current chapter sentences overlap with prior chapter summaries
+    let mut cross_overlap = 0usize;
+    for summary in prior_summaries.iter().filter(|s| !s.trim().is_empty()) {
+        let prior_sentences: Vec<String> = summary
+            .split(|c: char| c == '。' || c == '！' || c == '？' || c == '!' || c == '?' || c == '\n')
+            .map(|s| s.trim().to_string())
+            .filter(|s| s.chars().count() >= 8)
+            .collect();
+        for current in &sentences {
+            let current_chars: Vec<char> = current.chars().collect();
+            if current_chars.len() < 4 {
+                continue;
+            }
+            let current_ngrams: std::collections::HashSet<String> = current_chars
+                .windows(4)
+                .map(|w| w.iter().collect::<String>())
+                .collect();
+            for prior in &prior_sentences {
+                let prior_chars: Vec<char> = prior.chars().collect();
+                if prior_chars.len() < 4 {
+                    continue;
+                }
+                let prior_ngrams: std::collections::HashSet<String> = prior_chars
+                    .windows(4)
+                    .map(|w| w.iter().collect::<String>())
+                    .collect();
+                let intersection: std::collections::HashSet<String> = current_ngrams
+                    .intersection(&prior_ngrams)
+                    .cloned()
+                    .collect();
+                let union_count = current_ngrams.len() + prior_ngrams.len() - intersection.len();
+                if union_count > 0 {
+                    let jaccard = intersection.len() as f32 / union_count as f32;
+                    if jaccard > 0.35 {
+                        cross_overlap += 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let ratio = overlap_count as f32 / sentences.len().max(1) as f32;
+    let cross_ratio = cross_overlap as f32 / sentences.len().max(1) as f32;
+    let combined_ratio = (ratio + cross_ratio * 0.5).min(1.0);
+    let score = if combined_ratio > 0.3 {
+        0.2
+    } else if combined_ratio > 0.15 {
+        0.5
+    } else {
+        0.9
+    };
+    let evidence = if cross_overlap > 0 {
+        format!(
+            "{}/{} adjacent pairs overlap; {}/{} sentences repeat prior chapters",
+            overlap_count,
+            sentences.len().saturating_sub(1),
+            cross_overlap,
+            sentences.len()
+        )
+    } else if overlap_count > 0 {
+        format!(
+            "{}/{} adjacent sentence pairs show 4-gram overlap",
+            overlap_count,
+            sentences.len().saturating_sub(1)
+        )
+    } else {
+        String::new()
+    };
+
+    gated_metric(
+        "scene_repetition",
+        score,
+        &evidence,
+        "craft:scene_repetition",
+        &format!("重复率（含跨章）{:.0}%", combined_ratio * 100.0),
+        "避免连续句子使用相同词汇和句式，交替视角或动作",
+    )
+}
+
+fn metric_plot_progression(text: &str) -> QualityMetricResult {
+    let progression_signals = [
+        "决定", "拒绝", "选择", "放弃", "承担", "接受", "离开", "留下",
+        "背叛", "保护", "牺牲", "反击", "撤退", "追击", "隐瞒", "揭露",
+    ];
+
+    let count: usize = progression_signals
+        .iter()
+        .map(|s| text.matches(s).count())
+        .sum();
+    let char_count = text.chars().count().max(1);
+    let density = count as f32 / char_count as f32 * 1000.0;
+
+    let score = if density >= 3.0 { 0.9 } else if density >= 1.5 { 0.6 } else { 0.3 };
+    let evidence: String = progression_signals
+        .iter()
+        .filter(|s| text.contains(*s))
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    gated_metric(
+        "plot_progression", score, &evidence,
+        "craft:plot_progression",
+        &format!("情节推进信号密度: {:.2}/1000chars", density),
+        "增加角色的决定、拒绝、选择等推进情节的行动",
+    )
+}
+
+fn metric_new_information_density(text: &str, prior_summaries: &[String]) -> QualityMetricResult {
+    if prior_summaries.is_empty() {
+        return gated_metric(
+            "new_information_density", 0.5, "",
+            "craft:new_information_density",
+            "无前序章节摘要，跳过评估", "",
+        );
+    }
+
+    let prior_text = prior_summaries.join(" ");
+    let prior_words: std::collections::HashSet<String> = prior_text
+        .split(|c: char| c.is_whitespace() || c == '，' || c == '。' || c == '、')
+        .filter(|w| w.chars().count() >= 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    let current_words: Vec<String> = text
+        .split(|c: char| c.is_whitespace() || c == '，' || c == '。' || c == '、')
+        .filter(|w| w.chars().count() >= 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    if current_words.is_empty() {
+        return gated_metric(
+            "new_information_density", 0.0, "",
+            "craft:new_information_density",
+            "当前章节无有效词汇", "增加具体细节和场景描写",
+        );
+    }
+
+    let novel_count = current_words.iter().filter(|w| !prior_words.contains(*w)).count();
+    let ratio = novel_count as f32 / current_words.len() as f32;
+    let score = if ratio >= 0.5 { 0.9 } else if ratio >= 0.3 { 0.6 } else { 0.3 };
+    let evidence = format!("{}/{} words not in prior summaries", novel_count, current_words.len());
+
+    gated_metric(
+        "new_information_density", score, &evidence,
+        "craft:new_information_density",
+        &format!("新信息占比 {:.0}%", ratio * 100.0),
+        "确保章节提供前序章节未覆盖的新信息或视角",
+    )
+}
+
+fn metric_state_delta_coverage(
+    text: &str,
+    required_deltas: &[crate::chapter_generation::StateDelta],
+) -> QualityMetricResult {
+    if required_deltas.is_empty() {
+        return gated_metric(
+            "state_delta_coverage", 0.5, "",
+            "craft:state_delta_coverage",
+            "无 required state deltas，跳过评估", "",
+        );
+    }
+
+    // State-change indicators that suggest a meaningful transition happened
+    let change_markers: &[&str] = &[
+        "了", "已经", "不再", "变成", "化为", "决定", "选择", "放弃", "接受", "拒绝",
+        "承认", "承担", "离开", "留下", "失去", "获得", "发现", "揭露", "牺牲", "代价",
+        "改变", "转变", "动摇", "崩溃", "觉醒", "醒悟", "妥协", "坚持", "背叛", "信任",
+        "死亡", "重生", "封印", "解封", "突破", "失败", "成功",
+    ];
+
+    let mut covered = 0usize;
+    for delta in required_deltas {
+        let keywords: Vec<&str> = delta.description
+            .split(|c: char| c.is_whitespace() || c == '，' || c == '。' || c == '、')
+            .filter(|w| w.chars().count() >= 2)
+            .collect();
+        let keyword_match = keywords.iter().any(|kw| text.contains(kw));
+        if !keyword_match {
+            continue;
+        }
+        // Require at least one change marker near the keyword context (within same sentence)
+        let text_sentences: Vec<&str> = text
+            .split(|c: char| c == '。' || c == '！' || c == '？' || c == '!' || c == '?' || c == '\n')
+            .collect();
+        let has_change_marker = text_sentences.iter().any(|sentence| {
+            let has_kw = keywords.iter().any(|kw| sentence.contains(kw));
+            let has_marker = change_markers.iter().any(|m| sentence.contains(m));
+            has_kw && has_marker
+        });
+        if has_change_marker {
+            covered += 1;
+        }
+    }
+
+    let ratio = covered as f32 / required_deltas.len() as f32;
+    let score = if ratio >= 0.8 { 0.9 } else if ratio >= 0.5 { 0.6 } else { 0.3 };
+    let evidence = if covered > 0 {
+        format!("{}/{} required state deltas covered", covered, required_deltas.len())
+    } else {
+        String::new()
+    };
+
+    gated_metric(
+        "state_delta_coverage", score, &evidence,
+        "craft:state_delta_coverage",
+        &format!("状态变化覆盖 {}/{} required deltas", covered, required_deltas.len()),
+        "确保规划中的状态变化在文本中有体现",
+    )
+}
+
 pub fn build_revision_prompt(
     chapter_text: &str,
     quality_report: &ChapterQualityReport,
@@ -1094,8 +1362,12 @@ mod craft_quality_tests {
     fn empty_text_scores_low_but_no_panic() {
         let plan = SceneCraftPlan::default();
         let report = evaluate_chapter_quality("", "test-chapter", &plan, &[], 3000, 4000);
-        assert!(report.overall_score <= 0.65);
+        // With 12 metrics, empty text gets more default "insufficient evidence" scores;
+        // threshold relaxed but length_compliance should still be near zero.
+        assert!(report.overall_score <= 0.80);
         assert!(!report.metric_results.is_empty());
+        let length = report.metric_results.iter().find(|m| m.metric == "length_compliance").unwrap();
+        assert!(length.score < 0.1, "empty text should fail length compliance");
     }
 
     #[test]
@@ -1151,14 +1423,15 @@ mod craft_quality_tests {
     }
 
     #[test]
-    fn all_eight_metrics_present() {
+    fn all_metrics_present() {
         let plan = SceneCraftPlan::default();
         let report = evaluate_chapter_quality("一些测试文本内容", "test-chapter", &plan, &[], 0, 500);
-        assert_eq!(report.metric_results.len(), 8, "all 8 metrics should be present");
+        assert_eq!(report.metric_results.len(), 12, "all 12 metrics should be present");
         let expected_metrics = [
             "anchor_carry", "style_drift", "length_compliance",
             "dialogue_function", "exposition_ratio", "ending_hook",
             "scene_causality", "promise_progress",
+            "scene_repetition", "plot_progression", "new_information_density", "state_delta_coverage",
         ];
         for expected in &expected_metrics {
             assert!(
@@ -1245,6 +1518,8 @@ mod craft_quality_tests {
                 last_updated_ms: 0,
             }),
             required_anchors: Vec::new(),
+            required_state_deltas: Vec::new(),
+            prior_chapter_summaries: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             "林墨只好拔出寒影剑，因此付出代价。",
@@ -1318,6 +1593,8 @@ mod craft_quality_tests {
                     required: true,
                 },
             ],
+            required_state_deltas: Vec::new(),
+            prior_chapter_summaries: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             text, "test-chapter", &plan, &[], 0, 500, &signals,
@@ -1354,6 +1631,8 @@ mod craft_quality_tests {
                     required: true,
                 },
             ],
+            required_state_deltas: Vec::new(),
+            prior_chapter_summaries: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             text, "test-chapter", &plan, &[], 0, 500, &signals,

@@ -1404,16 +1404,16 @@ P4：
 
 15. OpenRouter 真实 provider usage 校准验证
    - 新增 gated 集成测试 `chat_text_usage_updates_budget_calibration`，只在 `FORGE_REAL_API_TESTS=1` 时调用真实 provider。
-   - 使用 OpenRouter `https://openrouter.ai/api/v1` + `deepseek/deepseek-v4-flash` 实测通过；最新全量实测 usage 样本返回 `prompt_tokens=28`、`completion_tokens=35`、`total_tokens=63`。
+   - 使用 OpenRouter `https://openrouter.ai/api/v1` + `deepseek/deepseek-v4-flash` 实测通过；真实 usage 回写已覆盖 `prompt_tokens`、`completion_tokens`、`total_tokens`，并让校准置信度从无样本进入 `Low`。具体 token 数会随提示词和模型返回波动，不再作为完成度锚点。
    - 测试会调用 `chat_text_with_usage`，再把真实 usage 写入 `agent_harness_core::record_full_usage`，并验证 `estimate_with_confidence` 从无样本进入 `Low` 置信度。
    - 同轮实测通过 `/models` health check、普通中文 chat、JSON mode、profile smoke（ChapterDraft / GhostPreview / Analysis / ParallelDraft / ManualRewrite / ToolContinuation）。
 
 16. OpenRouter 真实 API 全量写作链路验证
-   - `llm_runtime` 对 chat completion 增加一次保守瞬态重试，覆盖 request error、HTTP 429 / 5xx、以及 HTTP 200 但 body JSON decode 失败；HTTP 4xx 配置/鉴权错误不重试。
+   - `llm_runtime` 对 chat completion 增加最多 3 次保守瞬态重试，线性退避 750ms / 1500ms / 2250ms；覆盖 request error、HTTP 429 / 5xx、以及 HTTP 200 但 body JSON decode 失败；HTTP 4xx 配置/鉴权错误不重试。
    - `real_author_session_three_chapter_smoke` 与 `real_author_session_thirty_chapter_gate` 复用同一套 anchor carry gate 修复逻辑：初稿锚点参与不足时允许一次完整重写，重写后仍按原 gate 判定，不降低阈值。
-   - 使用 OpenRouter `deepseek/deepseek-v4-flash` 单线程跑完整 `api_integration_tests`，12/12 通过，耗时约 1364 秒。
-   - 三十章真实写作 gate 通过：`chapters=30`、`avg_chars=1980`、`min_carry_rate=0.60`、`avg_anchor_hit=0.94`；验证报告写入本地 `reports/real_author_session_thirty_chapter_gate.json`。
-   - 三章真实 smoke 通过：`chapters=3`、`min_carry_rate=0.80`、`avg_chars=661`。
+   - 使用 OpenRouter `deepseek/deepseek-v4-flash` 分拆执行 gated `api_integration_tests`，12 个真实 API 测试均已通过；单命令串行跑全套在 30 分钟超时边界内未稳定完成，因此不能再表述为“单命令全量通过”。
+   - 三十章真实写作 gate 通过：`chapters=30`、`avg_chars=2150`、`min_carry_rate=0.60`、`avg_anchor_hit=0.92`；验证报告写入本地 `reports/real_author_session_thirty_chapter_gate.json`。
+   - 三章真实 smoke 通过：最近样本 `chapters=3`、`min_carry_rate=0.60`、`avg_chars=720`。
 
 ### 当前完成度估算
 
@@ -1421,17 +1421,17 @@ P4：
 | --- | ---: | --- |
 | Headless MCP 写作后端底座 | 86% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；进程级 smoke 已加固临时目录隔离；仍缺部分长任务恢复策略。 |
 | ForClaw 写作赋能 MVP | 98% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；Craft Memory 已能沉淀自动修订和作者手改样本，回流进生成 prompt，并进入 rule 级趋势证据；eval trend 已暴露为 MCP 只读工具；真实三章/三十章写作 gate 已通过。 |
-| 写作质量证据闭环 | 98% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、48-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进；OpenRouter 真实三十章 gate 已产出 `avg_chars=1980`、`min_carry_rate=0.60`、`avg_anchor_hit=0.94` 的长链路证据。 |
-| Context quality / preflight 可操作性 | 85% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告；provider usage 已有 OpenRouter 真实样本回写和全量真实 API 通过证据。短板是 usage 校准仍需长期样本沉淀，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
-| plan.md 全量路线 | 86% | P4 Required Anchors ✅、P5 Writing Eval Matrix（48 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P0 Provider Calibration 已有真实 OpenRouter usage 回写、全量 API 12/12 和三十章写作 gate 验证 ✅/⚠️，仍需多模型多任务样本沉淀；P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing 字段和 provider usage smoke 已存在，缺全链路并行检索启用）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
+| 写作质量证据闭环 | 98% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、66-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审、跨章节伏笔推进和第三章负例矩阵；OpenRouter 真实三十章 gate 已产出 `avg_chars=2150`、`min_carry_rate=0.60`、`avg_anchor_hit=0.92` 的长链路证据。 |
+| Context quality / preflight 可操作性 | 85% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告；provider usage 已有 OpenRouter 真实样本回写和真实 API 分拆通过证据。短板是 usage 校准仍需长期样本沉淀，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
+| plan.md 全量路线 | 86% | P4 Required Anchors ✅、P5 Writing Eval Matrix（66 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P0 Provider Calibration 已有真实 OpenRouter usage 回写、真实 API 12 项分拆通过和三十章写作 gate 验证 ✅/⚠️，仍需多模型多任务样本沉淀；P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing 字段和 provider usage smoke 已存在，缺全链路并行检索启用）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
 
 ### 剩余真实缺口
 
 - `anchor_carry` 和 `style_drift` 已接入真实信号，但锚点抽取仍是保守启发式；下一步应让 Project Brain / Story OS 明确产出“本章必须承载锚点”清单。
-- eval fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，并已有跨运行趋势报告；但仍只能算小样本规则回归，不能完全代表长篇真实生成质量，下一步应增加更大负例矩阵和 LLM judge 辅助验证。
+- eval fixture 已扩展到 66 tasks，并覆盖 canon 冲突、计划评审、跨章节伏笔推进和第三章负例矩阵；但仍属于规则回归集，不能完全代表长篇真实生成质量，下一步应增加更大负例矩阵和 LLM judge 辅助验证。
 - Sentence-level semantic diff 已落地（Jaccard 对齐 + confidence 分级），复杂同义替换和语序大调仍可能标为 Low/Unaligned，这是轻量方案的设计权衡。
 - Craft Memory 趋势已接入 headless dispatch 和 MCP 只读工具（`forge_eval_trend_summary`），Companion/CI 可直接消费；下一步应增加趋势可视化而非 API 扩展。
-- Context quality taxonomy、action code、elapsed_ms、retrieval_status 字段和 preflight 绑定已就绪；provider usage 和真实写作 gate 已通过 OpenRouter 全量验证，但仍缺长期、多任务、多模型样本沉淀；read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。
+- Context quality taxonomy、action code、elapsed_ms、retrieval_status 字段和 preflight 绑定已就绪；provider usage 和真实写作 gate 已通过 OpenRouter 分拆验证，但仍缺长期、多任务、多模型样本沉淀；read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。
 
 ### 本轮验证
 
@@ -1448,19 +1448,30 @@ FORGE_REAL_API_TESTS=1 cargo test -p agent-writer chat_text_usage_updates_budget
 FORGE_REAL_API_TESTS=1 cargo test -p agent-writer chat_text_with_openrouter -- --nocapture
 FORGE_REAL_API_TESTS=1 cargo test -p agent-writer chat_json_mode -- --nocapture
 FORGE_REAL_API_TESTS=1 cargo test -p agent-writer profile_smoke_feature_text_calls -- --nocapture
-FORGE_REAL_API_TESTS=1 cargo test -p agent-writer api_integration_tests -- --nocapture --test-threads=1
+FORGE_REAL_API_TESTS=1 cargo test -p agent-writer <api_integration_tests 单项测试名> -- --nocapture
 ```
 
-当前 writing eval 结果：48 tasks（mystery 15 + scifi 15 + xianxia 18），48 pass，0 fail。
-当前真实 provider 验证结果：OpenRouter `/models`、中文 chat、JSON mode、streaming、embedding、profile smoke、usage calibration、三章真实写作 smoke、三十章真实写作 gate 均通过；全量 `api_integration_tests` 为 12/12，通过耗时约 1364 秒。最新 usage calibration 样本为 prompt 28 / completion 35 / total 63 tokens，校准置信度进入 Low；三十章 gate 结果为 `avg_chars=1980`、`min_carry_rate=0.60`、`avg_anchor_hit=0.94`。
+当前 writing eval 结果：66 tasks（mystery 21 + scifi 21 + xianxia 24），66 pass，0 fail，无 regression。
+当前真实 provider 验证结果：OpenRouter `/models`、中文 chat、JSON mode、streaming、embedding、profile smoke、usage calibration、三章真实写作 smoke、三十章真实写作 gate 均通过；`api_integration_tests` 真实 API 项已分拆验证 12/12 通过，单命令串行全量在 30 分钟超时边界内未稳定完成。usage calibration 置信度进入 Low；三十章 gate 结果为 `avg_chars=2150`、`min_carry_rate=0.60`、`avg_anchor_hit=0.92`。
 
-## 2026-05-09 全量路线 69% 到 80% 提升计划
+### 2026-05-09 最新验证补充与计划变化判断
+
+新测试数据要求更新 `plan.md` 的证据口径，但不要求推翻 P8-P13 路线：
+
+- P5 证据增强：writing eval 已从 48 tasks 扩展到 66 tasks，且 66/66 通过；因此所有“48-task eval”只能作为历史快照，当前完成度估算应引用 66-task eval。
+- P0 证据边界收紧：真实 API 不是“单命令全量稳定通过”，而是“12 个 gated 项分拆通过；单命令串行全量存在 30 分钟超时风险”。这说明链路能力通过，性能/编排仍需 P8/P13 处理。
+- P8 状态变化：`llm_runtime` 的瞬态重试已完成一部分（最多 3 次、线性退避），P8 剩余重点应改为结构化 latency、call count、retry count、phase timing 和报告汇总。
+- P10/P12 优先级不下降：最新三十章 gate 通过锚点承接，但报告 preview 仍能观察到重复开场和场景停滞，因此长篇推进去重与长链路质量报告仍是下一轮硬缺口。
+
+## 2026-05-09 全量路线 69% 到 80% 提升计划（历史阶段）
 
 ### 目标边界
 
-本计划只针对“全量路线完成度”从 69% 推到约 80% 的真实缺口，不重复 ForClaw MVP 已完成内容。判断依据来自当前仓库中已经存在的模块与记录：`agent-harness-core/src/budget_calibration.rs`、`agent-harness-core/src/agent_loop.rs`、`agent-harness-core/src/execution_plan.rs`、`agent-harness-core/src/context_quality.rs`、`agent-writer-backend/src/writer_agent/provider_budget.rs`、`agent-writer-backend/src/writer_agent/kernel/run_loop.rs`、`agent-writer-backend/src/writer_agent/run_preflight.rs`、`agent-writer-backend/src/bin/eval_runner.rs` 和 `fixtures/writing_eval/*`。
+该段是上一阶段路线计划，当前已被 66-task eval、真实 API 分拆验证和三十章 gate 证据覆盖；保留为执行记录，不再作为当前完成度估算依据。当前完成度以本文件上方“当前完成度估算”和后续 P8-P13 为准。
 
-完成后预期：
+本计划只针对当时“全量路线完成度”从 69% 推到约 80% 的真实缺口，不重复 ForClaw MVP 已完成内容。判断依据来自当前仓库中已经存在的模块与记录：`agent-harness-core/src/budget_calibration.rs`、`agent-harness-core/src/agent_loop.rs`、`agent-harness-core/src/execution_plan.rs`、`agent-harness-core/src/context_quality.rs`、`agent-writer-backend/src/writer_agent/provider_budget.rs`、`agent-writer-backend/src/writer_agent/kernel/run_loop.rs`、`agent-writer-backend/src/writer_agent/run_preflight.rs`、`agent-writer-backend/src/bin/eval_runner.rs` 和 `fixtures/writing_eval/*`。
+
+当时完成后预期：
 
 - `plan.md 全量路线` 从 69% 提升到 78% 到 82%。
 - `Context quality / preflight 可操作性` 从 72% 提升到 82% 左右。
@@ -1496,7 +1507,7 @@ FORGE_REAL_API_TESTS=1 cargo test -p agent-writer api_integration_tests -- --noc
 验收：
 
 - 单测覆盖“无历史数据时走默认估算”“有历史数据时使用校准倍率”“异常 usage 不污染校准”。
-- gated 真实 API 测试覆盖 OpenRouter chat usage 回写：prompt 28 / completion 52 / total 80 tokens，confidence 进入 Low。
+- gated 真实 API 测试覆盖 OpenRouter chat usage 回写：真实 `prompt_tokens` / `completion_tokens` / `total_tokens` 非零，并让 confidence 进入 Low；具体 token 数按当次模型返回记录，不作为稳定验收条件。
 - 章节生成、Project Brain query、ExternalResearch 至少三类任务能写入 usage calibration。
 - `cargo test -p agent-harness-core` 和 `cargo test -p agent-writer --lib` 通过。
 
@@ -1762,12 +1773,12 @@ Milestone D：趋势进入日常工作流。
 
 ### 证据边界
 
-本计划基于当前仓库实现、`plan.md` 已记录的真实 OpenRouter 全量测试、以及本地 `reports/real_author_session_thirty_chapter_gate.json` 的三十章 gate 报告。已知证据：
+本计划基于当前仓库实现、`plan.md` 已记录的真实 OpenRouter 分拆验证、以及本地 `reports/real_author_session_thirty_chapter_gate.json` 的三十章 gate 报告。已知证据：
 
-- OpenRouter `deepseek/deepseek-v4-flash` 全量 `api_integration_tests` 12/12 通过，耗时约 1364 秒。
-- 三十章真实写作 gate：`chapters=30`、`avg_chars=1980`、`min_carry_rate=0.60`、`avg_anchor_hit=0.94`。
-- 三十章报告统计：`avg_carry=0.913`、`repaired_count=1`、`min_chars=531`、`max_chars=3652`。
-- 三十章报告出现 4 组相邻或近邻 preview 重复：1/2、13/14、19/20/21、24/25/26。
+- OpenRouter `deepseek/deepseek-v4-flash` gated `api_integration_tests` 已分拆验证 12/12 通过；单命令串行全量存在 30 分钟超时风险。
+- 三十章真实写作 gate：`chapters=30`、`avg_chars=2150`、`min_carry_rate=0.60`、`avg_anchor_hit=0.92`。
+- 三十章报告统计：`avg_carry=0.893`、`repaired_count=0`、`min_chars=1318`、`max_chars=3422`。
+- 三十章 preview 仍能观察到重复开场或场景停滞风险，例如 10/11、12/13/14、25/26/27/28；但当前报告尚未输出结构化 `duplicatePreviewGroups`，因此只能作为人工可见风险，而不是自动 gate 证据。
 - 结论：当前质量 gate 能约束锚点承接，但不能充分约束长篇推进、重复场景和新信息密度。
 
 ### 总体判断
@@ -1777,6 +1788,8 @@ Milestone D：趋势进入日常工作流。
 ### P8 Provider Latency 与调用链路遥测
 
 目标：把“慢在哪里”从日志观察升级为结构化数据，区分 provider 延迟、context 装配、质量诊断、修订、保存和 checkpoint 开销。
+
+当前状态：瞬态重试已经部分完成（最多 3 次、线性退避），但还缺结构化 latency、provider call count、retry count、phase timing 和长链路报告汇总。
 
 涉及模块：
 
@@ -1975,3 +1988,1250 @@ Milestone D：趋势进入日常工作流。
 2. `craft_quality` 能识别“锚点合格但场景重复”的负例。
 3. draft prompt 能收到 1-3 条 required state delta。
 4. `plan.md` 后续完成度估算引用 `duplicatePreviewGroups`、`repairRate`、`stateDeltaCoverage`，不再只引用 `anchor_carry`。
+
+## 2026-05-10 通用复杂世界观能力强化计划
+
+### 目标边界
+
+本计划不为任何单一世界观做专项适配，不硬编码《九厄十二劫经》、修炼境界、厄劫术语或特定题材规则。复杂世界观文档只作为压力测试样本，用来验证系统是否能把任意高密度设定转成可检索、可注入、可校验、可追溯的写作约束。
+
+核心目标：
+
+- 从“能把设定塞进 prompt”升级为“能把设定编译成 Story OS 资产”。
+- 从“模型记住世界观”升级为“系统持有规则、关系、状态和证据”。
+- 从“写完后主观判断是否跑偏”升级为“生成前有章节合同，生成后有通用一致性验证”。
+
+不做：
+
+- 不为某部作品写专属 parser、专属规则、专属 metric。
+- 不把 LLM 自动抽取结果直接当 canon；所有高风险规则必须保留 source evidence、confidence 和 author approval 状态。
+- 不让复杂项目默认拖慢普通项目；严格能力最终应由 P13 的 `strict` 模式启用。
+
+### 证据边界
+
+当前项目已有可复用底座：
+
+- Project Brain、跨引用、source revision compare/restore 已存在，适合作为世界观知识索引层。
+- `ContextSourceReport`、context quality action code、preflight 阻断/建议已存在，适合作为缺失设定源的入口。
+- `SceneCraftPlan`、`required_story_anchors`、`required_state_deltas`、`ChapterQualityReport`、`RevisionReport` 已接入章节链路。
+- writing eval 已扩展到 66 tasks，能承载通用世界观能力的规则回归。
+
+当前不足：
+
+- 设定文档仍主要作为文本块检索，缺少 typed fact / rule / relation / constraint。
+- canon 冲突检查已有雏形，但还不能通用表达“禁止动作、触发条件、例外、后果、严重级别”。
+- 每章生成前的约束仍偏写作任务和锚点，缺少从世界观规则自动编译出的 scene contract。
+- 生成后质量检查能看锚点、风格、长度、状态变化，但还缺通用设定一致性、术语错用、层级混淆、代价跳过、未授权新增设定检测。
+
+### P14 World Bible Compiler
+
+目标：把任意世界观文档从 Markdown / 文本编译成通用资产，而不是只做 chunk 检索。
+
+涉及模块：
+
+- `agent-writer-backend/src/brain_service/*`
+- `agent-writer-backend/src/headless.rs`
+- `forge-agent-mcp/src/tools.rs`
+- 新增或扩展 world bible / canon 数据结构模块
+
+通用 schema：
+
+- `WorldEntity`：人物、势力、地点、资源、术语、制度、物件、能力。
+- `WorldRule`：规则、禁忌、代价、触发条件、例外、后果、严重级别。
+- `WorldRelation`：来源、隶属、克制、转化、冲突、等价、伪装、继承。
+- `WorldHierarchy`：境界、职级、位格、技术阶段、权限等级。
+- `WorldTimelineFact`：古史、现世事件、未来伏笔、断代、版本差异。
+
+交付物：
+
+- 文档 ingest 后产出 `world_bible_index`，每条结构化资产必须带 `source_ref`、原文 excerpt、confidence、approval_status。
+- 支持 LLM-assisted extraction，但默认写入 `proposed` 状态，不直接污染 approved canon。
+- 支持 author approve/reject/merge，并保留 source revision。
+- Project Brain query 能同时返回 raw chunks 和 typed world assets。
+
+验收：
+
+- 单测覆盖 Markdown 标题、表格、列表、引用块的结构化抽取输入。
+- 单测证明低置信度或无 source_ref 的规则不能进入 approved canon。
+- MCP/headless 能列出某项目的 entities/rules/relations/hierarchies。
+- eval fixture 新增一个复杂世界观 profile，用通用 schema 表达规则，不出现题材专属字段。
+
+风险与非目标：
+
+- 风险是自动抽取过度自信；必须把 author approval 作为硬边界。
+- 非目标是一次性完美理解整本设定；第一阶段先做可追溯结构化草案。
+
+### P15 Canon Constraint Engine
+
+目标：把“设定资料”升级为生成前后都能执行的通用约束。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/writer_agent/story_impact/*`
+- `agent-harness-core/src/context_quality.rs`
+
+通用约束模型：
+
+- `required_fact`：本章必须承认的事实。
+- `forbidden_claim`：不得写出的设定断言。
+- `forbidden_action`：角色/势力/能力不得完成的动作。
+- `required_cost`：触发某能力、规则或选择时必须支付的代价。
+- `hierarchy_limit`：层级不足时不得越级获得能力、权限或信息。
+- `exception_rule`：允许违反表象规则的已批准例外。
+
+交付物：
+
+- `CanonConstraint` 数据结构，带 severity、source_ref、applies_to、trigger、expected_consequence。
+- preflight 能识别关键 canon 缺失，并输出 action code，例如 `approve_world_rule`、`fetch_canon_constraint`、`resolve_rule_conflict`。
+- draft prompt 注入本章最相关的 3-8 条约束，而不是倾倒整份设定。
+- quality report 输出 `canon_constraint_violations`，包括证据片段、违反规则、建议修订方向。
+
+验收：
+
+- 单测覆盖 forbidden claim、required cost、hierarchy limit、exception rule。
+- eval runner 新增 canon constraint 任务：候选文本违反规则时必须 fail 或 warning。
+- 无 approved source_ref 的规则只能作为 warning，不能硬阻断。
+
+风险与非目标：
+
+- 风险是硬规则过多导致创作僵硬；按 severity 和 relevance 限制注入数量。
+- 非目标是替代作者判断；系统只给证据、冲突和建议。
+
+### P16 Scene Contract Compiler
+
+目标：每章生成前先编译“章节合同”，让模型知道本章必须推进什么、不能触碰什么、允许新增什么。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/craft_prompt.rs`
+- `agent-writer-backend/src/chapter_generation/types_and_utils.in.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+
+交付物：
+
+- `SceneContract`：chapter mission、required facts、required state deltas、active constraints、allowed reveals、blocked reveals、required costs、continuity anchors。
+- contract 来源包括 outline、previous chapter summary、promise ledger、approved world rules、Project Brain chunks、author instruction。
+- draft prompt 只注入 compact contract；详细证据保留在 report 中。
+- Revision prompt 根据 contract violation 定向修订，而不是泛泛要求“更符合设定”。
+
+验收：
+
+- 单测证明同一世界观文档可为不同章节生成不同 contract。
+- 单测证明 blocked reveal 不会进入 draft prompt 的“可揭示信息”。
+- eval runner 新增任务验证 mission、rule、cost、state delta 能同时进入 contract。
+
+风险与非目标：
+
+- 风险是 contract 太长吃掉正文预算；必须有 token/char budget 和 priority 排序。
+- 非目标是自动写完整大纲；只做当前章节可执行合同。
+
+### P17 Generic Consistency Validator
+
+目标：生成后用通用规则检查复杂世界观跑偏，不依赖题材专属判断。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+
+通用检查项：
+
+- `unsupported_world_claim`：正文新增了未授权设定断言。
+- `canon_violation`：违反 approved constraint。
+- `hierarchy_confusion`：层级、位格、权限、阶段混淆。
+- `cost_skipped`：触发能力或选择但没有支付代价。
+- `term_misuse`：术语被换义、误用或混同。
+- `state_regression`：前章已改变的状态被无解释回滚。
+- `new_information_density`：本章大量复述，缺少新证据、新选择、新后果。
+
+交付物：
+
+- ChapterQualityReport 增加 generic world consistency metrics。
+- violation report 必须引用正文片段和 source_ref，不能只给空泛评语。
+- strict 模式下高严重级别 violation 可阻断保存或触发 targeted revision；balanced 模式默认 warning。
+
+验收：
+
+- 单测覆盖未授权新增设定、跳过代价、层级混淆、术语误用。
+- eval fixture 覆盖至少 2 个题材 profile，证明 validator 不依赖玄幻术语。
+- 报告能区分 hard violation、soft warning、insufficient evidence。
+
+风险与非目标：
+
+- 风险是假阳性影响写作流畅度；第一阶段 strict 才硬阻断，balanced 只提示。
+- 非目标是判断文学价值；只判断设定一致性和状态连续性。
+
+### P18 Evidence-Bound Retrieval 与 Prompt 注入
+
+目标：任何世界观引用都能追溯，不允许模型把“似乎记得”的设定当事实。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/pipeline/context.in.rs`
+- `agent-harness-core/src/context_pack.rs`
+- `agent-harness-core/src/context_quality.rs`
+- `forge-agent-mcp/src/tools.rs`
+
+交付物：
+
+- context pack 中区分 raw evidence、approved rule、proposed rule、author instruction。
+- prompt 注入每条关键约束时携带短 source label，report 中保留完整 source_ref。
+- preflight 能提示“当前章节需要某类证据但只有 proposed rule / raw chunk / no source”。
+- 对冲突来源给出 conflict set，不让模型自行选边。
+
+验收：
+
+- 单测证明无 evidence 的关键规则不能进入 hard constraints。
+- 单测证明 source conflict 会触发 preflight warning 或 block。
+- MCP 工具可查询某条约束的来源、批准状态和使用章节。
+
+风险与非目标：
+
+- 风险是证据链过重；prompt 只带短标签，详细证据留 JSON/report。
+- 非目标是全文引用原文；只保留必要 excerpt 和定位信息。
+
+### P19 Story State Ledger 泛化
+
+目标：把长篇连续创作的状态从“摘要文本”升级为可查询、可验证的状态账本。
+
+涉及模块：
+
+- `agent-writer-backend/src/writer_agent/memory.rs`
+- `agent-writer-backend/src/writer_agent/story_impact/*`
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/writer_agent/supervised_sprint.rs`
+
+通用状态类型：
+
+- character knowledge / belief / secret。
+- relationship status。
+- faction stance。
+- resource ownership。
+- rule triggered / cost paid。
+- promise open / advanced / paid / contradicted。
+- world situation escalated / stabilized / hidden。
+
+交付物：
+
+- 每章保存后可生成 `StateLedgerDelta`，进入下一章 context。
+- draft 前从 ledger 编译 required_state_deltas 和 forbidden regressions。
+- quality report 检查正文是否覆盖 required delta，是否无解释回滚状态。
+
+验收：
+
+- 单测证明状态变化能跨章节传递。
+- 单测证明状态回滚需要解释，否则 warning。
+- 三十章 gate 报告能统计 `stateDeltaCoverage`。
+
+风险与非目标：
+
+- 风险是状态过细导致维护成本高；只记录对剧情、设定、承诺有影响的状态。
+- 非目标是替代完整数据库；先做章节级 ledger。
+
+### P20 通用复杂世界观 Eval Matrix
+
+目标：用压力测试证明系统处理复杂设定的能力，而不是只证明某个样例能写。
+
+涉及模块：
+
+- `fixtures/writing_eval/*`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+- `agent-writer-backend/tests/writing_eval_test.rs`
+
+交付物：
+
+- 新增复杂世界观 fixture，至少覆盖两个不同题材，例如玄幻规则体系、科幻制度/技术体系。
+- 每个 profile 包含 typed rules、relations、hierarchy、forbidden claims、required costs。
+- eval tasks 覆盖抽取、contract 编译、canon violation、cost skipped、hierarchy confusion、state delta、unsupported claim。
+- eval summary 增加 world consistency warning/fail 统计。
+
+验收：
+
+- full writing eval 增加 30+ 通用复杂世界观任务。
+- 至少 2 个 profile 证明 schema 不依赖题材术语。
+- 任一 hard canon violation 从 pass 变 fail 时，trend report 能捕捉 regression。
+
+风险与非目标：
+
+- 风险是 fixture 过拟合；每个任务必须引用 schema，而不是匹配固定词。
+- 非目标是用 LLM judge 取代规则测试；LLM judge 可作为后续辅助，不作为第一阶段门槛。
+
+### 执行顺序
+
+1. P14 先做：没有 typed world assets，后续 canon、contract、validator 都只能继续吃文本块。
+2. P15 与 P18 并行：规则必须可执行，也必须有证据链。
+3. P16 接入章节主链路：把世界观资产转成当前章节可用的 SceneContract。
+4. P17 接入 quality report 和 targeted revision：生成后能发现并修正通用设定跑偏。
+5. P19 扩展长篇状态账本：让复杂规则和状态能跨章节延续。
+6. P20 最后扩展 eval matrix：用多题材压力测试锁住通用能力。
+
+### 完成度重估规则
+
+- P14 完成：复杂世界观“可结构化”能力从 4/10 提升到 5.5/10。
+- P14 + P15 + P18 完成：复杂世界观“可追溯、可约束”能力提升到 7/10。
+- P16 + P17 完成：复杂世界观“可写作化、可校验”能力提升到 8/10。
+- P19 完成并进入三十章 gate：长篇复杂世界观连续性提升到 8.5/10。
+- P20 完成：该能力从项目经验判断变成可回归证据。
+
+### 近期最小闭环
+
+下一轮不要先做庞大全自动理解系统，先完成一个可验证薄切：
+
+1. 新增通用 `WorldRule` / `WorldEntity` / `WorldRelation` / `WorldHierarchy` 草案结构。
+2. 从任意 Markdown fixture 中手工或半自动生成 10-20 条 proposed world assets，全部带 source_ref。
+3. approve 其中 5-8 条，编译成一个章节 `SceneContract`。
+4. 让 draft prompt 注入 compact contract。
+5. 写一个候选文本故意违反 approved rule，quality report 必须给出 violation、正文片段和 source_ref。
+
+## 2026-05-10 通用能力强化首轮开发计划
+
+### 核心判断
+
+P14-P20 是完整路线，但首轮不应该直接做庞大的自动世界观理解系统。真正要先打通的是一个最小可验证闭环：
+
+> EvidenceRef → WorldAsset → CanonConstraint → SceneContract → Draft Prompt → Consistency Violation Report
+
+这条链路跑通以后，再扩展自动抽取、多题材 eval、长篇状态账本才有意义。否则容易变成“抽取了很多设定，但生成链路用不上；生成链路用了设定，但 violation 不可追溯”。
+
+### 首轮目标
+
+用通用数据结构证明系统能处理任意复杂世界观规则，不做题材适配：
+
+- 规则必须有证据来源。
+- 规则必须有批准状态。
+- 章节生成前必须编译成 compact contract。
+- 生成后必须能指出违反哪条规则、正文哪里违反、原文证据在哪里。
+
+### D1 EvidenceRef 与 WorldAsset 最小模型
+
+目标：先建立通用世界观资产的最小表达，不追求一次覆盖全部设定形态。
+
+建议数据结构：
+
+```rust
+pub struct EvidenceRef {
+    pub source_id: String,
+    pub source_path: Option<String>,
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+    pub excerpt: String,
+    pub confidence: f32,
+}
+
+pub enum ApprovalStatus {
+    Proposed,
+    Approved,
+    Rejected,
+}
+
+pub enum WorldAssetKind {
+    Entity,
+    Rule,
+    Relation,
+    Hierarchy,
+    TimelineFact,
+}
+
+pub struct WorldAsset {
+    pub id: String,
+    pub kind: WorldAssetKind,
+    pub name: String,
+    pub summary: String,
+    pub evidence: Vec<EvidenceRef>,
+    pub approval_status: ApprovalStatus,
+    pub tags: Vec<String>,
+}
+```
+
+首轮只要求：
+
+- `EvidenceRef.excerpt` 必填。
+- `WorldAsset.approval_status` 必填。
+- 没有 evidence 的 asset 不能成为 hard constraint。
+- `Proposed` asset 只能用于提示和候选建议，不能用于阻断。
+
+涉及模块：
+
+- 可优先新增在 `agent-writer-backend/src/writer_agent/world_bible.rs` 或同等模块。
+- `agent-writer-backend/src/writer_agent/mod.rs`
+- 后续再接 Project Brain，不在首轮强依赖。
+
+验收：
+
+- 单测覆盖 asset 创建、approval 状态切换、无 evidence 不可 hard enforce。
+- JSON serialization 稳定，方便后续写入项目存储。
+
+### D2 CanonConstraint 最小模型
+
+目标：从 approved `WorldAsset::Rule` 编译出可执行约束。
+
+建议数据结构：
+
+```rust
+pub enum CanonConstraintKind {
+    RequiredFact,
+    ForbiddenClaim,
+    ForbiddenAction,
+    RequiredCost,
+    HierarchyLimit,
+    ExceptionRule,
+}
+
+pub enum ConstraintSeverity {
+    Info,
+    Warning,
+    Hard,
+}
+
+pub struct CanonConstraint {
+    pub id: String,
+    pub kind: CanonConstraintKind,
+    pub summary: String,
+    pub trigger_terms: Vec<String>,
+    pub forbidden_terms: Vec<String>,
+    pub required_terms: Vec<String>,
+    pub severity: ConstraintSeverity,
+    pub source_asset_id: String,
+    pub evidence: Vec<EvidenceRef>,
+}
+```
+
+首轮不做复杂语义推理，先做可解释的启发式：
+
+- `ForbiddenClaim`：正文命中 forbidden_terms 时报告 violation。
+- `RequiredCost`：正文命中 trigger_terms 但缺 required_terms 时报告 violation。
+- `HierarchyLimit`：正文同时命中越级动作和低层级身份时报告 warning/hard。
+
+验收：
+
+- 单测覆盖 forbidden claim、required cost、hierarchy limit。
+- `Proposed` asset 编译出的 constraint 最高只能是 warning。
+- `Approved + Hard` 才允许进入 strict 模式阻断。
+
+### D3 SceneContract 最小模型
+
+目标：把世界观约束转成当前章节的可执行合同，而不是把全量设定塞进 prompt。
+
+建议数据结构：
+
+```rust
+pub struct SceneContract {
+    pub chapter_id: String,
+    pub mission: String,
+    pub required_facts: Vec<CanonConstraint>,
+    pub active_constraints: Vec<CanonConstraint>,
+    pub required_state_deltas: Vec<StateDelta>,
+    pub allowed_reveals: Vec<String>,
+    pub blocked_reveals: Vec<String>,
+    pub evidence_refs: Vec<EvidenceRef>,
+}
+```
+
+首轮策略：
+
+- 按 chapter mission / user instruction / outline keywords 选择最相关的 3-8 条 constraint。
+- contract prompt 使用短摘要，不直接注入长 excerpt。
+- report 保留完整 source evidence。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/craft_prompt.rs`
+- `agent-writer-backend/src/chapter_generation/types_and_utils.in.rs`
+
+验收：
+
+- 单测证明同一组 world assets 能为不同 mission 选择不同 constraints。
+- 单测证明 hard constraints 优先于 warning constraints。
+- prompt snapshot 包含 compact contract，但不包含完整长文档。
+
+### D4 Prompt 注入最小改造
+
+目标：让模型在写作时看到“章节合同”，不是看到散乱设定。
+
+Prompt 建议格式：
+
+```text
+【章节合同】
+- 本章任务：...
+- 必须承认：...
+- 硬性规则：...
+- 触发代价：...
+- 禁止提前揭示：...
+- 本章必须改变的状态：...
+```
+
+要求：
+
+- 控制长度，默认只注入最高相关的 3-8 条。
+- 每条规则带短 source label，例如 `[world:rule-001]`。
+- 不在 prompt 中塞完整证据 excerpt，避免污染正文风格。
+
+验收：
+
+- 单测或 snapshot 证明 prompt 中出现 SceneContract。
+- 旧项目无 SceneContract 时不影响原生成链路。
+- contract 为空时不输出空标题噪音。
+
+### D5 Consistency Validator 最小闭环
+
+目标：写完后能给出可追溯 violation，而不是主观说“不符合设定”。
+
+建议数据结构：
+
+```rust
+pub struct WorldConsistencyViolation {
+    pub constraint_id: String,
+    pub severity: ConstraintSeverity,
+    pub kind: CanonConstraintKind,
+    pub message: String,
+    pub text_excerpt: String,
+    pub evidence: Vec<EvidenceRef>,
+    pub suggested_fix: String,
+}
+```
+
+首轮检查：
+
+- forbidden claim。
+- required cost skipped。
+- hierarchy limit warning。
+
+接入位置：
+
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `ChapterQualityReport` 增加 `world_consistency_violations` 或等价字段。
+- targeted revision 可先只读取 violation message，不必一次做复杂 rewrite。
+
+验收：
+
+- 候选文本故意违反 approved hard rule，report 必须包含 constraint id、正文片段、source excerpt。
+- 候选文本只违反 proposed rule，report 只能 warning，不能 hard fail。
+- 无 evidence 的 constraint 不参与 hard violation。
+
+### D6 Eval 薄切
+
+目标：用最小 fixture 锁住首轮能力，避免只靠人工观察。
+
+新增任务类型建议：
+
+- `world_asset_contract`：验证 approved assets 能编译进 SceneContract。
+- `canon_forbidden_claim`：验证 forbidden claim 被抓出。
+- `canon_required_cost`：验证触发能力但跳过代价被抓出。
+- `canon_proposed_not_hard`：验证 proposed rule 不会 hard block。
+- `scene_contract_prompt`：验证 compact contract 被注入 prompt。
+
+Fixture 要求：
+
+- 至少两个题材样本，每个 5-8 条 world assets。
+- 不使用题材专属字段。
+- 断言基于 asset id / constraint id / severity，不基于固定文案。
+
+验收：
+
+- 首轮新增 10-15 个 eval tasks。
+- `scripts\run-writing-eval.cmd` 通过。
+- trend report 能看到新增 world consistency 类任务。
+
+### 首轮执行顺序
+
+1. D1 数据结构和序列化。
+2. D2 constraint 编译和启发式 validator。
+3. D3 SceneContract 编译。
+4. D4 prompt 注入。
+5. D5 ChapterQualityReport violation 输出。
+6. D6 eval fixture 和趋势报告接入。
+
+### 首轮完成定义
+
+只有同时满足以下条件，才算通用能力强化首轮完成：
+
+- 一个 approved world rule 能从 evidence 进入 SceneContract。
+- draft prompt 能看到 compact contract。
+- 一个违规候选文本能被 validator 抓出。
+- violation 报告包含 source evidence。
+- proposed rule 不会被误当 hard canon。
+- 至少两个不同题材 fixture 通过同一套逻辑。
+
+### 不应提前做的事
+
+- 不先做全自动长文档抽取。
+- 不先做图数据库或复杂 UI。
+- 不先做 LLM judge。
+- 不先让所有生成默认 strict。
+- 不把某个世界观里的术语写进代码。
+
+### 与 P13 的关系
+
+首轮能力默认只应在 `strict` 或测试路径中硬阻断；`balanced` 可以展示 warning；`fast` 不应承担世界观 validator 成本。这样可以避免复杂项目能力拖慢普通写作请求。
+
+## 2026-05-10 Agent 底层能力强化计划
+
+### 核心判断
+
+当前底层不是空白：`AgentLoopEvent` 已有 intent、tool inventory、provider guard、context window、compaction、plan/step、failure bundle、complete/TTFT 等事件；`ExecutionPlan` 已有 step、side effect、failure action；工具层已有 permission/audit；context quality、provider budget、long task checkpoint、sprint checkpoint 也已存在。
+
+真正缺口不是“再加一个业务功能”，而是把这些已有能力统一成可规划、可恢复、可审计、可约束的 agent runtime。
+
+目标链路：
+
+```text
+TaskPacket
+  -> ExecutionPlan
+  -> StepContract
+  -> Context/Tool/Provider Guards
+  -> StepEvidence
+  -> Durable Checkpoint
+  -> Recovery Decision
+  -> Trace / Eval
+```
+
+### 非目标
+
+- 不重写整个 agent loop。
+- 不引入与写作业务强绑定的底层抽象。
+- 不用自然语言 plan 替代结构化 step contract。
+- 不把所有失败都简单 retry。
+- 不让底层 runtime 直接决定创作质量，只提供可靠执行、约束和证据。
+
+### A1 StepContract 与真实 Step 调度
+
+目标：把 `ExecutionPlan` 从“计划对象”升级成真实 step 调度合同。
+
+当前基础：
+
+- `ExecutionPlan` 已有 `ExecutionStep`、`allowed_tools`、`max_side_effect`、`success_signals`、`on_failure`。
+- `AgentLoop` 已能发 `PlanStarted`、`StepStarted`、`StepCompleted`、`StepFailed`、`StepBlocked` 事件。
+
+强化点：
+
+- 新增或明确 `StepContract`：输入摘要、required context、allowed tools、max side effect、provider allowed、success evidence、failure policy。
+- `allowed_tools` 必须真实约束工具调用，不能只依赖 `max_side_effect` 粗过滤。
+- 每个 step 完成时必须生成 `StepEvidence`，包括 artifact refs、tool executions、provider usage、context refs。
+- `success_signals` 至少支持规则化检查：是否产出指定 artifact、是否调用指定只读检查、是否获得 author approval。
+
+涉及模块：
+
+- `agent-harness-core/src/execution_plan.rs`
+- `agent-harness-core/src/agent_loop.rs`
+- `agent-harness-core/src/tool_registry.rs`
+- `agent-harness-core/src/tool_executor.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop.rs`
+
+验收：
+
+- 单测证明 step 级 `allowed_tools` 会隐藏未授权工具。
+- 单测证明 write tool 在 read step 中不可见且不可执行。
+- 单测证明缺少 required evidence 的 step 不能标记 completed。
+- plan resume 时 terminal step 被跳过，running/blocked step 按 contract 恢复。
+
+风险与非目标：
+
+- 风险是 contract 过细导致旧任务适配成本高；先提供默认 contract，并逐步让关键任务显式化。
+- 非目标是让模型自己决定 step contract；contract 由 runtime/task compiler 生成。
+
+### A2 Tool Governance 与 Provider Governance 统一
+
+目标：工具调用和 provider 调用进入同一套治理模型，统一看权限、成本、耗时、输入摘要、输出摘要和失败恢复。
+
+当前基础：
+
+- `ToolSideEffectLevel`、`ToolFilter`、`PermissionPolicy`、`ToolExecutionAuditSink` 已存在。
+- provider budget guard、provider usage、TTFT/total duration 已存在。
+
+交付物：
+
+- `RuntimeCallRecord`：统一记录 tool/provider/context retrieval 调用。
+- provider call 视为 `ProviderCall` side effect，进入 step evidence 和 trace。
+- tool input 记录 redacted summary，避免泄露 key 或大文本。
+- write/proposal/approval tool 必须绑定 approval context 或 proposal id。
+- 失败时输出 remediation code：`refresh_inventory`、`request_approval`、`shrink_context`、`retry_transient`、`abort_unsafe_write`。
+
+涉及模块：
+
+- `agent-harness-core/src/tool_executor.rs`
+- `agent-harness-core/src/provider/*`
+- `agent-writer-backend/src/headless.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+
+验收：
+
+- 单测证明 provider call 会产出 runtime call record。
+- 单测证明 API key / secret 不进入 audit payload。
+- 单测证明 approval-required tool 没有 approval context 时被拒绝，并给出 remediation。
+- trace 中能按 step 聚合 tool count、provider count、duration、失败类型。
+
+风险与非目标：
+
+- 风险是 audit 数据太吵；默认 summary，详细 payload 只在 debug/report JSON 中保存。
+- 非目标是完整 APM 系统；先满足 agent 调试和恢复。
+
+### A3 Durable Checkpoint 统一语义
+
+目标：把 checkpoint 从“存了某些长任务状态”升级成跨 AgentLoop、章节生成、sprint 的统一恢复机制。
+
+当前基础：
+
+- `long_task_checkpoints`、`supervised_sprint_checkpoints` 表已存在。
+- headless 已有 latest checkpoint 和 resume candidates 查询。
+
+统一 checkpoint 字段：
+
+- `checkpoint_id`
+- `task_id`
+- `plan_id`
+- `step_id`
+- `phase`
+- `input_hash`
+- `context_hash`
+- `artifact_refs`
+- `tool_effects`
+- `provider_usage`
+- `budget_spent`
+- `approval_refs`
+- `resume_policy`
+
+交付物：
+
+- `AgentCheckpoint` 或等价类型，供 plan step 和 chapter generation 共用。
+- 每个 step 边界写 checkpoint。
+- provider call 前后可选写 checkpoint。
+- save-prepared / write-before / write-after 三类写操作 checkpoint 明确区分。
+- resume 时根据 `resume_policy` 判断 skip / rerun / require approval / abort。
+
+涉及模块：
+
+- `agent-harness-core/src/agent_loop.rs`
+- `agent-writer-backend/src/writer_agent/memory/sprint_methods.in.rs`
+- `agent-writer-backend/src/writer_agent/supervised_sprint.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/headless.rs`
+
+验收：
+
+- 单测证明 checkpoint roundtrip。
+- 单测证明已完成 step resume 后不会重复执行。
+- 单测证明 save-prepared checkpoint 恢复前会重新走 conflict check。
+- 模拟 provider 中断后能从上一安全 step 恢复。
+
+风险与非目标：
+
+- 风险是恢复点不安全导致重复写入；所有 write resume 必须重新做 conflict/approval 检查。
+- 非目标是任意中间 token 级恢复；按 step/phase 恢复即可。
+
+### A4 Context Runtime 强化
+
+目标：上下文不再只是拼接文本，而是可诊断、可追溯、可复现的输入系统。
+
+当前基础：
+
+- `ContextSourceReport` 已有 taxonomy、role、elapsed_ms、retrieval_status 字段。
+- `ContextQualityReport` 已能输出 coverage、truncation risk、grounding quality、action codes。
+- preflight 已能按 Critical/Supplement 阻断或警告。
+
+交付物：
+
+- 所有真实 context source 填充 `elapsed_ms`、`retrieval_status`、taxonomy、role。
+- context pack 产物带 deterministic ordering 和 source priority。
+- context hash 进入 checkpoint 和 step evidence。
+- 低价值 source 截断，高价值 source 保留证据链。
+- context quality recommendation 直接映射 step failure action：Critical -> blocked，Supplement -> request context supplement。
+
+涉及模块：
+
+- `agent-harness-core/src/context_pack.rs`
+- `agent-harness-core/src/context_quality.rs`
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/run_loop.rs`
+
+验收：
+
+- 单测证明相同输入 context pack 顺序稳定。
+- 单测证明 source timeout/失败不会吞掉其他 source。
+- preflight critical 会阻止 provider call。
+- trace 中能看到 source 级 elapsed_ms 和 retrieval_status。
+
+风险与非目标：
+
+- 风险是 source timing 在测试中不稳定；断言非零/状态存在，不断言具体耗时。
+- 非目标是并行写入上下文源；只读检索可以并行，写操作不并行。
+
+### A5 Failure Taxonomy 与 Recovery Engine
+
+目标：失败不再只是错误字符串，而是能驱动恢复动作的结构化分类。
+
+失败类型：
+
+- `provider_transient`：retry with backoff。
+- `provider_budget`：request approval / shrink context。
+- `context_missing`：request supplement。
+- `context_overflow`：compact / shrink。
+- `tool_permission`：request approval / surface proposal。
+- `tool_schema`：repair args / refresh inventory。
+- `save_conflict`：recheck revision / ask user / create new revision。
+- `quality_gate`：targeted revision / strict block。
+- `doom_loop`：stop with failure bundle。
+- `unsafe_write`：abort。
+
+交付物：
+
+- `FailureKind`、`RecoveryDecision`、`RecoveryBundle` 结构。
+- `StepFailureAction` 与 recovery decision 绑定，不再只靠 step 静态配置。
+- FailureBundle 包含 completed steps、failed step、input context summary、tool/provider events、suggested action。
+- headless/MCP 能返回 recovery options，而不是只返回 error。
+
+涉及模块：
+
+- `agent-harness-core/src/recovery.rs`
+- `agent-harness-core/src/agent_loop.rs`
+- `agent-writer-backend/src/writer_agent/task_receipt.rs`
+- `agent-writer-backend/src/headless.rs`
+
+验收：
+
+- 单测覆盖每类 failure kind 到 recovery decision 的映射。
+- provider 429/5xx -> retry；401/403 -> abort config/auth。
+- context missing -> blocked + supplement actions。
+- save conflict -> 不自动覆盖，必须 surface user choice。
+
+风险与非目标：
+
+- 风险是分类错误导致错误恢复；保守策略优先 stop/ask，不冒险写入。
+- 非目标是自动解决所有失败；目标是给出正确下一步。
+
+### A6 Observability 与 Runtime Report
+
+目标：让性能和质量问题可定位，不靠翻散乱日志。
+
+交付物：
+
+- `AgentRunReport`：plan summary、step summary、tool/provider call timeline、context quality、budget、failure/recovery。
+- provider latency p50/p90/p95、TTFT、total provider duration。
+- 每 step provider calls、tool calls、retry count、duration。
+- context retrieval duration、source missing/truncated count。
+- compaction events 和 tokens saved。
+- report 可导出 JSON，summary 可供 MCP/headless 展示。
+
+涉及模块：
+
+- `agent-harness-core/src/run_trace.rs`
+- `agent-harness-core/src/agent_loop.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+- `agent-writer-backend/src/headless.rs`
+
+验收：
+
+- 单测证明 report 不包含 API key。
+- 单测证明 failed run 也能输出 partial report。
+- 真实或模拟 agent run 能输出 step-level timing summary。
+
+风险与非目标：
+
+- 风险是报告太大；默认 summary，详细 timeline 留 JSON。
+- 非目标是实时 dashboard；先保证数据完整。
+
+### A7 Agent Runtime Eval Harness
+
+目标：用固定测试证明底层 agent runtime 不退化。
+
+新增 eval 维度：
+
+- step 级工具越权。
+- provider budget 阻断。
+- context missing preflight 阻断。
+- transient provider retry。
+- save conflict 不覆盖。
+- checkpoint resume 不重复执行。
+- doom loop stop。
+- approval-required tool 不带 approval 被拒绝。
+- failed run 输出 recovery bundle。
+
+涉及模块：
+
+- `agent-harness-core` tests
+- `agent-writer-backend` integration tests
+- `scripts/*` 可选新增 runtime eval 命令
+
+验收：
+
+- 新增 15-25 个 runtime tests。
+- `cargo test --workspace` 覆盖核心底层退化。
+- runtime report / failure bundle 有 snapshot 或结构断言。
+
+风险与非目标：
+
+- 风险是测试过慢；大部分用 mock provider/mock tool，不调用真实 API。
+- 非目标是把真实长链路测试放进普通 CI。
+
+### 执行顺序
+
+1. A1 StepContract：先让计划变成真实约束。
+2. A2 Tool/Provider Governance：统一调用审计和权限。
+3. A5 Failure Taxonomy：让失败能驱动恢复。
+4. A3 Durable Checkpoint：把恢复动作落到安全恢复点。
+5. A4 Context Runtime：补齐输入系统诊断和可复现性。
+6. A6 Runtime Report：统一输出可观测报告。
+7. A7 Eval Harness：用 mock 场景锁住底层能力。
+
+### 完成度重估规则
+
+- A1 + A2 完成：agent 可约束性从 6/10 提升到 7/10。
+- A5 + A3 完成：agent 可恢复性从 5/10 提升到 7.5/10。
+- A4 完成：复杂任务输入可靠性从 6.5/10 提升到 8/10。
+- A6 完成：性能与失败定位能力从 6/10 提升到 8/10。
+- A7 完成：底层能力从“已有功能”变成“可回归保证”。
+
+### 近期最小闭环
+
+首轮不要铺太大，先做一个端到端薄切：
+
+1. 给 chapter plan 的 preflight/draft/validate/save 四步生成显式 `StepContract`。
+2. 让 draft step 只能看到 provider-call 能力，save step 才能看到 write 能力。
+3. 每步完成产生 `StepEvidence`。
+4. draft step provider transient failure 触发 retry；save conflict 触发 blocked，不自动覆盖。
+5. 每步边界写 mock checkpoint。
+6. failed run 输出 FailureBundle + partial AgentRunReport。
+
+这个闭环跑通后，再把 checkpoint 持久化、context runtime、runtime eval matrix 逐步补齐。
+
+## 2026-05-10 写作 Agent 底层能力强化计划
+
+### 核心判断
+
+通用 agent runtime 解决“任务能否可靠执行”；写作 agent runtime 解决“写作过程能否持续产出有效章节”。两者不同：前者关心 step、工具、checkpoint、失败恢复；后者关心写作合同、故事状态、设定约束、质量诊断、定向修订和长篇连续性。
+
+当前写作链路已有 Craft Library、SceneCraftPlan、ChapterQualityReport、RevisionReport、Craft Memory、required_story_anchors、required_state_deltas、anchor_carry、style_drift、eval trend 等基础。下一步不是继续堆技法，而是把它们统一成写作运行时：
+
+```text
+WritingRunContract
+  -> StoryContext Compiler
+  -> SceneContract
+  -> Draft Planner
+  -> Draft Generation
+  -> Quality Validator
+  -> Revision Controller
+  -> Story Ledger Update
+  -> WritingRunReport
+```
+
+### 非目标
+
+- 不把“文采”硬编码进底层 runtime。
+- 不为某个世界观或题材做专项逻辑。
+- 不让每次写作都走最重 strict 链路。
+- 不把质量判断全部交给 LLM judge。
+- 不让修订变成泛泛“润色一下”。
+
+### W1 WritingRunContract
+
+目标：每次写作任务先形成运行合同，明确任务边界、输出类型、允许动作和成功标准。
+
+合同字段：
+
+- `run_id`
+- `task_kind`：draft / continue / revise / diagnose / plan / sprint。
+- `output_kind`：chapter_text / scene_plan / revision_report / diagnostic / summary。
+- `quality_mode`：fast / balanced / strict。
+- `allowed_actions`：read_context / provider_draft / quality_check / targeted_revision / save。
+- `success_criteria`：mission hit、length compliance、canon consistency、state delta coverage、style floor。
+- `stop_conditions`：budget exceeded、hard canon violation、save conflict、approval required。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/types_and_utils.in.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/headless.rs`
+- `forge-agent-mcp/src/tools.rs`
+
+验收：
+
+- 单测覆盖 fast / balanced / strict 三种 mode 的默认合同。
+- 无合同的旧调用走兼容默认值。
+- contract 能进入 trace/report，方便复盘。
+
+风险与非目标：
+
+- 风险是调用参数膨胀；对外只暴露少量模式，内部展开合同。
+- 非目标是让用户手写完整 contract。
+
+### W2 StoryContext Compiler
+
+目标：把上下文从“资料拼接”升级成“写作上下文包”，为生成和校验提供同一份可追溯输入。
+
+上下文包字段：
+
+- chapter mission。
+- 前文摘要和上一章尾部状态。
+- 角色当前状态。
+- 世界观 / canon constraints。
+- promise ledger / foreshadowing state。
+- required story anchors。
+- required state deltas。
+- author voice snapshot。
+- Craft Memory。
+- blocked reveals / allowed reveals。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/context.in.rs`
+- `agent-writer-backend/src/writer_agent/story_impact/*`
+- `agent-writer-backend/src/writer_agent/memory.rs`
+
+验收：
+
+- 单测证明同一章节上下文可复现，source order 稳定。
+- 缺关键 source 时 preflight 阻断或 warning。
+- context report 能列出每类 source 的来源、预算、是否截断。
+
+风险与非目标：
+
+- 风险是 context 包过大；必须按 priority 和 budget 裁剪。
+- 非目标是把所有项目资料都塞进 prompt。
+
+### W3 SceneContract 标准化
+
+目标：每章生成前明确“本章必须推进什么、不能触碰什么、要付出什么代价”。
+
+合同字段：
+
+- scene objective。
+- opening state。
+- conflict pressure。
+- required choice / action。
+- required state deltas。
+- active canon constraints。
+- required cost / consequence。
+- promise progress target。
+- ending hook。
+- blocked reveals。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_types.rs`
+- `agent-writer-backend/src/chapter_generation/craft_prompt.rs`
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+
+验收：
+
+- 单测证明 required state delta、canon constraint、promise target 能进入 SceneContract。
+- prompt snapshot 证明模型看到的是 compact contract，而不是散乱资料。
+- strict 模式下没有 scene objective 或 required delta 时 preflight warning/block。
+
+风险与非目标：
+
+- 风险是 contract 太硬导致正文僵硬；只放 1-3 个关键 delta 和 3-8 条关键规则。
+- 非目标是自动决定整卷剧情。
+
+### W4 Draft Planner
+
+目标：正文生成前先形成轻量 scene plan，降低散、拖、重复和设定乱飞。
+
+计划字段：
+
+- opening image / opening state。
+- scene objective。
+- opposition / pressure。
+- action chain。
+- reveal / discovery。
+- cost / consequence。
+- ending hook。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_prompt.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+
+验收：
+
+- 单测或 fixture 证明 draft plan 覆盖 SceneContract 的关键项。
+- 正文 prompt 必须引用 plan 的 action chain 和 consequence。
+- plan 不保存为 canon，只保存为 run artifact。
+
+风险与非目标：
+
+- 风险是多一次 provider call 增加成本；fast 模式可跳过，balanced/strict 启用。
+- 非目标是复杂大纲规划，只做本章 scene plan。
+
+### W5 Writing Quality Validator 统一
+
+目标：把已有质量信号统一成写作 runtime 的标准检查层。
+
+指标：
+
+- `mission_hit`
+- `canon_consistency`
+- `state_delta_coverage`
+- `promise_progress`
+- `anchor_carry`
+- `scene_causality`
+- `ending_hook`
+- `repetition`
+- `new_information_density`
+- `style_drift`
+- `length_compliance`
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/writer_agent/anchor_carry.rs`
+- `agent-writer-backend/src/writer_agent/author_voice.rs`
+- `agent-writer-backend/src/bin/eval_runner.rs`
+
+验收：
+
+- ChapterQualityReport 明确区分 pass / warning / hard violation。
+- 每个 metric 必须提供 evidence excerpt 或 insufficient evidence。
+- strict 模式下 hard violation 触发 revision 或阻断；balanced 模式 warning。
+- eval fixture 覆盖至少 mission/state/canon/repetition/new information 五类指标。
+
+风险与非目标：
+
+- 风险是假阳性影响创作；第一阶段 hard gate 只限明确规则冲突和保存风险。
+- 非目标是用单一分数替代作者判断。
+
+### W6 Revision Controller
+
+目标：修订必须根据具体失败点定向执行，而不是泛泛润色。
+
+修订输入：
+
+- failed metrics。
+- violation excerpts。
+- source evidence。
+- SceneContract。
+- allowed edit scope。
+- max revision attempts。
+
+修订输出：
+
+- `RevisionReport`
+- 修订目标列表。
+- before/after score。
+- sentence-level target changes。
+- 是否接受。
+- 未解决问题。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/craft_quality.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/chapter_generation/craft_types.rs`
+
+验收：
+
+- 单测证明缺 state delta 时 revision prompt 要求补行动/选择/后果。
+- 单测证明 canon violation 修订不引入新 unsupported claim。
+- RevisionReport 记录 target -> text change 映射。
+- 修订后若分数未提升，不自动覆盖原稿。
+
+风险与非目标：
+
+- 风险是循环修订；每类失败限制尝试次数，超过后输出报告给作者。
+- 非目标是无限自动改到完美。
+
+### W7 Story Ledger 持久化
+
+目标：长篇连续写作不能只依赖摘要，必须记录跨章节状态变化。
+
+Ledger 类型：
+
+- character knowledge / belief / secret。
+- character physical / emotional / resource state。
+- relationship state。
+- faction stance。
+- promise open / advanced / paid / contradicted。
+- canon rule triggered。
+- cost paid / unpaid。
+- world situation escalated / stabilized。
+
+涉及模块：
+
+- `agent-writer-backend/src/writer_agent/memory.rs`
+- `agent-writer-backend/src/writer_agent/story_impact/*`
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/writer_agent/supervised_sprint.rs`
+
+验收：
+
+- 每章保存后可生成 `StoryLedgerDelta`。
+- 下一章 context 能读取上一章 delta。
+- validator 能识别无解释状态回滚。
+- 三十章 gate 报告能统计 state delta coverage。
+
+风险与非目标：
+
+- 风险是状态记录过多；只记录影响后续剧情/设定/承诺的状态。
+- 非目标是完整知识图谱替代 Project Brain。
+
+### W8 WritingRunReport
+
+目标：每次写作 run 都可复盘，形成持续优化证据。
+
+报告字段：
+
+- WritingRunContract。
+- StoryContext summary。
+- SceneContract。
+- DraftPlan。
+- provider calls / tokens / latency。
+- quality before/after。
+- revision attempts。
+- saved revision id。
+- ledger updates。
+- remaining warnings。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/types_and_utils.in.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/writer_agent/kernel/trace_recording/*`
+- `reports/*`
+
+验收：
+
+- 单测证明报告不包含 API key。
+- failed run 也能输出 partial WritingRunReport。
+- 三章/三十章 gate 报告引用 WritingRunReport summary，而不是只给 pass/fail。
+
+风险与非目标：
+
+- 风险是报告过大；默认 summary，详细 artifact 分文件存储。
+- 非目标是前端可视化，先保证结构数据完整。
+
+### 执行顺序
+
+1. W1 WritingRunContract：先明确每次写作运行边界。
+2. W3 SceneContract：把章节目标、状态变化、规则约束标准化。
+3. W2 StoryContext Compiler：让 context 稳定产出 SceneContract 所需输入。
+4. W5 Quality Validator：把检查层统一起来。
+5. W6 Revision Controller：让修订跟着失败点走。
+6. W7 Story Ledger：把跨章节状态持久化。
+7. W8 WritingRunReport：形成可复盘证据。
+8. W4 Draft Planner：在 balanced/strict 中作为质量增强项接入。
+
+### 完成度重估规则
+
+- W1 + W3 完成：写作任务可控性从 6.5/10 提升到 7.5/10。
+- W2 + W5 完成：章节质量可诊断性提升到 8/10。
+- W6 完成：自动修订有效性提升到 8/10。
+- W7 完成并进入长链路 gate：长篇连续性提升到 8.5/10。
+- W8 完成：写作能力优化从主观判断转成可复盘证据。
+
+### 近期最小闭环
+
+首轮只做一个可验证薄切：
+
+1. 为章节生成新增 `WritingRunContract`，默认 balanced。
+2. 从现有 `required_story_anchors`、`required_state_deltas`、chapter mission 编译 `SceneContract`。
+3. draft prompt 注入 compact SceneContract。
+4. ChapterQualityReport 检查 mission hit、state delta coverage、anchor carry、length compliance。
+5. Targeted revision 针对 state delta missing 或 anchor weak 做一次定向修订。
+6. 输出 WritingRunReport summary，记录 context sources、quality before/after、revision decision。
+
+这个闭环跑通后，再逐步接入 Draft Planner、Story Ledger、repetition/new information gate 和 strict 模式硬阻断。

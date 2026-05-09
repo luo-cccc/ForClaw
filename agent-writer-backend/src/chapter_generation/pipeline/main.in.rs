@@ -18,6 +18,18 @@ where
         .clone()
         .unwrap_or_else(|| make_request_id("chapter"));
 
+    let quality_mode = config.payload.quality_mode.unwrap_or_default();
+    let pipeline_t0 = std::time::Instant::now();
+    let context_built_ms: u64;
+    let draft_produced_ms: u64;
+    let length_repair_ms: u64;
+    let quality_report_ms: u64;
+    let targeted_revision_ms: u64;
+    let save_prepared_ms: u64;
+    let settlement_ms: u64;
+    let mut provider_calls: usize = 0;
+    let mut provider_retries: usize = 0;
+
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
         "start",
@@ -26,6 +38,7 @@ where
         "生成管道已启动",
         0,
         None,
+        Some(quality_mode.clone()),
     ));
 
     emit(ChapterGenerationEvent::progress(
@@ -35,6 +48,7 @@ where
         "正在理解任务并读取工程结构...",
         5,
         None,
+        Some(quality_mode.clone()),
     ));
 
     let memory = crate::writer_agent::memory::WriterMemory::open(&config.memory_path).ok();
@@ -43,6 +57,17 @@ where
         .and_then(|m| m.get_open_promises().ok())
         .map(|p| p.len())
         .unwrap_or(0);
+    let prior_chapter_summaries: Vec<String> = memory
+        .as_ref()
+        .and_then(|m| m.list_recent_chapter_results(&config.project_id, 3).ok())
+        .map(|results| {
+            results
+                .into_iter()
+                .map(|r| r.summary)
+                .filter(|s| !s.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
     let compiled_input = memory.as_ref().map(|m| {
         crate::writer_agent::input_governance::compiler::compile_input(
             m,
@@ -69,10 +94,15 @@ where
         open_promise_count,
     };
 
+    let context_t0 = std::time::Instant::now();
     let mut context = match build_chapter_context(&config.project, build_input).await {
         Ok(context) => context,
         Err(error) => {
-            emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+            emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode.clone()),
+            ));
             return PipelineTerminal::Failed(error);
         }
     };
@@ -80,6 +110,7 @@ where
     // Preflight: select generation strategy based on context size and risk.
     let strategy = select_generation_strategy(&context, 0);
     context.generation_strategy = strategy.clone();
+    context_built_ms = context_t0.elapsed().as_millis() as u64;
 
     record_task_packet(&context);
 
@@ -127,19 +158,22 @@ where
         output_chars: None,
         conflict: None,
         error: None,
-        generation_strategy: Some(strategy),
-        quality_report: None,
-        warnings: context.warnings.clone(),
-    });
+            generation_strategy: Some(strategy),
+            quality_report: None,
+            timing: None,
+            quality_mode: Some(quality_mode.clone()),
+            warnings: context.warnings.clone(),
+        });
 
-    emit(ChapterGenerationEvent::progress_with_detail(
-        &request_id,
-        PHASE_SCENE_PLAN,
+        emit(ChapterGenerationEvent::progress_with_detail(
+            &request_id,
+            PHASE_SCENE_PLAN,
         "场景规划完成",
         "running",
         "正在规划本章场景与长度目标...",
         35,
         Some(context.target.title.clone()),
+        Some(quality_mode.clone()),
     ));
 
     emit(ChapterGenerationEvent::progress_with_detail(
@@ -150,8 +184,10 @@ where
         "正在撰写章节初稿...",
         45,
         Some(context.target.title.clone()),
+        Some(quality_mode.clone()),
     ));
 
+    let draft_t0 = std::time::Instant::now();
     let mut draft = match generate_chapter_draft(
         &config.settings,
         &context,
@@ -171,11 +207,20 @@ where
             if let Some(report) = provider_budget_report_from_error(&error) {
                 record_provider_budget(&context, &report);
             }
-            emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+            emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode.clone()),
+            ));
             return PipelineTerminal::Failed(error);
         }
     };
+    draft_produced_ms = draft_t0.elapsed().as_millis() as u64;
+    provider_calls += draft.provider_budget.provider_calls as usize;
+    provider_retries += draft.provider_budget.provider_retries as usize;
+
     let draft_chars_before_repairs = draft.output_chars;
+    let length_repair_t0 = std::time::Instant::now();
     let mut continuation_applied = false;
     let mut compress_applied = false;
     let mut hard_compress_applied = false;
@@ -197,6 +242,7 @@ where
                 "初稿字数不足，正在续写以满足章节长度约束...",
                 55,
                 Some(context.target.title.clone()),
+                Some(quality_mode.clone()),
             ));
             let continuation_t0 = std::time::Instant::now();
             let continuation = match continue_chapter_draft(
@@ -217,7 +263,11 @@ where
                     if let Some(report) = provider_budget_report_from_error(&error) {
                         record_provider_budget(&context, &report);
                     }
-                    emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+                    emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode.clone()),
+            ));
                     return PipelineTerminal::Failed(error);
                 }
             };
@@ -231,6 +281,8 @@ where
                 continuation_applied = true;
                 continuation_latency_ms = continuation_t0.elapsed().as_millis() as u64;
             }
+            provider_calls += continuation.provider_budget.provider_calls as usize;
+            provider_retries += continuation.provider_budget.provider_retries as usize;
         }
         ChapterContractOutcome::OverMaxChars => {
             emit(ChapterGenerationEvent::progress(
@@ -240,6 +292,7 @@ where
                 "初稿字数超出目标区间，正在压缩正文...",
                 55,
                 Some(context.target.title.clone()),
+                Some(quality_mode.clone()),
             ));
             let compress_t0 = std::time::Instant::now();
             let compressed = match compress_chapter_draft(
@@ -260,7 +313,11 @@ where
                     if let Some(report) = provider_budget_report_from_error(&error) {
                         record_provider_budget(&context, &report);
                     }
-                    emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+                    emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode.clone()),
+            ));
                     return PipelineTerminal::Failed(error);
                 }
             };
@@ -270,6 +327,8 @@ where
                 compress_applied = true;
                 compress_latency_ms = compress_t0.elapsed().as_millis() as u64;
             }
+            provider_calls += compressed.provider_budget.provider_calls as usize;
+            provider_retries += compressed.provider_budget.provider_retries as usize;
         }
         ChapterContractOutcome::Valid
         | ChapterContractOutcome::UnderSaveFloor
@@ -289,6 +348,7 @@ where
             "修复后字数仍超出目标区间，正在进行强压缩...",
             60,
             Some(context.target.title.clone()),
+            Some(quality_mode.clone()),
         ));
         let hard_compress_t0 = std::time::Instant::now();
         let compressed = match compress_chapter_draft_hard(
@@ -309,7 +369,11 @@ where
                 if let Some(report) = provider_budget_report_from_error(&error) {
                     record_provider_budget(&context, &report);
                 }
-                emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+                emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode.clone()),
+            ));
                 return PipelineTerminal::Failed(error);
             }
         };
@@ -319,6 +383,8 @@ where
             hard_compress_applied = true;
             hard_compress_latency_ms = hard_compress_t0.elapsed().as_millis() as u64;
         }
+        provider_calls += compressed.provider_budget.provider_calls as usize;
+        provider_retries += compressed.provider_budget.provider_retries as usize;
     }
 
     emit(ChapterGenerationEvent::progress_with_detail(
@@ -329,6 +395,7 @@ where
         "正在校验章节长度约束...",
         63,
         Some(context.target.title.clone()),
+        Some(quality_mode.clone()),
     ));
 
     if let Err(error) = validate_generated_content(
@@ -336,9 +403,14 @@ where
         &context.chapter_contract,
         ChapterContractPhase::ModelOutput,
     ) {
-        emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+        emit(ChapterGenerationEvent::failed(
+            &request_id,
+            error.clone(),
+            Some(quality_mode.clone()),
+        ));
         return PipelineTerminal::Failed(error);
     }
+    length_repair_ms = length_repair_t0.elapsed().as_millis() as u64;
 
     // Checkpoint 2: draft produced (after length repairs)
     write_chapter_generation_checkpoint(
@@ -362,7 +434,10 @@ where
         anchor_keywords: context.quality_anchor_keywords.clone(),
         author_voice: context.author_voice_snapshot.clone(),
         required_anchors: context.required_story_anchors.clone(),
+        required_state_deltas: context.required_state_deltas.clone(),
+        prior_chapter_summaries,
     };
+    let quality_report_t0 = std::time::Instant::now();
     let quality_report_before = evaluate_chapter_quality_with_signals(
         &draft.content,
         &context.target.title,
@@ -372,6 +447,7 @@ where
         context.chapter_contract.max_chars,
         &quality_signals,
     );
+    quality_report_ms = quality_report_t0.elapsed().as_millis() as u64;
 
     // Targeted revision: if quality report has major/fatal issues, attempt
     // a single revision pass with the ChapterTargetedRevision profile.
@@ -382,7 +458,29 @@ where
     let mut revised_text_attempt: Option<String> = None;
     let mut revision_budget_skipped = false;
     let mut revision_attempted = false;
-    if !quality_report_before.fatal_issues.is_empty() || !quality_report_before.major_issues.is_empty() {
+    let revision_t0 = std::time::Instant::now();
+    let should_revise = match quality_mode {
+        GenerationQualityMode::Fast => false,
+        GenerationQualityMode::Balanced => {
+            !quality_report_before.fatal_issues.is_empty()
+                || !quality_report_before.major_issues.is_empty()
+        }
+        GenerationQualityMode::Strict => {
+            let has_fatal_or_major = !quality_report_before.fatal_issues.is_empty()
+                || !quality_report_before.major_issues.is_empty();
+            let has_strict_gate = quality_report_before.metric_results.iter().any(|m| {
+                matches!(
+                    m.metric.as_str(),
+                    "scene_repetition"
+                        | "plot_progression"
+                        | "new_information_density"
+                        | "state_delta_coverage"
+                ) && m.score < 0.5
+            });
+            has_fatal_or_major || has_strict_gate
+        }
+    };
+    if should_revise {
         let revision_prompt = build_revision_prompt(
             &draft.content,
             &quality_report_before,
@@ -397,6 +495,7 @@ where
                 "正在定向修订低分项...",
                 65,
                 Some(context.target.title.clone()),
+                Some(quality_mode.clone()),
             ));
             let revision_messages =
                 vec![serde_json::json!({"role": "user", "content": revision_prompt})];
@@ -421,14 +520,16 @@ where
             } else {
                 record_provider_budget(&context, &revision_budget);
                 revision_attempted = true;
-                let revision_result = crate::llm_runtime::chat_text_profile(
+                let revision_result = crate::llm_runtime::chat_text_profile_with_usage(
                     &config.settings,
                     revision_messages,
                     crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
                     300,
                 )
                 .await;
-                if let Ok(revised) = revision_result {
+                if let Ok((revised, revision_usage)) = revision_result {
+                    provider_calls += revision_usage.provider_calls as usize;
+                    provider_retries += revision_usage.provider_retries as usize;
                     // Strict length validation per plan.md: re-run ModelOutput contract
                     let length_ok = matches!(
                         chapter_contract_outcome(
@@ -460,6 +561,7 @@ where
             }
         }
     }
+    targeted_revision_ms = revision_t0.elapsed().as_millis() as u64;
     let revision_improved = quality_report_after_revision.is_some();
     let had_issues = !quality_report_before.fatal_issues.is_empty()
         || !quality_report_before.major_issues.is_empty();
@@ -533,6 +635,7 @@ where
         "正在保存章节并检查编辑器冲突...",
         70,
         Some(context.target.title.clone()),
+        Some(quality_mode.clone()),
     ));
 
     let save_input = SaveGeneratedChapterInput {
@@ -545,6 +648,7 @@ where
         frontend_state: config.payload.frontend_state.clone(),
         receipt: context.receipt.clone(),
     };
+    let save_t0 = std::time::Instant::now();
     let saved = match save_generated_chapter(&config.project, save_input) {
         Ok(saved) => saved,
         Err(error) => {
@@ -552,13 +656,19 @@ where
                 emit(ChapterGenerationEvent::conflict(
                     &request_id,
                     conflict.clone(),
+                    Some(quality_mode.clone()),
                 ));
                 return PipelineTerminal::Conflict(conflict);
             }
-            emit(ChapterGenerationEvent::failed(&request_id, error.clone()));
+            emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode.clone()),
+            ));
             return PipelineTerminal::Failed(error);
         }
     };
+    save_prepared_ms = save_t0.elapsed().as_millis() as u64;
 
     // Checkpoint 4: save prepared
     let save_artifact_ref = format!("saved:{}/{}", saved.chapter_title, saved.new_revision);
@@ -581,8 +691,10 @@ where
         "正在更新大纲状态...",
         85,
         Some(saved.chapter_title.clone()),
+        Some(quality_mode.clone()),
     ));
 
+    let settlement_t0 = std::time::Instant::now();
     let mut warnings = Vec::new();
     if let Err(error) = update_outline_after_generation(&config.project, &context.target, &saved) {
         warnings.push(format!("Outline update skipped: {}", error.message));
@@ -628,6 +740,21 @@ where
                 None
             }
         };
+    settlement_ms = settlement_t0.elapsed().as_millis() as u64;
+
+    let timing = ChapterGenerationTiming {
+        context_built_ms,
+        draft_produced_ms,
+        length_repair_ms,
+        quality_report_ms,
+        targeted_revision_ms,
+        save_prepared_ms,
+        settlement_ms,
+        total_ms: pipeline_t0.elapsed().as_millis() as u64,
+        provider_calls,
+        provider_retries,
+    };
+
     let length_telemetry = ChapterLengthTelemetry {
         target_chars: context.chapter_contract.target_chars,
         min_chars: context.chapter_contract.min_chars,
@@ -751,9 +878,11 @@ where
         output_chars: Some(saved.output_chars),
         conflict: None,
         error: None,
-        generation_strategy: Some(context.generation_strategy.clone()),
-        quality_report: Some(final_quality.clone()),
-        warnings,
+            generation_strategy: Some(context.generation_strategy.clone()),
+            quality_report: Some(final_quality.clone()),
+            timing: Some(timing),
+            quality_mode: Some(quality_mode),
+            warnings,
     });
 
     emit(ChapterGenerationEvent::progress_with_detail(
@@ -764,6 +893,7 @@ where
         "生成管道已结束",
         100,
         Some(saved.chapter_title.clone()),
+        Some(quality_mode.clone()),
     ));
 
     PipelineTerminal::Completed {
@@ -946,6 +1076,8 @@ pub fn record_manual_craft_edit_feedback(
         anchor_keywords: request.anchor_keywords.clone(),
         author_voice: request.author_voice.clone(),
         required_anchors: Vec::new(),
+        required_state_deltas: Vec::new(),
+        prior_chapter_summaries: Vec::new(),
     };
     let min_chars = request.target_min_chars.unwrap_or(0);
     let max_chars = request.target_max_chars.unwrap_or_else(|| {
@@ -1503,6 +1635,7 @@ impl ChapterGenerationEvent {
         message: &str,
         progress: u8,
         target_chapter_title: Option<String>,
+        quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
     ) -> Self {
         Self {
             request_id: request_id.to_string(),
@@ -1531,6 +1664,8 @@ impl ChapterGenerationEvent {
             error: None,
             generation_strategy: None,
             quality_report: None,
+            timing: None,
+            quality_mode,
             warnings: vec![],
         }
     }
@@ -1543,6 +1678,7 @@ impl ChapterGenerationEvent {
         message: &str,
         progress: u8,
         target_chapter_title: Option<String>,
+        quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
     ) -> Self {
         Self {
             request_id: request_id.to_string(),
@@ -1571,11 +1707,17 @@ impl ChapterGenerationEvent {
             error: None,
             generation_strategy: None,
             quality_report: None,
+            timing: None,
+            quality_mode,
             warnings: vec![],
         }
     }
 
-    pub fn failed(request_id: &str, error: ChapterGenerationError) -> Self {
+    pub fn failed(
+        request_id: &str,
+        error: ChapterGenerationError,
+        quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
+    ) -> Self {
         Self {
             request_id: request_id.to_string(),
             phase: PHASE_FAILED.to_string(),
@@ -1603,11 +1745,17 @@ impl ChapterGenerationEvent {
             error: Some(error),
             generation_strategy: None,
             quality_report: None,
+            timing: None,
+            quality_mode,
             warnings: vec![],
         }
     }
 
-    pub fn conflict(request_id: &str, conflict: SaveConflict) -> Self {
+    pub fn conflict(
+        request_id: &str,
+        conflict: SaveConflict,
+        quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
+    ) -> Self {
         Self {
             request_id: request_id.to_string(),
             phase: PHASE_CONFLICT.to_string(),
@@ -1635,6 +1783,8 @@ impl ChapterGenerationEvent {
             error: None,
             generation_strategy: None,
             quality_report: None,
+            timing: None,
+            quality_mode,
             warnings: vec![],
         }
     }

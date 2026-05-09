@@ -82,6 +82,16 @@ pub struct SceneCraftPlan {
     pub selected_craft_rules: Vec<String>,
     pub must_avoid: Vec<String>,
     pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub required_state_deltas: Vec<StateDelta>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateDelta {
+    pub delta_type: String,
+    pub description: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -296,6 +296,7 @@ pub fn build_scene_craft_plan(
             .iter()
             .flat_map(|r| r.evidence_refs.clone())
             .collect(),
+        required_state_deltas: Vec::new(),
     }
 }
 

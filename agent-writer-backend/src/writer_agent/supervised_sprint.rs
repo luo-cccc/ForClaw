@@ -25,6 +25,8 @@ pub struct SupervisedSprintPlan {
     pub minimum_quality_score: f32,
     #[serde(default)]
     pub stop_on_fatal_issue: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,6 +39,8 @@ pub struct SprintChapterTarget {
     pub preflight_readiness: Option<String>,
     pub requires_author_review: bool,
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_mode: Option<crate::chapter_generation::GenerationQualityMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -156,6 +160,7 @@ pub fn create_sprint_plan_with_limits(
             preflight_readiness: None,
             requires_author_review: require_approval,
             last_error: None,
+            quality_mode: None,
         })
         .collect();
 
@@ -173,6 +178,7 @@ pub fn create_sprint_plan_with_limits(
         last_checkpoint_id: None,
         minimum_quality_score: 0.4,
         stop_on_fatal_issue: true,
+        quality_mode: None,
     }
 }
 

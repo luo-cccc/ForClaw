@@ -17,6 +17,18 @@ pub async fn generate_chapter_draft(
         ));
     }
 
+    let state_delta_clause = if context.required_state_deltas.is_empty() {
+        "This chapter must materially change at least one story-state element (knowledge, relationship, possession, status, location, decision, or conflict).".to_string()
+    } else {
+        let delta_list: Vec<String> = context.required_state_deltas.iter()
+            .map(|d| format!("[{}] {}", d.delta_type, d.description))
+            .collect();
+        format!(
+            "This chapter MUST change at least one of the following story-state elements through action, dialogue, or consequence (not merely mention them): {}.",
+            delta_list.join("; ")
+        )
+    };
+
     let system_prompt = format!(
         "You are a professional Chinese novelist drafting a complete chapter. \
 Use the provided project context, preserve continuity, and write only chapter prose. \
@@ -27,7 +39,9 @@ If the context names active anchors, carry the relevant anchors into the scene t
 do not merely mention them in passing. \
 Unless the chapter plan explicitly narrows scope, at least three active anchors from the context must materially participate in the scene, \
 and at least one of them must change the immediate choice, pressure, or consequence of the chapter. \
+{} \
 Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, and treat {}-{} as the hard save bounds unless the author explicitly overrides them.",
+        state_delta_clause,
         context.chapter_contract.target_chars,
         context.chapter_contract.min_chars,
         context.chapter_contract.max_chars,
@@ -125,6 +139,10 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         input_chars,
         content.chars().count(),
     );
+
+    let mut budget_report = budget_report;
+    budget_report.provider_calls += usage.provider_calls;
+    budget_report.provider_retries += usage.provider_retries;
 
     let content = content.trim().to_string();
     validate_generated_content_basics(&content)?;
@@ -236,6 +254,10 @@ The finished chapter should move toward {} Chinese characters and must never exc
         input_chars,
         content.chars().count(),
     );
+
+    let mut budget_report = budget_report;
+    budget_report.provider_calls += usage.provider_calls;
+    budget_report.provider_retries += usage.provider_retries;
 
     let content = content.trim().to_string();
     validate_generated_content_basics(&content)?;
@@ -409,6 +431,10 @@ Write only the full revised chapter prose. Keep the chapter within {}-{} Chinese
         input_chars,
         content.chars().count(),
     );
+
+    let mut budget_report = budget_report;
+    budget_report.provider_calls += usage.provider_calls;
+    budget_report.provider_retries += usage.provider_retries;
 
     let content = content.trim().to_string();
     validate_generated_content_basics(&content)?;

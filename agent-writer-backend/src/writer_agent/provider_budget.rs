@@ -69,6 +69,11 @@ pub struct WriterProviderBudgetReport {
     pub calibration_confidence: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration_fallback_reason: Option<String>,
+    // Latency telemetry fields (P8)
+    #[serde(default)]
+    pub provider_calls: u64,
+    #[serde(default)]
+    pub provider_retries: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -264,6 +269,8 @@ pub fn evaluate_provider_budget(
         calibrated_output_tokens: calibrated_output,
         calibration_confidence,
         calibration_fallback_reason: calibration_fallback,
+        provider_calls: 0,
+        provider_retries: 0,
     }
 }
 

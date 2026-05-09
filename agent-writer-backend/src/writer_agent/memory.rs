@@ -748,6 +748,10 @@ impl WriterMemory {
         initialize_schema(&conn)?;
         Ok(Self { conn })
     }
+
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
 }
 
 include!("memory/canon_methods.in.rs");

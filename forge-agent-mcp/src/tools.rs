@@ -291,7 +291,12 @@ pub(crate) fn tools() -> Vec<Value> {
                     },
                     "chapterSummaryOverride": { "type": "string" },
                     "chapterContract": { "type": "object" },
-                    "providerBudgetApproval": { "type": "object" }
+                    "providerBudgetApproval": { "type": "object" },
+                    "qualityMode": {
+                        "type": "string",
+                        "enum": ["fast", "balanced", "strict"],
+                        "description": "Quality mode: fast (no revision), balanced (revision on fatal/major), strict (revision on fatal/major plus low scene_repetition/plot_progression/new_information_density/state_delta_coverage)"
+                    }
                 },
                 "required": ["userInstruction"]
             }),
@@ -305,7 +310,12 @@ pub(crate) fn tools() -> Vec<Value> {
                 "properties": {
                     "chapterTitle": { "type": "string" },
                     "summary": { "type": "string" },
-                    "frontendState": { "type": "object" }
+                    "frontendState": { "type": "object" },
+                    "qualityMode": {
+                        "type": "string",
+                        "enum": ["fast", "balanced", "strict"],
+                        "description": "Quality mode: fast (no revision), balanced (revision on fatal/major), strict (revision on fatal/major plus low scene_repetition/plot_progression/new_information_density/state_delta_coverage)"
+                    }
                 },
                 "required": ["chapterTitle", "summary"]
             }),

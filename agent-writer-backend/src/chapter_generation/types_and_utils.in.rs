@@ -17,7 +17,7 @@ use crate::writer_agent::task_receipt::{
 };
 use crate::{llm_runtime, storage};
 
-pub trait ChapterGenerationProject {
+pub trait ChapterGenerationProject: Send + Sync {
     fn project_id(&self) -> &str;
     fn project_data_dir(&self) -> &std::path::Path;
     fn memory_path(&self) -> &std::path::Path;
@@ -35,6 +35,7 @@ pub trait ChapterGenerationProject {
     fn open_memory_db(&self) -> Option<rusqlite::Connection> {
         None // default: no DB access
     }
+    fn box_clone(&self) -> Box<dyn ChapterGenerationProject>;
 }
 
 pub const PHASE_STARTED: &str = "chapter_generation_started";
@@ -98,6 +99,8 @@ pub struct GenerateChapterAutonomousPayload {
     pub chapter_contract: Option<ChapterContract>,
     #[serde(default)]
     pub provider_budget_approval: Option<WriterProviderBudgetApproval>,
+    #[serde(default)]
+    pub quality_mode: Option<GenerationQualityMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -759,6 +762,8 @@ pub struct BuiltChapterContext {
     pub author_voice_snapshot: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
     #[serde(default)]
     pub required_story_anchors: Vec<StoryAnchor>,
+    #[serde(default)]
+    pub required_state_deltas: Vec<StateDelta>,
 }
 
 #[derive(Debug, Clone)]
@@ -934,7 +939,26 @@ pub struct ChapterGenerationEvent {
     pub generation_strategy: Option<GenerationStrategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_report: Option<ChapterQualityReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<ChapterGenerationTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_mode: Option<GenerationQualityMode>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationTiming {
+    pub context_built_ms: u64,
+    pub draft_produced_ms: u64,
+    pub length_repair_ms: u64,
+    pub quality_report_ms: u64,
+    pub targeted_revision_ms: u64,
+    pub save_prepared_ms: u64,
+    pub settlement_ms: u64,
+    pub total_ms: u64,
+    pub provider_calls: usize,
+    pub provider_retries: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -982,6 +1006,15 @@ pub enum GenerationStrategy {
     InteractiveSafeDraft,
     BackgroundLongChapter,
     RepairHeavyMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationQualityMode {
+    Fast,
+    #[default]
+    Balanced,
+    Strict,
 }
 
 pub fn char_count(text: &str) -> usize {

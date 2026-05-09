@@ -27,6 +27,8 @@ impl ContextComposer {
         content: &str,
         source_cap: usize,
         score: Option<f32>,
+        elapsed_ms: u64,
+        retrieval_status: &str,
     ) {
         if content.trim().is_empty() || self.remaining_chars() == 0 {
             return;
@@ -67,8 +69,8 @@ impl ContextComposer {
             score,
             taxonomy: String::new(),
             role: String::new(),
-            elapsed_ms: 0,
-            retrieval_status: String::new(),
+            elapsed_ms,
+            retrieval_status: retrieval_status.to_string(),
         });
     }
 
