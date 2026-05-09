@@ -9,7 +9,7 @@ use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 const TREND_REGRESSION_THRESHOLD: f32 = 0.05;
@@ -53,9 +53,24 @@ struct EvalRunTrend {
     average_after_score: Option<f32>,
     average_score_delta: Option<f32>,
     metric_after_average: BTreeMap<String, f32>,
+    craft_rule_trends: BTreeMap<String, CraftRuleEvalTrend>,
     task_status: BTreeMap<String, String>,
     task_after_score: BTreeMap<String, f32>,
     failing_tasks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct CraftRuleEvalTrend {
+    rule_id: String,
+    accepted_updates: usize,
+    rejected_updates: usize,
+    stored_examples: usize,
+    stored_bad_patterns: usize,
+    prompt_examples: usize,
+    prompt_bad_patterns: usize,
+    score_delta_sample_count: usize,
+    average_score_delta: Option<f32>,
+    matched_metrics: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +80,18 @@ struct EvalTrendDelta {
     average_after_score_delta: Option<f32>,
     average_score_delta_delta: Option<f32>,
     metric_after_average_delta: BTreeMap<String, f32>,
+    craft_rule_trend_delta: BTreeMap<String, CraftRuleEvalTrendDelta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CraftRuleEvalTrendDelta {
+    accepted_updates_delta: isize,
+    rejected_updates_delta: isize,
+    stored_examples_delta: isize,
+    stored_bad_patterns_delta: isize,
+    prompt_examples_delta: isize,
+    prompt_bad_patterns_delta: isize,
+    average_score_delta_delta: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -811,6 +838,140 @@ fn metric_scores(value: &serde_json::Value) -> BTreeMap<String, f32> {
         .unwrap_or_default()
 }
 
+fn add_metric_counts(target: &mut BTreeMap<String, usize>, metrics: &serde_json::Value) {
+    for metric in metrics.as_array().into_iter().flatten() {
+        if let Some(metric) = metric.as_str() {
+            *target.entry(metric.to_string()).or_insert(0) += 1;
+        }
+    }
+}
+
+fn as_rule_id(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("ruleId")
+        .or_else(|| value.get("rule_id"))
+        .and_then(|rule_id| rule_id.as_str())
+        .filter(|rule_id| !rule_id.trim().is_empty())
+}
+
+fn craft_rule_mut<'a>(
+    trends: &'a mut BTreeMap<String, CraftRuleEvalTrend>,
+    rule_id: &str,
+) -> &'a mut CraftRuleEvalTrend {
+    trends
+        .entry(rule_id.to_string())
+        .or_insert_with(|| CraftRuleEvalTrend {
+            rule_id: rule_id.to_string(),
+            ..CraftRuleEvalTrend::default()
+        })
+}
+
+fn collect_craft_rule_trend_samples(
+    value: &serde_json::Value,
+    trends: &mut BTreeMap<String, CraftRuleEvalTrend>,
+    score_deltas: &mut BTreeMap<String, Vec<f32>>,
+) {
+    for update in value
+        .get("craft_memory_updates")
+        .and_then(|updates| updates.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(rule_id) = as_rule_id(update) else {
+            continue;
+        };
+        let trend = craft_rule_mut(trends, rule_id);
+        let decision = update
+            .get("decision")
+            .and_then(|decision| decision.as_str())
+            .unwrap_or("");
+        if decision.contains("accepted") {
+            trend.accepted_updates += 1;
+        } else if decision.contains("rejected") {
+            trend.rejected_updates += 1;
+        }
+        add_metric_counts(&mut trend.matched_metrics, &update["matchedMetrics"]);
+        add_metric_counts(&mut trend.matched_metrics, &update["matched_metrics"]);
+        if let (Some(before), Some(after)) = (
+            json_number(update, &["scoreBefore"])
+                .or_else(|| json_number(update, &["score_before"])),
+            json_number(update, &["scoreAfter"]).or_else(|| json_number(update, &["score_after"])),
+        ) {
+            score_deltas
+                .entry(rule_id.to_string())
+                .or_default()
+                .push(after - before);
+        }
+    }
+
+    for example in value
+        .get("examples")
+        .and_then(|examples| examples.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(rule_id) = as_rule_id(example) else {
+            continue;
+        };
+        let trend = craft_rule_mut(trends, rule_id);
+        trend.stored_examples += 1;
+        if let Some(delta) =
+            json_number(example, &["scoreDelta"]).or_else(|| json_number(example, &["score_delta"]))
+        {
+            score_deltas
+                .entry(rule_id.to_string())
+                .or_default()
+                .push(delta);
+        }
+    }
+
+    for bad_pattern in value
+        .get("bad_patterns")
+        .or_else(|| value.get("badPatterns"))
+        .and_then(|bad_patterns| bad_patterns.as_array())
+        .into_iter()
+        .flatten()
+    {
+        if let Some(rule_id) = as_rule_id(bad_pattern) {
+            craft_rule_mut(trends, rule_id).stored_bad_patterns += 1;
+        }
+    }
+
+    for example in value
+        .get("memory_examples")
+        .or_else(|| value.get("memoryExamples"))
+        .and_then(|examples| examples.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(rule_id) = as_rule_id(example) else {
+            continue;
+        };
+        let trend = craft_rule_mut(trends, rule_id);
+        trend.prompt_examples += 1;
+        if let Some(delta) =
+            json_number(example, &["scoreDelta"]).or_else(|| json_number(example, &["score_delta"]))
+        {
+            score_deltas
+                .entry(rule_id.to_string())
+                .or_default()
+                .push(delta);
+        }
+    }
+
+    for bad_pattern in value
+        .get("memory_bad_patterns")
+        .or_else(|| value.get("memoryBadPatterns"))
+        .and_then(|bad_patterns| bad_patterns.as_array())
+        .into_iter()
+        .flatten()
+    {
+        if let Some(rule_id) = as_rule_id(bad_pattern) {
+            craft_rule_mut(trends, rule_id).prompt_bad_patterns += 1;
+        }
+    }
+}
+
 fn average(values: &[f32]) -> Option<f32> {
     if values.is_empty() {
         None
@@ -858,6 +1019,8 @@ fn build_eval_run_trend(timestamp: String, results: &[EvalResult]) -> EvalRunTre
     let mut after_scores = Vec::new();
     let mut score_deltas = Vec::new();
     let mut metric_totals = BTreeMap::<String, (f32, usize)>::new();
+    let mut craft_rule_trends = BTreeMap::<String, CraftRuleEvalTrend>::new();
+    let mut craft_rule_score_deltas = BTreeMap::<String, Vec<f32>>::new();
     let mut task_status = BTreeMap::new();
     let mut task_after_score = BTreeMap::new();
     let mut failing_tasks = Vec::new();
@@ -883,12 +1046,22 @@ fn build_eval_run_trend(timestamp: String, results: &[EvalResult]) -> EvalRunTre
                 entry.0 += score;
                 entry.1 += 1;
             }
+            collect_craft_rule_trend_samples(
+                after,
+                &mut craft_rule_trends,
+                &mut craft_rule_score_deltas,
+            );
         }
 
         if let Some(delta) = result.delta.as_ref() {
             if let Some(score_delta) = json_number(delta, &["overall_score"]) {
                 score_deltas.push(score_delta);
             }
+            collect_craft_rule_trend_samples(
+                delta,
+                &mut craft_rule_trends,
+                &mut craft_rule_score_deltas,
+            );
         }
     }
 
@@ -902,6 +1075,11 @@ fn build_eval_run_trend(timestamp: String, results: &[EvalResult]) -> EvalRunTre
             }
         })
         .collect();
+    for (rule_id, deltas) in craft_rule_score_deltas {
+        let trend = craft_rule_mut(&mut craft_rule_trends, &rule_id);
+        trend.score_delta_sample_count = deltas.len();
+        trend.average_score_delta = average(&deltas);
+    }
 
     EvalRunTrend {
         timestamp,
@@ -911,6 +1089,7 @@ fn build_eval_run_trend(timestamp: String, results: &[EvalResult]) -> EvalRunTre
         average_after_score: average(&after_scores),
         average_score_delta: average(&score_deltas),
         metric_after_average,
+        craft_rule_trends,
         task_status,
         task_after_score,
         failing_tasks,
@@ -922,6 +1101,10 @@ fn option_delta(current: Option<f32>, previous: Option<f32>) -> Option<f32> {
         (Some(current), Some(previous)) => Some(current - previous),
         _ => None,
     }
+}
+
+fn usize_delta(current: usize, previous: usize) -> isize {
+    current as isize - previous as isize
 }
 
 fn build_eval_trend_report(
@@ -943,6 +1126,74 @@ fn build_eval_trend_report(
             metric_after_average_delta.insert(metric.clone(), current_score - previous_score);
         }
     }
+    let craft_rule_ids = current
+        .craft_rule_trends
+        .keys()
+        .chain(previous_trend.craft_rule_trends.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut craft_rule_trend_delta = BTreeMap::new();
+    for rule_id in craft_rule_ids {
+        let current_rule = current.craft_rule_trends.get(&rule_id);
+        let previous_rule = previous_trend.craft_rule_trends.get(&rule_id);
+        craft_rule_trend_delta.insert(
+            rule_id,
+            CraftRuleEvalTrendDelta {
+                accepted_updates_delta: usize_delta(
+                    current_rule
+                        .map(|trend| trend.accepted_updates)
+                        .unwrap_or_default(),
+                    previous_rule
+                        .map(|trend| trend.accepted_updates)
+                        .unwrap_or_default(),
+                ),
+                rejected_updates_delta: usize_delta(
+                    current_rule
+                        .map(|trend| trend.rejected_updates)
+                        .unwrap_or_default(),
+                    previous_rule
+                        .map(|trend| trend.rejected_updates)
+                        .unwrap_or_default(),
+                ),
+                stored_examples_delta: usize_delta(
+                    current_rule
+                        .map(|trend| trend.stored_examples)
+                        .unwrap_or_default(),
+                    previous_rule
+                        .map(|trend| trend.stored_examples)
+                        .unwrap_or_default(),
+                ),
+                stored_bad_patterns_delta: usize_delta(
+                    current_rule
+                        .map(|trend| trend.stored_bad_patterns)
+                        .unwrap_or_default(),
+                    previous_rule
+                        .map(|trend| trend.stored_bad_patterns)
+                        .unwrap_or_default(),
+                ),
+                prompt_examples_delta: usize_delta(
+                    current_rule
+                        .map(|trend| trend.prompt_examples)
+                        .unwrap_or_default(),
+                    previous_rule
+                        .map(|trend| trend.prompt_examples)
+                        .unwrap_or_default(),
+                ),
+                prompt_bad_patterns_delta: usize_delta(
+                    current_rule
+                        .map(|trend| trend.prompt_bad_patterns)
+                        .unwrap_or_default(),
+                    previous_rule
+                        .map(|trend| trend.prompt_bad_patterns)
+                        .unwrap_or_default(),
+                ),
+                average_score_delta_delta: option_delta(
+                    current_rule.and_then(|trend| trend.average_score_delta),
+                    previous_rule.and_then(|trend| trend.average_score_delta),
+                ),
+            },
+        );
+    }
 
     let delta = EvalTrendDelta {
         pass_delta: current.pass as isize - previous_trend.pass as isize,
@@ -956,6 +1207,7 @@ fn build_eval_trend_report(
             previous_trend.average_score_delta,
         ),
         metric_after_average_delta,
+        craft_rule_trend_delta,
     };
 
     let mut regressions = Vec::new();
@@ -1000,6 +1252,28 @@ fn build_eval_trend_report(
                 current: serde_json::json!(current.metric_after_average.get(metric)),
                 message: format!("{metric} average dropped by {:.3}", metric_delta),
             });
+        }
+    }
+    for (rule_id, rule_delta) in &delta.craft_rule_trend_delta {
+        if let Some(score_delta) = rule_delta.average_score_delta_delta {
+            if score_delta < -TREND_REGRESSION_THRESHOLD {
+                regressions.push(EvalTrendRegression {
+                    kind: "craft_rule_average_score_delta".to_string(),
+                    subject: rule_id.clone(),
+                    previous: serde_json::json!(previous_trend
+                        .craft_rule_trends
+                        .get(rule_id)
+                        .and_then(|trend| trend.average_score_delta)),
+                    current: serde_json::json!(current
+                        .craft_rule_trends
+                        .get(rule_id)
+                        .and_then(|trend| trend.average_score_delta)),
+                    message: format!(
+                        "{rule_id} craft rule average score delta dropped by {:.3}",
+                        score_delta
+                    ),
+                });
+            }
         }
     }
 
@@ -1164,6 +1438,18 @@ mod tests {
         }
     }
 
+    fn eval_result_with_delta(task: &str, chapter: &str, delta: serde_json::Value) -> EvalResult {
+        EvalResult {
+            task: task.to_string(),
+            chapter: chapter.to_string(),
+            status: "pass".to_string(),
+            before: None,
+            after: None,
+            delta: Some(delta),
+            message: String::new(),
+        }
+    }
+
     #[test]
     fn eval_trend_reports_status_and_metric_regressions() {
         let previous = build_eval_run_trend(
@@ -1205,5 +1491,126 @@ mod tests {
             .regressions
             .iter()
             .any(|regression| regression.kind == "metric_after_average"));
+    }
+
+    #[test]
+    fn eval_trend_groups_craft_memory_evidence_by_rule() {
+        let results = vec![
+            EvalResult {
+                task: "craft_memory".to_string(),
+                chapter: "第二章".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: Some(serde_json::json!({
+                    "examples": [{
+                        "ruleId": "dialogue_function",
+                        "scoreDelta": 0.42
+                    }],
+                    "bad_patterns": [{
+                        "ruleId": "dialogue_function",
+                        "rejectedCount": 2
+                    }]
+                })),
+                delta: None,
+                message: String::new(),
+            },
+            EvalResult {
+                task: "craft_memory_prompt".to_string(),
+                chapter: "第二章".to_string(),
+                status: "pass".to_string(),
+                before: None,
+                after: Some(serde_json::json!({
+                    "memory_examples": [{
+                        "ruleId": "dialogue_function",
+                        "scoreDelta": 0.40
+                    }],
+                    "memory_bad_patterns": [{
+                        "ruleId": "dialogue_function"
+                    }]
+                })),
+                delta: None,
+                message: String::new(),
+            },
+            eval_result_with_delta(
+                "manual_craft_edit",
+                "第二章",
+                serde_json::json!({
+                    "craft_memory_updates": [{
+                        "ruleId": "scene_objective",
+                        "decision": "author_manual_edit_accepted",
+                        "matchedMetrics": ["scene_causality"],
+                        "scoreBefore": 0.50,
+                        "scoreAfter": 0.90
+                    }]
+                }),
+            ),
+        ];
+
+        let trend = build_eval_run_trend("current".to_string(), &results);
+        let dialogue = trend
+            .craft_rule_trends
+            .get("dialogue_function")
+            .expect("dialogue rule trend");
+        assert_eq!(dialogue.stored_examples, 1);
+        assert_eq!(dialogue.stored_bad_patterns, 1);
+        assert_eq!(dialogue.prompt_examples, 1);
+        assert_eq!(dialogue.prompt_bad_patterns, 1);
+        assert_eq!(dialogue.score_delta_sample_count, 2);
+        assert!(dialogue
+            .average_score_delta
+            .is_some_and(|score| score > 0.40 && score < 0.43));
+
+        let scene = trend
+            .craft_rule_trends
+            .get("scene_objective")
+            .expect("scene rule trend");
+        assert_eq!(scene.accepted_updates, 1);
+        assert_eq!(scene.matched_metrics.get("scene_causality"), Some(&1));
+        assert!(scene
+            .average_score_delta
+            .is_some_and(|score| score > 0.39 && score < 0.41));
+    }
+
+    #[test]
+    fn eval_trend_reports_craft_rule_score_regressions() {
+        let previous = build_eval_run_trend(
+            "previous".to_string(),
+            &[eval_result_with_delta(
+                "manual_craft_edit",
+                "第二章",
+                serde_json::json!({
+                    "craft_memory_updates": [{
+                        "ruleId": "scene_objective",
+                        "decision": "author_manual_edit_accepted",
+                        "matchedMetrics": ["scene_causality"],
+                        "scoreBefore": 0.10,
+                        "scoreAfter": 0.90
+                    }]
+                }),
+            )],
+        );
+        let current = build_eval_run_trend(
+            "current".to_string(),
+            &[eval_result_with_delta(
+                "manual_craft_edit",
+                "第二章",
+                serde_json::json!({
+                    "craft_memory_updates": [{
+                        "ruleId": "scene_objective",
+                        "decision": "author_manual_edit_accepted",
+                        "matchedMetrics": ["scene_causality"],
+                        "scoreBefore": 0.10,
+                        "scoreAfter": 0.20
+                    }]
+                }),
+            )],
+        );
+
+        let report = build_eval_trend_report(current, Some(previous));
+
+        assert!(report.regressions.iter().any(|regression| {
+            regression.kind == "craft_rule_average_score_delta"
+                && regression.subject == "scene_objective"
+        }));
     }
 }
