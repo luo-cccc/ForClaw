@@ -123,6 +123,7 @@ pub struct EvalTrendSummary {
     pub summary: Option<serde_json::Value>,
     pub profile_trends: Vec<ProfileEvalTrend>,
     pub markdown_summary: Option<String>,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2262,15 +2263,34 @@ Output ONLY the JSON object, no explanation outside. Example:
             .join("fixtures")
             .join("writing_eval");
 
+        let mut errors = Vec::new();
+
         let summary_path = eval_dir.join("eval_summary.json");
-        let summary: Option<serde_json::Value> = std::fs::read_to_string(&summary_path)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok());
+        let summary = match std::fs::read_to_string(&summary_path) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    errors.push(format!("parse eval_summary.json: {}", e));
+                    None
+                }
+            },
+            Err(e) => {
+                errors.push(format!("read eval_summary.json: {}", e));
+                None
+            }
+        };
 
         let mut profile_trends = Vec::new();
         for profile_dir in std::fs::read_dir(&eval_dir).map_err(|e| e.to_string())? {
             let entry = profile_dir.map_err(|e| e.to_string())?;
-            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            let is_dir = match entry.file_type() {
+                Ok(t) => t.is_dir(),
+                Err(e) => {
+                    errors.push(format!("file_type for {:?}: {}", entry.path(), e));
+                    false
+                }
+            };
+            if !is_dir {
                 continue;
             }
             let profile_name = entry.file_name().to_string_lossy().to_string();
@@ -2278,24 +2298,32 @@ Output ONLY the JSON object, no explanation outside. Example:
             if !trend_path.exists() {
                 continue;
             }
-            let trend: Option<serde_json::Value> = std::fs::read_to_string(&trend_path)
-                .ok()
-                .and_then(|content| serde_json::from_str(&content).ok());
-            if let Some(trend) = trend {
-                profile_trends.push(ProfileEvalTrend {
-                    profile: profile_name,
-                    trend,
-                });
+            match std::fs::read_to_string(&trend_path) {
+                Ok(content) => match serde_json::from_str(&content) {
+                    Ok(trend) => profile_trends.push(ProfileEvalTrend {
+                        profile: profile_name,
+                        trend,
+                    }),
+                    Err(e) => errors.push(format!("parse eval_trend.json for {}: {}", profile_name, e)),
+                },
+                Err(e) => errors.push(format!("read eval_trend.json for {}: {}", profile_name, e)),
             }
         }
 
         let md_path = eval_dir.join("eval_summary.md");
-        let markdown_summary = std::fs::read_to_string(&md_path).ok();
+        let markdown_summary = match std::fs::read_to_string(&md_path) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                errors.push(format!("read eval_summary.md: {}", e));
+                None
+            }
+        };
 
         Ok(EvalTrendSummary {
             summary,
             profile_trends,
             markdown_summary,
+            errors,
         })
     }
 
