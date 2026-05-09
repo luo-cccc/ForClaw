@@ -55,6 +55,8 @@ const DEFAULT_JSON_TEMPERATURE: f64 = 0.0;
 const DEFAULT_CHAT_MAX_TOKENS: u32 = 4_096;
 const DEFAULT_JSON_MAX_TOKENS: u32 = 1_024;
 const JSON_RETRY_MAX_TOKENS_CAP: u32 = 4_096;
+const CHAT_COMPLETION_TRANSIENT_RETRIES: usize = 1;
+const CHAT_COMPLETION_RETRY_DELAY_MS: u64 = 750;
 
 #[derive(Debug, Deserialize)]
 struct RequestProfileConfig {
@@ -452,29 +454,79 @@ async fn chat_text_with_options_raw(
     }
     apply_provider_options(settings, &mut payload, options);
 
-    let resp = client
-        .post(endpoint(&settings.api_base, "chat/completions"))
-        .header("Authorization", format!("Bearer {}", settings.api_key))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let mut last_error = String::new();
+    for attempt in 0..=CHAT_COMPLETION_TRANSIENT_RETRIES {
+        let resp = match client
+            .post(endpoint(&settings.api_base, "chat/completions"))
+            .header("Authorization", format!("Bearer {}", settings.api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = format!("Request failed: {}", e);
+                if should_retry_chat_completion(attempt) {
+                    sleep_before_chat_completion_retry(attempt, &last_error).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "API error {}: {}",
-            status.as_u16(),
-            redact_api_error_body(&text)
-        ));
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            last_error = format!(
+                "API error {}: {}",
+                status.as_u16(),
+                redact_api_error_body(&text)
+            );
+            if is_retryable_chat_status(status) && should_retry_chat_completion(attempt) {
+                sleep_before_chat_completion_retry(attempt, &last_error).await;
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let body: serde_json::Value = match resp.json().await {
+            Ok(body) => body,
+            Err(e) => {
+                last_error = format!("JSON parse: {}", e);
+                if should_retry_chat_completion(attempt) {
+                    sleep_before_chat_completion_retry(attempt, &last_error).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+        return Ok(chat_completion_text_and_usage(body));
     }
+    Err(last_error)
+}
 
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("JSON parse: {}", e))?;
+fn should_retry_chat_completion(attempt: usize) -> bool {
+    attempt < CHAT_COMPLETION_TRANSIENT_RETRIES
+}
+
+fn is_retryable_chat_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+async fn sleep_before_chat_completion_retry(attempt: usize, error: &str) {
+    tracing::warn!(
+        "chat completion transient failure on attempt {}; retrying once: {}",
+        attempt + 1,
+        error
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(
+        CHAT_COMPLETION_RETRY_DELAY_MS,
+    ))
+    .await;
+}
+
+fn chat_completion_text_and_usage(body: serde_json::Value) -> (String, LlmUsage) {
     let content = body["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
@@ -489,7 +541,7 @@ async fn chat_text_with_options_raw(
                 .unwrap_or(0),
             total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
         });
-    Ok((content, usage))
+    (content, usage)
 }
 
 async fn chat_text_with_options(
@@ -846,5 +898,40 @@ mod tests {
         assert!(!text.contains("sk-live-secret"));
         assert!(!text.contains("sk-other"));
         assert!(text.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn retry_policy_only_retries_transient_chat_failures() {
+        assert!(should_retry_chat_completion(0));
+        assert!(!should_retry_chat_completion(1));
+        assert!(is_retryable_chat_status(
+            reqwest::StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(is_retryable_chat_status(reqwest::StatusCode::BAD_GATEWAY));
+        assert!(!is_retryable_chat_status(reqwest::StatusCode::BAD_REQUEST));
+        assert!(!is_retryable_chat_status(reqwest::StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn chat_completion_text_and_usage_extracts_usage() {
+        let (text, usage) = chat_completion_text_and_usage(serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "林墨选择拔刀。"
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 7,
+                "total_tokens": 18
+            }
+        }));
+
+        assert_eq!(text, "林墨选择拔刀。");
+        assert_eq!(usage.prompt_tokens, 11);
+        assert_eq!(usage.completion_tokens, 7);
+        assert_eq!(usage.total_tokens, 18);
     }
 }

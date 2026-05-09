@@ -85,6 +85,81 @@ async fn run_text_profile_smoke(
     text
 }
 
+struct AnchorCarryGateResult {
+    draft: String,
+    hit_count: usize,
+    carry: anchor_carry::AnchorCarryReport,
+    repaired: bool,
+}
+
+async fn repair_anchor_carry_if_needed(
+    settings: &llm_runtime::LlmSettings,
+    test_name: &str,
+    repair_test_name: &str,
+    chapter_label: &str,
+    plan: &str,
+    rolling_summary: &str,
+    anchors: &[&str],
+    draft: String,
+) -> AnchorCarryGateResult {
+    let anchor_list = anchors
+        .iter()
+        .map(|anchor| anchor.to_string())
+        .collect::<Vec<_>>();
+    let mut draft = draft;
+    let mut repaired = false;
+    let mut hit_count = anchors
+        .iter()
+        .filter(|anchor| draft.contains(**anchor))
+        .count();
+    let mut carry = anchor_carry::score_anchor_carry(&draft, &anchor_list);
+
+    if hit_count < 3 || carry.carry_rate < 0.6 {
+        repaired = true;
+        let repair_context = [
+            format!("{chapter_label}初稿没有通过锚点参与度 gate。"),
+            format!("当前计划: {plan}"),
+            format!(
+                "必须让这些锚点中的至少 3 个通过行动、对话、后果或债务压力参与当前场景: {}。",
+                anchors.join("、")
+            ),
+            "不要只罗列名词；每个被保留锚点都必须改变人物选择、场景压力或结尾后果。".to_string(),
+            "重写完整中文正文，保持原有主线信息，但承接上一章继续推进，不能整段复述旧对话。"
+                .to_string(),
+            format!("前文摘要: {rolling_summary}"),
+            format!("未通过初稿:\n{draft}"),
+        ]
+        .join("\n");
+        draft = run_text_profile_smoke(
+            settings,
+            repair_test_name,
+            llm_runtime::LlmRequestProfile::ChapterDraft,
+            vec![
+                serde_json::json!({"role": "system", "content": "你是中文长篇小说作者。只输出重写后的完整正文。优先保证连续性、锚点参与、情绪债务和章节推进。"}),
+                serde_json::json!({"role": "user", "content": repair_context}),
+            ],
+            90,
+        )
+        .await;
+        hit_count = anchors
+            .iter()
+            .filter(|anchor| draft.contains(**anchor))
+            .count();
+        carry = anchor_carry::score_anchor_carry(&draft, &anchor_list);
+        eprintln!(
+            "{test_name} repaired {chapter_label}: hit_count={} carry_rate={:.2}",
+            hit_count, carry.carry_rate
+        );
+    }
+
+    AnchorCarryGateResult {
+        draft,
+        hit_count,
+        carry,
+        repaired,
+    }
+}
+
 #[tokio::test]
 async fn health_check_models_endpoint() {
     let Some(settings) = test_settings("health_check_models_endpoint") else {
@@ -480,31 +555,38 @@ async fn real_author_session_three_chapter_smoke() {
         )
         .await;
 
-        let hit_count = anchors
-            .iter()
-            .filter(|anchor| draft.contains(**anchor))
-            .count();
-        assert!(
-            hit_count >= 3,
-            "chapter draft dropped too many anchors: hit_count={hit_count} draft={draft}"
-        );
-
-        let carry_rate = anchor_carry::score_anchor_carry(
-            &draft,
-            &anchors
-                .iter()
-                .map(|anchor| anchor.to_string())
-                .collect::<Vec<_>>(),
+        let gate = repair_anchor_carry_if_needed(
+            &settings,
+            "real_author_session_three_chapter_smoke",
+            "real_author_session_three_chapter_smoke.repair",
+            plan.split_once('：')
+                .map(|(label, _)| label)
+                .unwrap_or(plan),
+            plan,
+            &rolling_summary,
+            &anchors,
+            draft,
         )
-        .carry_rate;
-        carry_rates.push(carry_rate);
-        drafts.push(draft.clone());
+        .await;
         assert!(
-            carry_rate >= 0.6,
-            "chapter draft anchor carry too weak: carry_rate={carry_rate:.2} draft={draft}"
+            gate.hit_count >= 3,
+            "chapter draft dropped too many anchors: hit_count={} repaired={} draft={}",
+            gate.hit_count,
+            gate.repaired,
+            gate.draft
         );
 
-        rolling_summary = preview_text(&draft, 220);
+        carry_rates.push(gate.carry.carry_rate);
+        drafts.push(gate.draft.clone());
+        assert!(
+            gate.carry.carry_rate >= 0.6,
+            "chapter draft anchor carry too weak: carry_rate={:.2} repaired={} draft={}",
+            gate.carry.carry_rate,
+            gate.repaired,
+            gate.draft
+        );
+
+        rolling_summary = preview_text(&gate.draft, 220);
     }
 
     eprintln!(
@@ -570,86 +652,44 @@ async fn real_author_session_thirty_chapter_gate() {
         )
         .await;
 
-        let mut draft = draft;
-        let mut repaired = false;
-        let mut hit_count = anchors
-            .iter()
-            .filter(|anchor| draft.contains(**anchor))
-            .count();
-        let mut carry = anchor_carry::score_anchor_carry(
-            &draft,
-            &anchors
-                .iter()
-                .map(|anchor| anchor.to_string())
-                .collect::<Vec<_>>(),
-        );
-        if hit_count < 3 || carry.carry_rate < 0.6 {
-            repaired = true;
-            let repair_context = [
-                format!("第{}章初稿没有通过锚点参与度 gate。", index),
-                format!("当前计划: 第{}章：{}", index, plan),
-                format!(
-                    "必须让这些锚点中的至少 3 个通过行动、对话、后果或债务压力参与当前场景: {}。",
-                    anchors.join("、")
-                ),
-                "不要只罗列名词；每个被保留锚点都必须改变人物选择、场景压力或结尾后果。"
-                    .to_string(),
-                "重写完整中文正文，保持原有主线信息，但承接上一章继续推进，不能整段复述旧对话。"
-                    .to_string(),
-                format!("前文摘要: {}", rolling_summary),
-                format!("未通过初稿:\n{}", draft),
-            ]
-            .join("\n");
-            draft = run_text_profile_smoke(
-                &settings,
-                "real_author_session_thirty_chapter_gate.repair",
-                llm_runtime::LlmRequestProfile::ChapterDraft,
-                vec![
-                    serde_json::json!({"role": "system", "content": "你是中文长篇小说作者。只输出重写后的完整正文。优先保证连续性、锚点参与、情绪债务和章节推进。"}),
-                    serde_json::json!({"role": "user", "content": repair_context}),
-                ],
-                90,
-            )
-            .await;
-            hit_count = anchors
-                .iter()
-                .filter(|anchor| draft.contains(**anchor))
-                .count();
-            carry = anchor_carry::score_anchor_carry(
-                &draft,
-                &anchors
-                    .iter()
-                    .map(|anchor| anchor.to_string())
-                    .collect::<Vec<_>>(),
-            );
-        }
+        let gate = repair_anchor_carry_if_needed(
+            &settings,
+            "real_author_session_thirty_chapter_gate",
+            "real_author_session_thirty_chapter_gate.repair",
+            &format!("第{}章", index),
+            &format!("第{}章：{}", index, plan),
+            &rolling_summary,
+            &anchors,
+            draft,
+        )
+        .await;
 
-        if hit_count < 3 {
+        if gate.hit_count < 3 {
             errors.push(format!(
                 "chapter {} dropped too many anchors: hit_count={}",
-                index, hit_count
+                index, gate.hit_count
             ));
         }
-        if carry.carry_rate < 0.6 {
+        if gate.carry.carry_rate < 0.6 {
             errors.push(format!(
                 "chapter {} anchor carry too weak: {:.2}",
-                index, carry.carry_rate
+                index, gate.carry.carry_rate
             ));
         }
 
-        drafts.push(draft.clone());
-        carry_rates.push(carry.carry_rate);
-        anchor_hit_rates.push(carry.mention_rate);
+        drafts.push(gate.draft.clone());
+        carry_rates.push(gate.carry.carry_rate);
+        anchor_hit_rates.push(gate.carry.mention_rate);
         chapter_reports.push(serde_json::json!({
             "chapter": index,
-            "chars": draft.chars().count(),
-            "anchorHitCount": hit_count,
-            "anchorMentionRate": carry.mention_rate,
-            "anchorCarryRate": carry.carry_rate,
-            "repaired": repaired,
-            "preview": preview_text(&draft, 220),
+            "chars": gate.draft.chars().count(),
+            "anchorHitCount": gate.hit_count,
+            "anchorMentionRate": gate.carry.mention_rate,
+            "anchorCarryRate": gate.carry.carry_rate,
+            "repaired": gate.repaired,
+            "preview": preview_text(&gate.draft, 220),
         }));
-        rolling_summary = preview_text(&draft, 220);
+        rolling_summary = preview_text(&gate.draft, 220);
     }
 
     let avg_chars = drafts
