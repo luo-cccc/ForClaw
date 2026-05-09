@@ -74,10 +74,11 @@ fn eval_fixture_lorebook_has_required_entities() {
 fn eval_fixture_outline_has_two_chapters() {
     let fixture = load_fixture();
     let outline = fixture["outline"].as_array().unwrap();
-    assert!(outline.len() >= 3);
+    assert!(outline.len() >= 4);
     assert_eq!(outline[0]["chapterTitle"], "第一章");
     assert_eq!(outline[1]["chapterTitle"], "第二章");
     assert_eq!(outline[2]["chapterTitle"], "第三章");
+    assert_eq!(outline[3]["chapterTitle"], "第四章");
 }
 
 #[test]
@@ -150,7 +151,7 @@ fn eval_quality_evaluation_task() {
 fn eval_fixture_has_expanded_task_coverage() {
     let tasks = load_tasks();
     assert!(
-        tasks.len() >= 10,
+        tasks.len() >= 13,
         "eval fixture should cover more than the initial 3 shallow tasks"
     );
     assert!(tasks
@@ -174,6 +175,36 @@ fn eval_fixture_has_expanded_task_coverage() {
     assert!(tasks
         .iter()
         .any(|task| task.task == "craft_memory_prompt" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "canon_conflict" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "planning_review" && task.chapter == "第三章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "promise_progression" && task.chapter == "第二章"));
+}
+
+#[test]
+fn eval_fixture_has_canon_and_promise_coverage() {
+    let fixture = load_fixture();
+    let canon = fixture["canon"].as_array().expect("canon fixture");
+    assert!(canon.iter().any(|rule| {
+        rule["id"] == "cold-shadow-cost"
+            && rule["forbidden"]
+                .as_array()
+                .is_some_and(|forbidden| !forbidden.is_empty())
+    }));
+
+    let promises = fixture["promises"].as_array().expect("promise fixture");
+    assert!(promises.iter().any(|promise| {
+        promise["title"] == "寒影剑代价"
+            && promise["status"] == "open"
+            && promise["progress_markers"]
+                .as_array()
+                .is_some_and(|markers| markers.iter().any(|marker| marker == "白发"))
+    }));
 }
 
 #[test]

@@ -8,3 +8,6 @@
 {"task":"craft_memory","chapter":"第二章","metrics":["dialogue_function"],"expected":{"min_examples":1,"min_bad_patterns":1}}
 {"task":"manual_craft_edit","chapter":"第二章","metrics":["dialogue_function","scene_causality"],"expected":{"before_text":"林墨说：这是古剑。散修站在门口，没有回答。","after_text":"林墨握紧寒影剑，低声说：现在你必须选择。散修因此停在门口，第一次露出退意。","min_examples":1,"min_bad_patterns":1,"requires_excerpt_mapping":true}}
 {"task":"craft_memory_prompt","chapter":"第二章","metrics":["dialogue_function"],"expected":{"must_contain":["项目写法记忆","必须选择","一整段古剑来历"]}}
+{"task":"canon_conflict","chapter":"第二章","check":"寒影剑代价冲突","expected":{"candidate_text":"林墨拔出寒影剑，寒影剑没有代价，反而替他免费救他。","canon_conflict":true,"must_conflict":["cold-shadow-cost"]}}
+{"task":"planning_review","chapter":"第三章","instruction":"回到青云宗，执事审问，林墨必须决定是否隐瞒寒影剑的代价，并推进寒影剑代价伏笔","expected":{"required_rules":["scene_objective","conflict_pressure","promise_advance"],"required_payoff_keywords":["代价"],"requires_ending_hook":true}}
+{"task":"promise_progression","chapter":"第二章","metrics":["promise_progress"],"expected":{"required_promises":["寒影剑代价"],"min_progressed":1}}

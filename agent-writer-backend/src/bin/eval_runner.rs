@@ -1,5 +1,5 @@
 use agent_writer_lib::chapter_generation::{
-    build_revision_target_changes, build_revision_target_changes_with_text,
+    build_revision_target_changes, build_revision_target_changes_with_text, build_scene_craft_plan,
     compile_empowerment_prompt, compile_empowerment_prompt_with_memory,
     evaluate_chapter_quality_with_signals, format_craft_prompt_section, ChapterQualitySignals,
     CraftMemoryPromptBadPattern, CraftMemoryPromptExample, CraftMemoryPromptSamples,
@@ -734,6 +734,235 @@ fn run_craft_memory_prompt_eval(task: &EvalTask, _fixture: &serde_json::Value) -
     }
 }
 
+fn run_canon_conflict_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
+    let candidate_text = task
+        .expected
+        .get("candidate_text")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let canon_rules = fixture["canon"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut conflicts = Vec::new();
+    for rule in &canon_rules {
+        let rule_id = rule["id"].as_str().unwrap_or("canon");
+        for forbidden in rule["forbidden"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+        {
+            if candidate_text.contains(forbidden) {
+                conflicts.push(format!("{rule_id}:{forbidden}"));
+            }
+        }
+    }
+    let expected_conflict = task.expected["canon_conflict"].as_bool().unwrap_or(false);
+    let status = if expected_conflict != conflicts.is_empty() {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({
+            "candidate_text": candidate_text,
+            "canon_rules": canon_rules,
+        })),
+        after: Some(serde_json::json!({
+            "conflicts": conflicts,
+        })),
+        delta: None,
+        message: format!("canon_conflict conflicts={:?}", conflicts),
+    }
+}
+
+fn run_planning_review_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
+    let outline = fixture["outline"].as_array().unwrap();
+    let chapter_summary = outline
+        .iter()
+        .find(|node| node["chapterTitle"].as_str() == Some(&task.chapter))
+        .and_then(|node| node["summary"].as_str())
+        .unwrap_or("");
+    let next_summary = outline
+        .windows(2)
+        .find(|pair| pair[0]["chapterTitle"].as_str() == Some(&task.chapter))
+        .and_then(|pair| pair[1]["summary"].as_str());
+    let instruction = task.instruction.as_deref().unwrap_or("");
+    let objective = format!("{chapter_summary} {instruction}");
+    let packet = compile_empowerment_prompt(
+        &objective,
+        "计划评审",
+        fixture["promises"]
+            .as_array()
+            .map(|promises| promises.len())
+            .unwrap_or_default(),
+        objective.contains("兑现") || objective.contains("代价"),
+        Some(5),
+        Some(1200),
+        None,
+    );
+    let participants = ["林墨", "执事", "青云宗"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let open_promise_keywords = fixture["promises"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|promise| promise["status"].as_str() == Some("open"))
+        .filter_map(|promise| promise["keyword"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    let plan = build_scene_craft_plan(
+        &task.chapter,
+        &objective,
+        &participants,
+        "计划评审",
+        next_summary,
+        &open_promise_keywords,
+        &packet,
+    );
+
+    let expected_rules = task.expected["required_rules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    let missing_rules = expected_rules
+        .iter()
+        .filter(|rule| {
+            !plan
+                .selected_craft_rules
+                .iter()
+                .any(|selected| selected == **rule)
+        })
+        .map(|rule| (*rule).to_string())
+        .collect::<Vec<_>>();
+    let expected_payoffs = task.expected["required_payoff_keywords"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    let missing_payoffs = expected_payoffs
+        .iter()
+        .filter(|keyword| {
+            !plan
+                .promise_or_anchor_payoff
+                .iter()
+                .any(|payoff| payoff.contains(**keyword))
+        })
+        .map(|keyword| (*keyword).to_string())
+        .collect::<Vec<_>>();
+    let requires_hook = task.expected["requires_ending_hook"]
+        .as_bool()
+        .unwrap_or(false);
+    let hook_ok = !requires_hook || !plan.ending_hook.question_left_open.trim().is_empty();
+    let status = if missing_rules.is_empty() && missing_payoffs.is_empty() && hook_ok {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({
+            "objective": objective,
+            "open_promise_keywords": open_promise_keywords,
+        })),
+        after: Some(serde_json::json!({
+            "scene_plan": plan,
+            "selected_rules": packet.craft_rules,
+        })),
+        delta: Some(serde_json::json!({
+            "missing_rules": missing_rules,
+            "missing_payoffs": missing_payoffs,
+            "hook_ok": hook_ok,
+        })),
+        message: format!(
+            "planning_review missing_rules={:?}, missing_payoffs={:?}, hook_ok={}",
+            missing_rules, missing_payoffs, hook_ok
+        ),
+    }
+}
+
+fn run_promise_progression_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
+    let chapter_text = fixture["chapters"][&task.chapter].as_str().unwrap_or("");
+    let promises = fixture["promises"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut progressed = Vec::new();
+    let mut missing = Vec::new();
+    for promise in &promises {
+        if promise["status"].as_str() != Some("open") {
+            continue;
+        }
+        let title = promise["title"].as_str().unwrap_or("promise");
+        let keyword_hit = promise["keyword"]
+            .as_str()
+            .is_some_and(|keyword| chapter_text.contains(keyword));
+        let progress_hit = promise["progress_markers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .any(|marker| chapter_text.contains(marker));
+        if keyword_hit && progress_hit {
+            progressed.push(title.to_string());
+        } else {
+            missing.push(title.to_string());
+        }
+    }
+    let min_progressed = task.expected["min_progressed"].as_u64().unwrap_or(1) as usize;
+    let required_titles = task.expected["required_promises"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    let missing_required = required_titles
+        .iter()
+        .filter(|title| !progressed.iter().any(|progressed| progressed == **title))
+        .map(|title| (*title).to_string())
+        .collect::<Vec<_>>();
+    let status = if progressed.len() >= min_progressed && missing_required.is_empty() {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({
+            "open_promises": promises,
+        })),
+        after: Some(serde_json::json!({
+            "progressed": progressed,
+            "missing": missing,
+        })),
+        delta: Some(serde_json::json!({
+            "progressed_count": progressed.len(),
+            "missing_required": missing_required,
+        })),
+        message: format!(
+            "promise_progression progressed={:?}, missing_required={:?}",
+            progressed, missing_required
+        ),
+    }
+}
+
 fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySignals {
     let mut anchors = Vec::new();
     for entry in fixture["lorebook"].as_array().into_iter().flatten() {
@@ -1342,6 +1571,9 @@ fn main() {
             "craft_memory" => run_craft_memory_eval(task, &fixture),
             "manual_craft_edit" => run_manual_craft_edit_eval(task, &fixture),
             "craft_memory_prompt" => run_craft_memory_prompt_eval(task, &fixture),
+            "canon_conflict" => run_canon_conflict_eval(task, &fixture),
+            "planning_review" => run_planning_review_eval(task, &fixture),
+            "promise_progression" => run_promise_progression_eval(task, &fixture),
             "continuity_diagnostic" => run_continuity_diagnostic_eval(task, &fixture),
             other => EvalResult {
                 task: task.task.clone(),
