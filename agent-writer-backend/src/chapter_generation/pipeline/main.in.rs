@@ -343,6 +343,7 @@ where
     // a single revision pass with the ChapterTargetedRevision profile.
     
     let mut quality_report_after_revision: Option<ChapterQualityReport> = None;
+    let mut revision_budget_skipped = false;
     if !quality_report_before.fatal_issues.is_empty() || !quality_report_before.major_issues.is_empty() {
         let revision_prompt = build_revision_prompt(
             &draft.content,
@@ -374,8 +375,10 @@ where
             if revision_budget.decision
                 == crate::writer_agent::provider_budget::WriterProviderBudgetDecision::ApprovalRequired
             {
+                revision_budget_skipped = true;
                 // Budget not approved — skip revision, keep original draft
             } else if ensure_provider_budget_allowed(&context, &revision_budget).is_err() {
+                revision_budget_skipped = true;
                 // Budget denied — skip revision
             } else {
                 record_provider_budget(&context, &revision_budget);
@@ -418,15 +421,37 @@ where
     let revision_improved = quality_report_after_revision.is_some();
     let had_issues = !quality_report_before.fatal_issues.is_empty()
         || !quality_report_before.major_issues.is_empty();
-    let final_quality = quality_report_after_revision.unwrap_or(quality_report_before.clone());
+    let final_quality = quality_report_after_revision
+        .clone()
+        .unwrap_or(quality_report_before.clone());
 
-    // Craft memory feedback: record accept/reject based on revision outcome
+    let revision_report = RevisionReport {
+        chapter_title: context.target.title.clone(),
+        request_id: request_id.clone(),
+        triggered: had_issues,
+        budget_skipped: revision_budget_skipped,
+        top_issues_before: quality_report_before.top_revision_targets.clone(),
+        score_before: quality_report_before.overall_score,
+        score_after: quality_report_after_revision.as_ref().map(|r| r.overall_score),
+        accepted: revision_improved,
+        reason: if revision_improved {
+            "Revision improved overall quality score".to_string()
+        } else if !had_issues {
+            "No major or fatal issues detected — revision not needed".to_string()
+        } else if revision_budget_skipped {
+            "Revision skipped due to budget constraints".to_string()
+        } else {
+            "Revision did not improve quality score — keeping original draft".to_string()
+        },
+    };
+
+    // Craft memory feedback: record accept/reject for rules actually injected
     if let Some(ref conn) = config.project.open_memory_db() {
         let scope = &context.target.title;
         let rule_ids: Vec<String> = context
-            .craft_rule_stats
+            .craft_plan
             .as_ref()
-            .map(|m| m.keys().cloned().collect())
+            .map(|p| p.selected_craft_rules.clone())
             .unwrap_or_default();
         for rule_id in &rule_ids {
             if revision_improved {
@@ -582,18 +607,41 @@ where
                     runtime_dir.join(format!("{}.quality_report.before.json", stem));
                 let after_path =
                     runtime_dir.join(format!("{}.quality_report.after.json", stem));
-                let _ = std::fs::write(
-                    &before_path,
-                    serde_json::to_string_pretty(&quality_report_before).unwrap_or_default(),
-                );
-                let _ = std::fs::write(
-                    &after_path,
-                    serde_json::to_string_pretty(&final_quality).unwrap_or_default(),
-                );
-                // Include quality reports in artifact refs
                 let mut refs = artifacts.artifact_refs;
-                refs.push(format!("chapter_runtime/{}.quality_report.before.json", stem));
-                refs.push(format!("chapter_runtime/{}.quality_report.after.json", stem));
+                write_runtime_artifact(
+                    &before_path,
+                    &quality_report_before,
+                    format!("chapter_runtime/{}.quality_report.before.json", stem),
+                    &mut refs,
+                    &mut warnings,
+                );
+                write_runtime_artifact(
+                    &after_path,
+                    &final_quality,
+                    format!("chapter_runtime/{}.quality_report.after.json", stem),
+                    &mut refs,
+                    &mut warnings,
+                );
+                // Write context quality report
+                if let Some(ref cq) = context.context_quality {
+                    let cq_path = runtime_dir.join(format!("{}.context_quality.json", stem));
+                    write_runtime_artifact(
+                        &cq_path,
+                        cq,
+                        format!("chapter_runtime/{}.context_quality.json", stem),
+                        &mut refs,
+                        &mut warnings,
+                    );
+                }
+                // Write revision report
+                let rev_path = runtime_dir.join(format!("{}.revision_report.json", stem));
+                write_runtime_artifact(
+                    &rev_path,
+                    &revision_report,
+                    format!("chapter_runtime/{}.revision_report.json", stem),
+                    &mut refs,
+                    &mut warnings,
+                );
                 Some(refs)
             }
             Err(error) => {
@@ -672,6 +720,30 @@ fn build_chapter_settlement_delta<P: ChapterGenerationProject>(
             .cloned()
             .collect(),
     ))
+}
+
+fn write_runtime_artifact<T: serde::Serialize>(
+    path: &std::path::Path,
+    value: &T,
+    artifact_ref: String,
+    artifact_refs: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => match std::fs::write(path, json) {
+            Ok(()) => artifact_refs.push(artifact_ref),
+            Err(error) => warnings.push(format!(
+                "Runtime artifact {} skipped: {}",
+                path.display(),
+                error
+            )),
+        },
+        Err(error) => warnings.push(format!(
+            "Runtime artifact {} serialization failed: {}",
+            path.display(),
+            error
+        )),
+    }
 }
 
 pub fn select_generation_strategy(

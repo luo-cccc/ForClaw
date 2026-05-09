@@ -5,3 +5,5 @@
 reports/
 dist/
 node_modules/
+/fixtures/writing_eval/eval_output.jsonl
+/ruvector.db

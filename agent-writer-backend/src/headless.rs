@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use agent_harness_core::context_quality::ContextQualityReport;
 use agent_harness_core::provider::openai_compat::OpenAiCompatProvider;
 use agent_harness_core::provider::LlmMessage;
 use agent_harness_core::tool_executor::{
@@ -2670,16 +2671,41 @@ Output ONLY the JSON object, no explanation outside. Example:
             }
             "context_quality_report" => {
                 let chapter_title = required_string(&params, "chapterTitle")?;
-                // Context quality reports are persisted as artifacts during generation.
-                // Check chapter_runtime/{chapter}-*.quality_report.before.json
                 let runtime_dir = project_data_dir(&self.config.data_dir, &self.project.id)
                     .map(|p| p.join("chapter_runtime"))
                     .unwrap_or_default();
-                to_value(serde_json::json!({
-                    "chapterTitle": chapter_title,
-                    "artifactPath": runtime_dir.to_string_lossy(),
-                    "note": "Context quality reports are in chapter_runtime artifacts as quality_report.before.json and quality_report.after.json"
-                }))
+
+                let mut report_files: Vec<_> = std::fs::read_dir(&runtime_dir)
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        name.contains(chapter_title.as_str())
+                            && name.ends_with(".context_quality.json")
+                    })
+                    .map(|entry| {
+                        let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
+                        (entry.path(), modified)
+                    })
+                    .collect();
+                report_files.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+
+                if let Some((path, _)) = report_files.first() {
+                    let content = std::fs::read_to_string(path)
+                        .map_err(|e| format!("Failed to read context quality report: {}", e))?;
+                    let report: ContextQualityReport = serde_json::from_str(&content)
+                        .map_err(|e| format!("Failed to parse context quality report: {}", e))?;
+                    to_value(serde_json::to_value(&report).map_err(|e| {
+                        format!("Failed to serialize context quality report: {}", e)
+                    })?)
+                } else {
+                    to_value(serde_json::json!({
+                        "chapterTitle": chapter_title,
+                        "note": "No context quality report found. Generate a chapter first."
+                    }))
+                }
             }
             "budget_calibration" => {
                 let budget = crate::chapter_generation::ChapterContextBudget::default();

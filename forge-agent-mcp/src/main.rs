@@ -109,6 +109,9 @@ pub(crate) enum ErrorKind {
     Validation,
     Provider,
     Permission,
+    Budget,
+    ContextOverflow,
+    Storage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -621,6 +624,30 @@ mod tests {
         assert_eq!(
             classify_error("forge_save_chapter", "Tool requires explicit approval"),
             ErrorKind::Permission
+        );
+    }
+
+    #[test]
+    fn classify_error_detects_budget() {
+        assert_eq!(
+            classify_error("forge_generate_chapter", "provider budget exceeded"),
+            ErrorKind::Budget
+        );
+    }
+
+    #[test]
+    fn classify_error_detects_context_overflow() {
+        assert_eq!(
+            classify_error("forge_ask_agent", "context length exceeds token limit"),
+            ErrorKind::ContextOverflow
+        );
+    }
+
+    #[test]
+    fn classify_error_detects_storage() {
+        assert_eq!(
+            classify_error("forge_save_chapter", "sqlite storage save failed"),
+            ErrorKind::Storage
         );
     }
 }

@@ -9,6 +9,10 @@ edition = "2021"
 name = "agent_writer_lib"
 crate-type = ["lib"]
 
+[[bin]]
+name = "eval_runner"
+path = "src/bin/eval_runner.rs"
+
 [dependencies]
 agent-harness-core = { path = "../agent-harness-core" }
 async-trait = "0.1"

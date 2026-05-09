@@ -32,6 +32,24 @@ pub(crate) fn classify_error(_tool_name: &str, error: &str) -> ErrorKind {
     {
         return ErrorKind::Permission;
     }
+    if lower.contains("budget") || lower.contains("exceeded") || lower.contains("quota") {
+        return ErrorKind::Budget;
+    }
+    if lower.contains("context overflow")
+        || lower.contains("token limit")
+        || lower.contains("max tokens")
+        || lower.contains("context length")
+    {
+        return ErrorKind::ContextOverflow;
+    }
+    if lower.contains("storage")
+        || lower.contains("persist failed")
+        || lower.contains("save failed")
+        || lower.contains("sqlite")
+        || lower.contains("disk")
+    {
+        return ErrorKind::Storage;
+    }
     ErrorKind::Backend
 }
 

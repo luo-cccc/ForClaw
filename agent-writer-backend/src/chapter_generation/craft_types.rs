@@ -125,6 +125,20 @@ pub struct ChapterQualityReport {
     pub no_fatal_issue: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionReport {
+    pub chapter_title: String,
+    pub request_id: String,
+    pub triggered: bool,
+    pub budget_skipped: bool,
+    pub top_issues_before: Vec<String>,
+    pub score_before: f32,
+    pub score_after: Option<f32>,
+    pub accepted: bool,
+    pub reason: String,
+}
+
 #[cfg(test)]
 mod craft_types_tests {
     use super::*;
