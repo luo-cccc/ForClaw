@@ -5,6 +5,18 @@ pub struct CraftRuleStats {
     pub rejected_count: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct CraftFeedbackEvent {
+    pub rule_id: String,
+    pub scope: String,
+    pub action: String,
+    pub matched_metrics: Vec<String>,
+    pub score_before: f32,
+    pub score_after: f32,
+    pub evidence_ref: String,
+    pub reason: String,
+}
+
 impl CraftRuleStats {
     pub fn acceptance_rate(&self) -> f32 {
         let total = self.accepted_count + self.rejected_count;
@@ -37,6 +49,18 @@ pub fn ensure_craft_tables(conn: &Connection) -> Result<(), String> {
             pattern TEXT NOT NULL,
             correction TEXT NOT NULL DEFAULT '',
             rejected_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS craft_feedback_events (
+            id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            matched_metrics TEXT NOT NULL DEFAULT '',
+            score_before REAL NOT NULL DEFAULT 0,
+            score_after REAL NOT NULL DEFAULT 0,
+            evidence_ref TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0
         );",
     )
     .map_err(|e| e.to_string())
@@ -78,6 +102,39 @@ pub fn get_craft_rule_stats(conn: &Connection, rule_id: &str) -> Option<CraftRul
         },
     )
     .ok()
+}
+
+pub fn record_craft_feedback_event(
+    conn: &Connection,
+    event: &CraftFeedbackEvent,
+) -> Result<(), String> {
+    let created_at = crate::agent_runtime::now_ms();
+    let id = format!(
+        "{}-{}-{}-{}",
+        event.rule_id,
+        event.scope,
+        event.action,
+        created_at
+    );
+    conn.execute(
+        "INSERT INTO craft_feedback_events
+         (id, rule_id, scope, action, matched_metrics, score_before, score_after, evidence_ref, reason, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            id,
+            event.rule_id,
+            event.scope,
+            event.action,
+            event.matched_metrics.join(","),
+            event.score_before,
+            event.score_after,
+            event.evidence_ref,
+            event.reason,
+            created_at as i64,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -146,5 +203,32 @@ mod craft_memory_tests {
             rejected_count: 0,
         };
         assert_eq!(stats.acceptance_rate(), 0.5);
+    }
+
+    #[test]
+    fn record_feedback_event_persists_metric_evidence() {
+        let conn = test_conn();
+        record_craft_feedback_event(
+            &conn,
+            &CraftFeedbackEvent {
+                rule_id: "dialogue_function".to_string(),
+                scope: "chapter-7".to_string(),
+                action: "accepted".to_string(),
+                matched_metrics: vec!["dialogue_function".to_string()],
+                score_before: 0.2,
+                score_after: 0.8,
+                evidence_ref: "revision_report:dialogue_function".to_string(),
+                reason: "metric improved".to_string(),
+            },
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM craft_feedback_events WHERE rule_id = ?1 AND action = ?2",
+                rusqlite::params!["dialogue_function", "accepted"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

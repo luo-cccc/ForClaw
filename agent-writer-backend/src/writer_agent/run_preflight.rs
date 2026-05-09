@@ -8,6 +8,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct WriterContextQualitySummary {
+    pub overall_score: f32,
+    pub source_coverage: f32,
+    pub truncation_risk: f32,
+    pub grounding_quality: f32,
+    pub missing_evidence: Vec<String>,
+    pub recommendation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WriterRunPreflightReport {
     pub task: String,
     pub observation_id: String,
@@ -28,6 +39,7 @@ pub struct WriterRunPreflightReport {
     pub task_packet_objective: String,
     pub source_refs: Vec<String>,
     pub next_actions: Vec<String>,
+    pub context_quality: Option<WriterContextQualitySummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

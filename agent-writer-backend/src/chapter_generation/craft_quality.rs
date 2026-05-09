@@ -483,6 +483,136 @@ pub fn build_revision_prompt(
     prompt
 }
 
+pub fn build_revision_target_changes(
+    before: &ChapterQualityReport,
+    after: Option<&ChapterQualityReport>,
+    revision_attempted: bool,
+    budget_skipped: bool,
+) -> Vec<RevisionTargetChange> {
+    let mut targets: Vec<&QualityMetricResult> = before
+        .top_revision_targets
+        .iter()
+        .filter_map(|metric| {
+            before
+                .metric_results
+                .iter()
+                .find(|result| result.metric == *metric)
+        })
+        .collect();
+
+    if targets.is_empty() {
+        targets = before
+            .metric_results
+            .iter()
+            .filter(|result| {
+                result.severity == IssueSeverity::Major || result.severity == IssueSeverity::Fatal
+            })
+            .take(3)
+            .collect();
+    }
+
+    targets
+        .into_iter()
+        .map(|target| {
+            let after_metric = after.and_then(|report| {
+                report
+                    .metric_results
+                    .iter()
+                    .find(|result| result.metric == target.metric)
+            });
+            let score_after = after_metric.map(|metric| metric.score);
+            let delta = score_after.map(|score| score - target.score);
+            let status = revision_target_change_status(
+                delta,
+                revision_attempted,
+                budget_skipped,
+                after_metric.is_some(),
+            );
+            let evidence_after = after_metric.map(|metric| metric.evidence_excerpt.clone());
+            RevisionTargetChange {
+                metric: target.metric.clone(),
+                revision_hint: target.revision_hint.clone(),
+                score_before: target.score,
+                score_after,
+                delta,
+                status,
+                evidence_before: target.evidence_excerpt.clone(),
+                text_change_summary: summarize_revision_text_change(
+                    &target.evidence_excerpt,
+                    evidence_after.as_deref(),
+                    delta,
+                ),
+                evidence_after,
+            }
+        })
+        .collect()
+}
+
+fn revision_target_change_status(
+    delta: Option<f32>,
+    revision_attempted: bool,
+    budget_skipped: bool,
+    after_observed: bool,
+) -> RevisionTargetChangeStatus {
+    if budget_skipped {
+        return RevisionTargetChangeStatus::BudgetSkipped;
+    }
+    if !revision_attempted {
+        return RevisionTargetChangeStatus::NotAttempted;
+    }
+    if !after_observed {
+        return RevisionTargetChangeStatus::NotObserved;
+    }
+    let delta = delta.unwrap_or(0.0);
+    if delta > 0.01 {
+        RevisionTargetChangeStatus::Improved
+    } else if delta < -0.01 {
+        RevisionTargetChangeStatus::Regressed
+    } else {
+        RevisionTargetChangeStatus::Unchanged
+    }
+}
+
+fn summarize_revision_text_change(
+    evidence_before: &str,
+    evidence_after: Option<&str>,
+    delta: Option<f32>,
+) -> String {
+    let Some(evidence_after) = evidence_after else {
+        return "No after-revision metric evidence was recorded for this target.".to_string();
+    };
+    let delta = delta.unwrap_or(0.0);
+    if evidence_before.trim().is_empty() && evidence_after.trim().is_empty() {
+        if delta > 0.01 {
+            "Score improved, but this metric has no excerpt-level evidence.".to_string()
+        } else if delta < -0.01 {
+            "Score regressed, but this metric has no excerpt-level evidence.".to_string()
+        } else {
+            "Score was unchanged and this metric has no excerpt-level evidence.".to_string()
+        }
+    } else if evidence_before == evidence_after {
+        format!(
+            "Metric evidence unchanged; score delta {:+.2}.",
+            delta
+        )
+    } else {
+        format!(
+            "Metric evidence changed from '{}' to '{}'; score delta {:+.2}.",
+            snippet_for_report(evidence_before, 80),
+            snippet_for_report(evidence_after, 80),
+            delta
+        )
+    }
+}
+
+fn snippet_for_report(text: &str, max_chars: usize) -> String {
+    let mut snippet: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
 #[cfg(test)]
 mod craft_quality_tests {
     use super::*;
@@ -592,5 +722,27 @@ mod craft_quality_tests {
             assert!(prompt.contains("硬约束"));
             assert!(prompt.contains("待修订正文"));
         }
+    }
+
+    #[test]
+    fn revision_target_changes_map_before_after_metric_evidence() {
+        let plan = SceneCraftPlan::default();
+        let before = evaluate_chapter_quality("", "test-chapter", &plan, &[], 3000, 4000);
+        let after = evaluate_chapter_quality(
+            "林墨不得不做出选择，因此付出了代价。终于，他知道寒影剑已经改变了局面，但是新的问题还没有解决。",
+            "test-chapter",
+            &plan,
+            &[],
+            0,
+            4000,
+        );
+
+        let changes = build_revision_target_changes(&before, Some(&after), true, false);
+
+        assert!(!changes.is_empty());
+        assert!(changes.iter().any(|change| change.score_after.is_some()));
+        assert!(changes
+            .iter()
+            .any(|change| change.status == RevisionTargetChangeStatus::Improved));
     }
 }

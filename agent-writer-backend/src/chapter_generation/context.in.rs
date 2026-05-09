@@ -522,6 +522,36 @@ pub async fn build_chapter_context(
             &required_types,
         ))
     };
+    let mut warnings = warnings;
+    if let Some(ref quality) = context_quality {
+        match &quality.recommendation {
+            agent_harness_core::ContextQualityRecommendation::Critical { reason } => {
+                return Err(ChapterGenerationError::with_details(
+                    "CONTEXT_QUALITY_CRITICAL",
+                    "Chapter generation blocked because context quality is critically low.",
+                    true,
+                    reason.clone(),
+                ));
+            }
+            agent_harness_core::ContextQualityRecommendation::Supplement { sources } => {
+                warnings.push(format!(
+                    "Context quality suggests supplementing sources: {}",
+                    if sources.is_empty() {
+                        "review truncated or weak grounding sources".to_string()
+                    } else {
+                        sources.join(", ")
+                    }
+                ));
+            }
+            agent_harness_core::ContextQualityRecommendation::Sufficient => {}
+        }
+        warnings.extend(
+            quality
+                .warnings
+                .iter()
+                .map(|warning| format!("Context quality warning: {}", warning)),
+        );
+    }
 
     // Build SceneCraftPlan from intent and outline data
     let craft_plan = {

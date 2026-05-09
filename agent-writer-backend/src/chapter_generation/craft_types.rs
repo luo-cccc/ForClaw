@@ -125,6 +125,45 @@ pub struct ChapterQualityReport {
     pub no_fatal_issue: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevisionTargetChangeStatus {
+    NotAttempted,
+    BudgetSkipped,
+    NotObserved,
+    Improved,
+    Unchanged,
+    Regressed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionTargetChange {
+    pub metric: String,
+    pub revision_hint: String,
+    pub score_before: f32,
+    pub score_after: Option<f32>,
+    pub delta: Option<f32>,
+    pub status: RevisionTargetChangeStatus,
+    pub evidence_before: String,
+    pub evidence_after: Option<String>,
+    pub text_change_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftMemoryUpdate {
+    pub rule_id: String,
+    pub scope: String,
+    pub decision: String,
+    pub diagnostic_signals: Vec<String>,
+    pub matched_metrics: Vec<String>,
+    pub score_before: f32,
+    pub score_after: f32,
+    pub evidence_ref: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevisionReport {
@@ -137,6 +176,10 @@ pub struct RevisionReport {
     pub score_after: Option<f32>,
     pub accepted: bool,
     pub reason: String,
+    #[serde(default)]
+    pub target_changes: Vec<RevisionTargetChange>,
+    #[serde(default)]
+    pub craft_memory_updates: Vec<CraftMemoryUpdate>,
 }
 
 #[cfg(test)]

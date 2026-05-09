@@ -1323,3 +1323,56 @@ P4：
 4. 新增 ChapterQualityReport，先接入 anchor carry、style drift、length compliance 三项。
 
 这四件事完成后，系统就从“能组织上下文调用模型”迈向“能带着写作工艺调用模型，并知道结果是否有效”。
+
+## 2026-05-09 执行完成度重估
+
+### 本轮已补齐的问题
+
+1. Craft Memory 反馈粒度
+   - 已从“整章修订成功就接受所有规则”改为按 `CraftRule.diagnostic_signals` 匹配质量指标。
+   - `RevisionReport` 会记录 `craft_memory_updates`，包含 rule、matched metrics、before/after score、decision、evidence ref 和 reason。
+   - memory 层新增 `craft_feedback_events`，保留每次接受/拒绝的指标证据。
+
+2. Eval runner 证据强度
+   - `fixtures/writing_eval/project.json` 从 2 个大纲节点、1 章正文、3 条 lore 扩展为 3 个大纲节点、2 章正文、5 条 lore。
+   - `eval_tasks.jsonl` 从 3 个任务扩展为 5 个任务，新增第二章质量评估和第二章生成任务。
+   - eval 输出增加 per-metric delta 和 revision target changes，避免只看 overall score。
+
+3. RevisionReport 修订目标映射
+   - 新增 `RevisionTargetChange`：metric、revision hint、score before/after、delta、status、before/after evidence、text change summary。
+   - 修订被跳过、未尝试、未观察、改善、持平、回退都会进入结构化状态，而不是只记录 accepted bool。
+
+4. Context quality 与 preflight 绑定
+   - 章节生成管线中，`ContextQualityRecommendation::Critical` 会阻断生成，`Supplement` 会进入 warning。
+   - WriterAgent 通用 preflight 输出 `context_quality` summary，并把 critical/supplement 转成 block/warning 和 next action。
+
+### 当前完成度估算
+
+| 范围 | 完成度 | 依据 |
+| --- | ---: | --- |
+| Headless MCP 写作后端底座 | 85% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；仍缺更硬的进程级 smoke 和部分长任务恢复策略。 |
+| ForClaw 写作赋能 MVP | 82% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路。 |
+| 写作质量证据闭环 | 72% | 已有 before/after quality、target changes、craft memory updates、5-task eval；但 fixture 仍偏小，anchor/style 仍有占位指标，缺跨版本趋势报告。 |
+| Context quality / preflight 可操作性 | 70% | 已能查询、阻断和建议动作；但 source taxonomy 与 Story OS source 的映射还偏规则化，缺来源耗时和预算校准。 |
+| plan.md 全量路线 | 58% | ForClaw 侧车核心已成型；Planner-Aware AgentLoop、provider usage 校准、read-only 并行检索、长任务 checkpoint recovery 仍未完整完成。 |
+
+### 剩余真实缺口
+
+- `anchor_carry` 和 `style_drift` 在章节质量报告里仍有部分占位逻辑，需要接入项目级锚点和作者风格快照后再提高评分可信度。
+- eval fixture 已变强，但仍只能算小样本回归；下一步至少要覆盖 canon 冲突、计划评审、修订接受/拒绝和跨章节伏笔推进。
+- Revision target change 已能映射指标证据变化，但还不是严格的段落级 diff；如果要解释“哪一句改成哪一句”，需要保存修订前后文本片段或接入 diff 算法。
+- Craft Memory 已记录指标级反馈，但 GoodExampleMemory / BadPatternMemory 仍未真正从作者手动修改中抽取。
+- Context quality 已进入 preflight，但还没有 provider usage 校准、source timing 和 read-only retrieval parallelism。
+
+### 本轮验证
+
+```powershell
+cargo fmt --check
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p agent-writer --lib
+cargo test -p agent-writer --test writing_eval_test
+scripts\run-writing-eval.cmd
+```
+
+当前 writing eval 结果：5 tasks，5 pass，0 fail。

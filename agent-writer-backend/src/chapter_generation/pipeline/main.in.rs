@@ -343,7 +343,9 @@ where
     // a single revision pass with the ChapterTargetedRevision profile.
     
     let mut quality_report_after_revision: Option<ChapterQualityReport> = None;
+    let mut quality_report_after_attempt: Option<ChapterQualityReport> = None;
     let mut revision_budget_skipped = false;
+    let mut revision_attempted = false;
     if !quality_report_before.fatal_issues.is_empty() || !quality_report_before.major_issues.is_empty() {
         let revision_prompt = build_revision_prompt(
             &draft.content,
@@ -382,6 +384,7 @@ where
                 // Budget denied — skip revision
             } else {
                 record_provider_budget(&context, &revision_budget);
+                revision_attempted = true;
                 let revision_result = crate::llm_runtime::chat_text_profile(
                     &config.settings,
                     revision_messages,
@@ -408,6 +411,7 @@ where
                             context.chapter_contract.min_chars,
                             context.chapter_contract.max_chars,
                         );
+                        quality_report_after_attempt = Some(after.clone());
                         if after.overall_score > quality_report_before.overall_score {
                             draft.content = revised;
                             draft.output_chars = char_count(&draft.content);
@@ -424,6 +428,23 @@ where
     let final_quality = quality_report_after_revision
         .clone()
         .unwrap_or(quality_report_before.clone());
+    let target_changes = build_revision_target_changes(
+        &quality_report_before,
+        quality_report_after_attempt.as_ref(),
+        revision_attempted,
+        revision_budget_skipped,
+    );
+    let craft_memory_updates = record_craft_memory_feedback(
+        &config,
+        &context,
+        &quality_report_before,
+        quality_report_after_attempt
+            .as_ref()
+            .unwrap_or(&final_quality),
+        &target_changes,
+        had_issues,
+        revision_attempted,
+    );
 
     let revision_report = RevisionReport {
         chapter_title: context.target.title.clone(),
@@ -432,7 +453,7 @@ where
         budget_skipped: revision_budget_skipped,
         top_issues_before: quality_report_before.top_revision_targets.clone(),
         score_before: quality_report_before.overall_score,
-        score_after: quality_report_after_revision.as_ref().map(|r| r.overall_score),
+        score_after: quality_report_after_attempt.as_ref().map(|r| r.overall_score),
         accepted: revision_improved,
         reason: if revision_improved {
             "Revision improved overall quality score".to_string()
@@ -443,24 +464,9 @@ where
         } else {
             "Revision did not improve quality score — keeping original draft".to_string()
         },
+        target_changes,
+        craft_memory_updates,
     };
-
-    // Craft memory feedback: record accept/reject for rules actually injected
-    if let Some(ref conn) = config.project.open_memory_db() {
-        let scope = &context.target.title;
-        let rule_ids: Vec<String> = context
-            .craft_plan
-            .as_ref()
-            .map(|p| p.selected_craft_rules.clone())
-            .unwrap_or_default();
-        for rule_id in &rule_ids {
-            if revision_improved {
-                let _ = crate::writer_agent::memory::record_craft_accept(conn, rule_id, scope);
-            } else if had_issues {
-                let _ = crate::writer_agent::memory::record_craft_reject(conn, rule_id, scope);
-            }
-        }
-    }
 
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
@@ -719,7 +725,187 @@ fn build_chapter_settlement_delta<P: ChapterGenerationProject>(
             .filter(|warning| !warning.trim().is_empty())
             .cloned()
             .collect(),
-    ))
+        ))
+}
+
+fn record_craft_memory_feedback<P: ChapterGenerationProject>(
+    config: &ChapterGenerationConfig<P>,
+    context: &BuiltChapterContext,
+    before: &ChapterQualityReport,
+    after: &ChapterQualityReport,
+    target_changes: &[RevisionTargetChange],
+    had_issues: bool,
+    revision_attempted: bool,
+) -> Vec<CraftMemoryUpdate> {
+    let Some(conn) = config.project.open_memory_db() else {
+        return Vec::new();
+    };
+    let scope = context.target.title.clone();
+    let selected_rule_ids: Vec<String> = context
+        .craft_plan
+        .as_ref()
+        .map(|plan| plan.selected_craft_rules.clone())
+        .unwrap_or_default();
+    if selected_rule_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let mut updates = Vec::new();
+    for rule_id in selected_rule_ids {
+        let Some(rule) = craft_library_for_stats()
+            .iter()
+            .find(|candidate| candidate.id == rule_id)
+        else {
+            continue;
+        };
+        let matched_metrics = matched_quality_metrics_for_rule(rule, before);
+        if matched_metrics.is_empty() {
+            continue;
+        }
+        let score_before = average_metric_score(before, &matched_metrics);
+        let score_after = average_metric_score(after, &matched_metrics);
+        let severe_before = matched_metrics.iter().any(|metric| {
+            before.metric_results.iter().any(|result| {
+                result.metric == *metric
+                    && (result.severity == IssueSeverity::Major
+                        || result.severity == IssueSeverity::Fatal)
+            })
+        });
+        let severe_after = matched_metrics.iter().any(|metric| {
+            after.metric_results.iter().any(|result| {
+                result.metric == *metric
+                    && (result.severity == IssueSeverity::Major
+                        || result.severity == IssueSeverity::Fatal)
+            })
+        });
+        let delta = score_after - score_before;
+        let decision = if delta > 0.01 || (!severe_after && (severe_before || score_after >= 0.8)) {
+            "accepted"
+        } else if had_issues
+            && (delta < -0.01
+                || severe_after
+                || (revision_attempted && target_intersects_metrics(target_changes, &matched_metrics)))
+        {
+            "rejected"
+        } else {
+            continue;
+        };
+
+        if decision == "accepted" {
+            let _ = crate::writer_agent::memory::record_craft_accept(&conn, &rule_id, &scope);
+        } else {
+            let _ = crate::writer_agent::memory::record_craft_reject(&conn, &rule_id, &scope);
+        }
+
+        let evidence_ref = format!(
+            "revision_report:{}:{}",
+            scope,
+            matched_metrics.join("+")
+        );
+        let reason = craft_memory_feedback_reason(
+            decision,
+            score_before,
+            score_after,
+            severe_before,
+            severe_after,
+        );
+        let event = crate::writer_agent::memory::CraftFeedbackEvent {
+            rule_id: rule_id.clone(),
+            scope: scope.clone(),
+            action: decision.to_string(),
+            matched_metrics: matched_metrics.clone(),
+            score_before,
+            score_after,
+            evidence_ref: evidence_ref.clone(),
+            reason: reason.clone(),
+        };
+        let _ = crate::writer_agent::memory::record_craft_feedback_event(&conn, &event);
+        updates.push(CraftMemoryUpdate {
+            rule_id,
+            scope: scope.clone(),
+            decision: decision.to_string(),
+            diagnostic_signals: rule.diagnostic_signals.clone(),
+            matched_metrics,
+            score_before,
+            score_after,
+            evidence_ref,
+            reason,
+        });
+    }
+
+    updates
+}
+
+fn matched_quality_metrics_for_rule(
+    rule: &CraftRule,
+    report: &ChapterQualityReport,
+) -> Vec<String> {
+    rule.diagnostic_signals
+        .iter()
+        .filter(|signal| {
+            report
+                .metric_results
+                .iter()
+                .any(|metric| metric.metric == **signal)
+        })
+        .cloned()
+        .collect()
+}
+
+fn average_metric_score(report: &ChapterQualityReport, metrics: &[String]) -> f32 {
+    let scores: Vec<f32> = metrics
+        .iter()
+        .filter_map(|metric| {
+            report
+                .metric_results
+                .iter()
+                .find(|result| result.metric == *metric)
+                .map(|result| result.score)
+        })
+        .collect();
+    if scores.is_empty() {
+        0.0
+    } else {
+        scores.iter().sum::<f32>() / scores.len() as f32
+    }
+}
+
+fn target_intersects_metrics(target_changes: &[RevisionTargetChange], metrics: &[String]) -> bool {
+    target_changes
+        .iter()
+        .any(|change| metrics.iter().any(|metric| metric == &change.metric))
+}
+
+fn craft_memory_feedback_reason(
+    decision: &str,
+    score_before: f32,
+    score_after: f32,
+    severe_before: bool,
+    severe_after: bool,
+) -> String {
+    let delta = score_after - score_before;
+    if decision == "accepted" {
+        if delta > 0.01 {
+            format!(
+                "Matched diagnostic metrics improved from {:.2} to {:.2}.",
+                score_before, score_after
+            )
+        } else if severe_before && !severe_after {
+            "Matched diagnostic metrics cleared major/fatal severity.".to_string()
+        } else {
+            "Matched diagnostic metrics stayed strong without major/fatal severity.".to_string()
+        }
+    } else if severe_after {
+        format!(
+            "Matched diagnostic metrics still have major/fatal severity after revision; score {:.2}->{:.2}.",
+            score_before, score_after
+        )
+    } else {
+        format!(
+            "Matched diagnostic metrics did not improve; score delta {:+.2}.",
+            delta
+        )
+    }
 }
 
 fn write_runtime_artifact<T: serde::Serialize>(

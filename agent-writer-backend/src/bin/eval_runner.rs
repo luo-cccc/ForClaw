@@ -1,5 +1,6 @@
 use agent_writer_lib::chapter_generation::{
-    compile_empowerment_prompt, evaluate_chapter_quality, SceneCraftPlan,
+    build_revision_target_changes, compile_empowerment_prompt, evaluate_chapter_quality,
+    SceneCraftPlan,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -200,16 +201,37 @@ fn run_quality_evaluation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
     let before_score = before_report.overall_score;
     let after_score = after_report.overall_score;
     let min_score = task.expected["overall_score_min"].as_f64().unwrap_or(0.0) as f32;
+    let metric_min = task.expected["metric_min"].as_object();
+    let metric_failures: Vec<String> = metric_min
+        .into_iter()
+        .flat_map(|map| map.iter())
+        .filter_map(|(metric, min)| {
+            let min = min.as_f64().unwrap_or(0.0) as f32;
+            let actual = after_report
+                .metric_results
+                .iter()
+                .find(|result| result.metric == *metric)
+                .map(|result| result.score)
+                .unwrap_or(0.0);
+            if actual < min {
+                Some(format!("{metric} {:.2} < {:.2}", actual, min))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let target_changes =
+        build_revision_target_changes(&before_report, Some(&after_report), true, false);
 
-    let status = if after_score >= min_score {
+    let status = if after_score >= min_score && metric_failures.is_empty() {
         "pass"
     } else {
         "fail"
     };
 
     let message = format!(
-        "metrics={:?}, before_score={:.2}, after_score={:.2}, expected_min={:.2}",
-        task.metrics, before_score, after_score, min_score
+        "metrics={:?}, before_score={:.2}, after_score={:.2}, expected_min={:.2}, metric_failures={:?}",
+        task.metrics, before_score, after_score, min_score, metric_failures
     );
 
     EvalResult {
@@ -226,9 +248,33 @@ fn run_quality_evaluation_eval(task: &EvalTask, fixture: &serde_json::Value) -> 
         })),
         delta: Some(serde_json::json!({
             "overall_score": after_score - before_score,
+            "metric_results": metric_delta_map(&before_report, &after_report),
+            "revision_target_changes": target_changes,
         })),
         message,
     }
+}
+
+fn metric_delta_map(
+    before: &agent_writer_lib::chapter_generation::ChapterQualityReport,
+    after: &agent_writer_lib::chapter_generation::ChapterQualityReport,
+) -> std::collections::HashMap<String, f32> {
+    before
+        .metric_results
+        .iter()
+        .filter_map(|before_metric| {
+            after
+                .metric_results
+                .iter()
+                .find(|after_metric| after_metric.metric == before_metric.metric)
+                .map(|after_metric| {
+                    (
+                        before_metric.metric.clone(),
+                        after_metric.score - before_metric.score,
+                    )
+                })
+        })
+        .collect()
 }
 
 fn run_continuity_diagnostic_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {

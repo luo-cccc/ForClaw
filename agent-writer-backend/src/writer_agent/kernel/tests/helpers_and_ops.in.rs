@@ -146,6 +146,36 @@ fn approve_editor_operation_requires_context_for_memory_writes() {
 }
 
 #[test]
+fn preflight_binds_context_quality_to_blocking_actions() {
+    let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+    let mut kernel = WriterAgentKernel::new("default", memory);
+    let request = WriterAgentRunRequest {
+        task: WriterAgentTask::ChapterGeneration,
+        observation: observation(""),
+        user_instruction: "写下一章".to_string(),
+        frontend_state: WriterAgentFrontendState::default(),
+        approval_mode: WriterAgentApprovalMode::SurfaceProposals,
+        stream_mode: WriterAgentStreamMode::None,
+        manual_history: Vec::new(),
+    };
+
+    let report = kernel.preflight(&request);
+
+    assert_eq!(report.readiness, "blocked");
+    assert!(report
+        .blocks
+        .iter()
+        .any(|item| item.code == "context_quality_critical"));
+    let quality = report.context_quality.expect("preflight context quality");
+    assert_eq!(quality.recommendation, "critical");
+    assert!(quality.missing_evidence.contains(&"canon".to_string()));
+    assert!(report
+        .next_actions
+        .iter()
+        .any(|action| action.contains("missing story evidence")));
+}
+
+#[test]
 fn execute_operation_records_annotation_without_text_revision() {
     let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
     let mut kernel = WriterAgentKernel::new("default", memory);
@@ -433,4 +463,3 @@ fn style_preference_taxonomy_detects_same_slot_conflicts() {
         .unwrap();
     assert!(different_slot.success);
 }
-

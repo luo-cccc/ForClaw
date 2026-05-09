@@ -44,7 +44,9 @@ impl WriterAgentKernel {
         &mut self,
         request: &WriterAgentRunRequest,
     ) -> crate::writer_agent::run_preflight::WriterRunPreflightReport {
-        use crate::writer_agent::run_preflight::WriterRunPreflightReport;
+        use crate::writer_agent::run_preflight::{
+            WriterContextQualitySummary, WriterRunPreflightReport,
+        };
         let task = request.task.as_agent_task();
         let observation = &request.observation;
         let mut blocks: Vec<crate::writer_agent::run_preflight::PreflightItem> = Vec::new();
@@ -102,6 +104,99 @@ impl WriterAgentKernel {
                         .to_string(),
                 );
             }
+        }
+
+        let required_context_sources = required_context_sources_for_preflight(task.clone());
+        let packed_context = agent_harness_core::PackedContext {
+            text: context_pack
+                .sources
+                .iter()
+                .map(|source| source.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            sources: context_pack
+                .sources
+                .iter()
+                .map(|source| agent_harness_core::ContextSourceReport {
+                    source_type: context_quality_source_type(&source.source).to_string(),
+                    id: source
+                        .evidence_ref
+                        .clone()
+                        .unwrap_or_else(|| format!("{:?}", source.source)),
+                    label: format!("{:?}", source.source),
+                    original_chars: source.char_count,
+                    included_chars: source.char_count,
+                    truncated: source.truncated,
+                    score: None,
+                })
+                .collect(),
+            budget: agent_harness_core::ContextBudgetReport {
+                max_chars: context_pack.budget_limit,
+                included_chars: context_pack.total_chars,
+                source_count: context_pack.sources.len(),
+                truncated_source_count: context_pack
+                    .sources
+                    .iter()
+                    .filter(|source| source.truncated)
+                    .count(),
+                warnings: context_pack
+                    .budget_report
+                    .source_reports
+                    .iter()
+                    .filter(|report| report.truncated)
+                    .map(|report| {
+                        format!(
+                            "{} truncated: {}",
+                            report.source,
+                            report
+                                .truncation_reason
+                                .as_deref()
+                                .unwrap_or("budget limited")
+                        )
+                    })
+                    .collect(),
+            },
+        };
+        let context_quality = agent_harness_core::evaluate_context_quality(
+            &observation.id,
+            &packed_context,
+            &required_context_sources,
+        );
+        match &context_quality.recommendation {
+            agent_harness_core::ContextQualityRecommendation::Critical { reason } => {
+                blocks.push(crate::writer_agent::run_preflight::PreflightItem {
+                    code: "context_quality_critical".to_string(),
+                    reason: reason.clone(),
+                });
+                next_actions.push(
+                    "Add missing story evidence before running this write-sensitive task."
+                        .to_string(),
+                );
+            }
+            agent_harness_core::ContextQualityRecommendation::Supplement { sources } => {
+                warnings.push(crate::writer_agent::run_preflight::PreflightItem {
+                    code: "context_quality_supplement".to_string(),
+                    reason: format!(
+                        "Context quality suggests supplementing sources: {}",
+                        if sources.is_empty() {
+                            "review truncated or weak grounding sources".to_string()
+                        } else {
+                            sources.join(", ")
+                        }
+                    ),
+                });
+                next_actions.push(
+                    "Supplement missing context sources or accept lower grounding confidence."
+                        .to_string(),
+                );
+            }
+            agent_harness_core::ContextQualityRecommendation::Sufficient => {}
+        }
+        for warning in &context_quality.warnings {
+            warnings.push(crate::writer_agent::run_preflight::PreflightItem {
+                code: "context_quality_warning".to_string(),
+                reason: warning.clone(),
+            });
         }
 
         // Task packet validation
@@ -215,6 +310,17 @@ impl WriterAgentKernel {
             task_packet_objective: task_packet.objective.clone(),
             source_refs,
             next_actions,
+            context_quality: Some(WriterContextQualitySummary {
+                overall_score: context_quality.overall_score,
+                source_coverage: context_quality.source_coverage,
+                truncation_risk: context_quality.truncation_risk,
+                grounding_quality: context_quality.grounding_quality,
+                missing_evidence: context_quality.missing_evidence.clone(),
+                recommendation: context_quality_recommendation_label(
+                    &context_quality.recommendation,
+                )
+                .to_string(),
+            }),
         }
     }
 
@@ -481,5 +587,84 @@ impl WriterAgentKernel {
             }
         }
         Ok(())
+    }
+}
+
+fn required_context_sources_for_preflight(
+    task: crate::writer_agent::context::AgentTask,
+) -> Vec<String> {
+    use crate::writer_agent::context::AgentTask;
+    match task {
+        AgentTask::ChapterGeneration => vec![
+            "project_brief",
+            "chapter_mission",
+            "next_beat",
+            "outline",
+            "previous_chapter",
+            "canon",
+            "promise",
+        ],
+        AgentTask::GhostWriting | AgentTask::InlineRewrite => vec![
+            "cursor_prefix",
+            "chapter_mission",
+            "next_beat",
+            "project_brief",
+            "canon",
+        ],
+        AgentTask::ContinuityDiagnostic | AgentTask::CanonMaintenance => {
+            vec!["canon", "chapter_mission", "project_brief", "outline"]
+        }
+        AgentTask::PlanningReview => vec![
+            "chapter_mission",
+            "project_brief",
+            "next_beat",
+            "canon",
+            "promise",
+        ],
+        AgentTask::ProposalEvaluation => vec!["canon", "decision", "chapter_mission"],
+        AgentTask::ManualRequest => Vec::new(),
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn context_quality_source_type(
+    source: &crate::writer_agent::context::ContextSource,
+) -> &'static str {
+    use crate::writer_agent::context::ContextSource;
+    match source {
+        ContextSource::SystemContract => "system_contract",
+        ContextSource::ProjectBrief => "project_brief",
+        ContextSource::ChapterMission => "chapter_mission",
+        ContextSource::NextBeat => "next_beat",
+        ContextSource::ResultFeedback => "result_feedback",
+        ContextSource::AuthorStyle => "author_style",
+        ContextSource::CanonSlice => "canon",
+        ContextSource::PromiseSlice => "promise",
+        ContextSource::DecisionSlice => "decision",
+        ContextSource::BookState => "book_state",
+        ContextSource::ArcSnapshot => "arc_snapshot",
+        ContextSource::VolumeSnapshot => "volume_snapshot",
+        ContextSource::OutlineSlice => "outline",
+        ContextSource::RagExcerpt => "rag",
+        ContextSource::CursorPrefix => "cursor_prefix",
+        ContextSource::CursorSuffix => "cursor_suffix",
+        ContextSource::SelectedText => "selected_text",
+        ContextSource::PreviousChapter => "previous_chapter",
+        ContextSource::NextChapter => "next_chapter",
+        ContextSource::NeighborText => "neighbor_text",
+        ContextSource::StoryImpactRadius => "story_impact",
+        ContextSource::ReaderCompensation => "reader_compensation",
+    }
+}
+
+fn context_quality_recommendation_label(
+    recommendation: &agent_harness_core::ContextQualityRecommendation,
+) -> &'static str {
+    match recommendation {
+        agent_harness_core::ContextQualityRecommendation::Sufficient => "sufficient",
+        agent_harness_core::ContextQualityRecommendation::Supplement { .. } => "supplement",
+        agent_harness_core::ContextQualityRecommendation::Critical { .. } => "critical",
     }
 }
