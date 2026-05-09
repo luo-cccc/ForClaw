@@ -701,6 +701,12 @@ pub(crate) fn tools() -> Vec<Value> {
             empty_schema(),
         ),
         tool(
+            "forge_eval_trend_summary",
+            "Eval Trend Summary",
+            "Return the writing eval trend summary: per-profile pass/fail counts, metric averages, craft rule trends, and markdown report. Read-only.",
+            empty_schema(),
+        ),
+        tool(
             "forge_record_manual_craft_edit_feedback",
             "Record Manual Craft Edit Feedback",
             "Record an author-approved before/after manuscript edit as craft memory, capturing improved examples and rejected bad patterns.",

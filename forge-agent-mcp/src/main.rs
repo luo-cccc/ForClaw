@@ -90,6 +90,7 @@ const BACKEND_ACTIONS: &[&str] = &[
     "chapter_generation_resume_candidates",
     "craft_library",
     "craft_memory_stats",
+    "eval_trend_summary",
     "record_manual_craft_edit_feedback",
     "chapter_quality_report",
     "context_quality_report",

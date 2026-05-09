@@ -2304,7 +2304,9 @@ Output ONLY the JSON object, no explanation outside. Example:
                         profile: profile_name,
                         trend,
                     }),
-                    Err(e) => errors.push(format!("parse eval_trend.json for {}: {}", profile_name, e)),
+                    Err(e) => {
+                        errors.push(format!("parse eval_trend.json for {}: {}", profile_name, e))
+                    }
                 },
                 Err(e) => errors.push(format!("read eval_trend.json for {}: {}", profile_name, e)),
             }

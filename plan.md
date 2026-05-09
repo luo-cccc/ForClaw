@@ -1407,17 +1407,17 @@ P4：
 | 范围 | 完成度 | 依据 |
 | --- | ---: | --- |
 | Headless MCP 写作后端底座 | 86% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；进程级 smoke 已加固临时目录隔离；仍缺部分长任务恢复策略。 |
-| ForClaw 写作赋能 MVP | 97% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；Craft Memory 已能沉淀自动修订和作者手改样本，回流进生成 prompt，并进入 rule 级趋势证据。 |
-| 写作质量证据闭环 | 95% | 已有 before/after quality、target changes、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、13-task eval、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，但仍是小型 fixture。 |
+| ForClaw 写作赋能 MVP | 98% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；Craft Memory 已能沉淀自动修订和作者手改样本，回流进生成 prompt，并进入 rule 级趋势证据；eval trend 已暴露为 MCP 只读工具。 |
+| 写作质量证据闭环 | 97% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、48-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进。 |
 | Context quality / preflight 可操作性 | 72% | 已能查询、阻断和建议动作，并进入章节生成 warning/block；但 source taxonomy 与 Story OS source 的映射仍偏规则化，缺来源耗时和 provider usage 校准。 |
-| plan.md 全量路线 | 69% | ForClaw 侧车核心已成型且质量闭环更实；Planner-Aware AgentLoop、provider usage 校准、read-only 并行检索、长任务 checkpoint recovery 仍未完整完成。 |
+| plan.md 全量路线 | 80% | P4 Required Anchors、P5 Writing Eval Matrix（48 tasks / 3 profiles）、P6 Sentence-Level Diff、P7 Craft Trend CI 已完成；Planner-Aware AgentLoop、provider usage 校准、read-only 并行检索、长任务 checkpoint recovery 仍未完整完成。 |
 
 ### 剩余真实缺口
 
 - `anchor_carry` 和 `style_drift` 已接入真实信号，但锚点抽取仍是保守启发式；下一步应让 Project Brain / Story OS 明确产出“本章必须承载锚点”清单。
-- eval fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，并已有跨运行趋势报告；但仍只能算小样本回归，下一步应增加多类型项目、多章连续样本和负例矩阵。
-- Revision target change 已能记录文本片段变化，但还不是严格语义 diff；如果要解释“哪一句为何改成哪一句”，需要引入更稳的句级 diff / 语义对齐。
-- Craft Memory 已记录指标级反馈、自动修订样本和作者手动改稿 before/after 样本，已回流进 prompt，并已有 rule 级趋势证据；下一步应把趋势结果接入 Companion/CI 展示，而不只是生成 JSON。
+- eval fixture 已覆盖 canon 冲突、计划评审和跨章节伏笔推进，并已有跨运行趋势报告；但仍只能算小样本回归，下一步应增加多章连续样本和更大负例矩阵。
+- Sentence-level semantic diff 已落地（Jaccard 对齐 + confidence 分级），复杂同义替换和语序大调仍可能标为 Low/Unaligned，这是轻量方案的设计权衡。
+- Craft Memory 趋势已接入 headless dispatch 和 MCP 只读工具（`forge_eval_trend_summary`），Companion/CI 可直接消费；下一步应增加趋势可视化而非 API 扩展。
 - Context quality 已进入 preflight，但还没有 provider usage 校准、source timing 和 read-only retrieval parallelism。
 
 ### 本轮验证
@@ -1432,7 +1432,7 @@ cargo test -p forge-agent-mcp
 scripts\run-writing-eval.cmd
 ```
 
-当前 writing eval 结果：13 tasks，13 pass，0 fail。
+当前 writing eval 结果：48 tasks（mystery 15 + scifi 15 + xianxia 18），48 pass，0 fail。
 
 ## 2026-05-09 全量路线 69% 到 80% 提升计划
 
@@ -1604,7 +1604,7 @@ scripts\run-writing-eval.cmd
 - 风险是过度阻断创作自由；本轮只把 required anchor 用于评分和建议，是否阻断由 preflight/quality gate 配置决定。
 - 非目标是让 Project Brain 自动发明新伏笔。
 
-### P5 Writing Eval Matrix 扩展
+### P5 Writing Eval Matrix 扩展 ✅
 
 目标：把 13-task 小型 fixture 扩成可证明质量不退化的矩阵，覆盖类型、章节跨度、负例与恢复路径。
 
@@ -1634,7 +1634,7 @@ scripts\run-writing-eval.cmd
 - 风险是 fixture 太大拖慢本地反馈；本轮保留 smoke 子集和 full matrix 两种模式。
 - 非目标是用 fixture 代替人工文学判断；它只保证关键能力不退化。
 
-### P6 Sentence-Level / Semantic Revision Diff
+### P6 Sentence-Level / Semantic Revision Diff ✅
 
 目标：把 `RevisionTargetChange` 从片段级映射升级为句级变化解释，能说明“哪一句为了哪个修订目标发生了什么变化”。
 
@@ -1663,7 +1663,7 @@ scripts\run-writing-eval.cmd
 - 风险是中文分句和语义对齐误判；本轮先用规则分句加保守相似度，不引入重型 embedding 依赖。
 - 非目标是生成完整文学批注系统。
 
-### P7 Craft Trend 接入 Companion / CI 可见面
+### P7 Craft Trend 接入 Companion / CI 可见面 ✅
 
 目标：让 Craft Memory 和 eval trend 不只停留在 JSON 文件里，而是进入日常开发和作者使用可见面。
 

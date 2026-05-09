@@ -8,7 +8,7 @@ The repository is designed as a headless backend runtime. MCP clients and schedu
 
 ## Features
 
-- **MCP Server** — 82 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
+- **MCP Server** — 83 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
 - **Writer Agent Kernel** — Story ledger, proposals, typed operations, canon, promises, chapter missions, reader compensation, decision tracking, trace history.
 - **Chapter Generation Pipeline** — Context assembly → provider-budget checks → craft prompt injection → draft → quality evaluation → targeted revision → repair/compression → revision-safe save → settlement → artifact persistence.
 - **Writing Empowerment Engine** — 8-rule craft library, Prompt Compiler with scene-type inference, SceneCraftPlan artifact generation, 8-metric ChapterQualityReport with evidence gating, targeted revision with before/after quality comparison.
@@ -101,7 +101,7 @@ Use `initialize`, then `tools/list`, then `tools/call` from an MCP client. `forg
 
 ### Tool Categories
 
-82 MCP tools across 12 categories:
+83 MCP tools across 12 categories:
 
 | Category | Tools |
 |----------|-------|
@@ -114,7 +114,7 @@ Use `initialize`, then `tools/list`, then `tools/call` from an MCP client. `forg
 | Model-backed helpers | `forge_analyze_chapter`, `forge_generate_parallel_drafts`, `forge_analyze_pacing`, `forge_ask_project_brain`, `forge_run_metacognitive_recovery` |
 | Project Brain | `forge_project_brain_knowledge_graph`, `forge_compare_project_brain_source_revisions`, `forge_restore_project_brain_source_revision`, `forge_cross_reference_brain_nodes`, `forge_ingest_external_research` |
 | Supervised sprint | `forge_start_sprint`, `forge_sprint_plan`, `forge_sprint_progress`, `forge_pause_sprint`, `forge_resume_sprint`, `forge_cancel_sprint`, `forge_checkpoint_sprint`, `forge_record_sprint_budget_usage`, `forge_set_sprint_quality_gate` |
-| Quality & craft (new) | `forge_craft_library`, `forge_craft_memory_stats`, `forge_chapter_quality_report`, `forge_context_quality_report`, `forge_budget_calibration`, `forge_execution_plan` |
+| Quality & craft (new) | `forge_craft_library`, `forge_craft_memory_stats`, `forge_eval_trend_summary`, `forge_chapter_quality_report`, `forge_context_quality_report`, `forge_budget_calibration`, `forge_execution_plan` |
 | Diagnostics | `forge_project_graph_data`, `forge_project_storage_diagnostics`, `forge_export_writer_agent_trajectory`, `forge_export_diagnostic_logs`, `forge_list_file_backups`, `forge_restore_file_backup` |
 | Settings | `forge_set_api_key`, `forge_check_api_key` |
 
@@ -139,7 +139,7 @@ For caller context requirements, budget approval rules, revision safety, error c
 ### Crate Map
 
 ```
-agent-harness-core (105 tests)
+agent-harness-core (122 tests)
 ├── AgentLoop (run + run_with_plan with plan/step events)
 ├── ExecutionPlan (compile_plan, Stop/Retry/Skip)
 ├── Intent Router (weighted scoring + confidence + fallback)
@@ -151,7 +151,7 @@ agent-harness-core (105 tests)
 ├── VectorDB (BM25 + cosine hybrid search)
 └── Provider (OpenAI-compat streaming + retry)
 
-agent-writer-backend (250 tests)
+agent-writer-backend (268 tests)
 ├── HeadlessBackend (all MCP action dispatch)
 ├── Chapter Generation Pipeline
 │   ├── Context assembly (async, parallelization-ready)
@@ -165,7 +165,7 @@ agent-writer-backend (250 tests)
 ├── Brain Service (embedding, retrieval, graph)
 └── Storage (SQLite project persistence)
 
-forge-agent-mcp (17 tests + 6 smoke)
+forge-agent-mcp (20 tests + 6 smoke)
 ├── main.rs (JSON-RPC core, 627 lines)
 ├── dispatch.rs (call_tool + call_backend_action, 320 lines)
 ├── tools.rs (82 tool definitions, 1034 lines)
@@ -186,10 +186,10 @@ cargo test --workspace
 Individual crate checks:
 
 ```powershell
-cargo test -p agent-harness-core        # 105 tests
-cargo test -p agent-writer --lib        # 241 tests
-cargo test -p agent-writer --test writing_eval_test  # 9 eval tests
-cargo test -p forge-agent-mcp           # 11 unit + 6 smoke
+cargo test -p agent-harness-core        # 122 tests
+cargo test -p agent-writer --lib        # 268 tests
+cargo test -p agent-writer --test writing_eval_test  # 19 eval tests
+cargo test -p forge-agent-mcp           # 14 unit + 6 smoke
 ```
 
 The headless path does not require Tauri config, icons, generated desktop schemas, renderer assets, or desktop runtime dependencies.
