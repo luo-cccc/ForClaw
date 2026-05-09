@@ -14,7 +14,11 @@ impl Drop for ChildGuard {
 
 fn spawn_mcp() -> (ChildGuard, BufReader<ChildStdout>, ChildStdin) {
     let exe = env!("CARGO_BIN_EXE_forge-agent-mcp");
-    let temp_dir = std::env::temp_dir().join(format!("forge-smoke-{}", std::process::id()));
+    let temp_dir = std::env::temp_dir().join(format!(
+        "forge-smoke-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     let _ = std::fs::remove_dir_all(&temp_dir);
 
     let mut child = Command::new(exe)

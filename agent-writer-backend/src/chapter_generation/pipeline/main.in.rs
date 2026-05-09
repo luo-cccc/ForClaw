@@ -860,6 +860,153 @@ fn record_craft_memory_feedback<P: ChapterGenerationProject>(
     updates
 }
 
+pub fn record_manual_craft_edit_feedback(
+    conn: &rusqlite::Connection,
+    request: ManualCraftEditFeedbackRequest,
+) -> Result<ManualCraftEditFeedbackResult, String> {
+    if !request.author_approved {
+        return Err("manual craft edit feedback requires explicit author approval".to_string());
+    }
+    if request.before_text.trim().is_empty() || request.after_text.trim().is_empty() {
+        return Err("beforeText and afterText are required".to_string());
+    }
+    if request.before_text == request.after_text {
+        return Err("beforeText and afterText must differ".to_string());
+    }
+
+    crate::writer_agent::memory::ensure_craft_tables(conn)?;
+
+    let source_ref = request.source_ref.clone().unwrap_or_else(|| {
+        format!(
+            "manual_edit:{}:{}",
+            request.chapter_title,
+            crate::agent_runtime::now_ms()
+        )
+    });
+    let quality_signals = ChapterQualitySignals {
+        anchor_keywords: request.anchor_keywords.clone(),
+        author_voice: request.author_voice.clone(),
+    };
+    let min_chars = request.target_min_chars.unwrap_or(0);
+    let max_chars = request.target_max_chars.unwrap_or_else(|| {
+        request
+            .before_text
+            .chars()
+            .count()
+            .max(request.after_text.chars().count())
+            .max(1)
+            * 4
+    });
+    let scene_plan = SceneCraftPlan::default();
+    let quality_before = evaluate_chapter_quality_with_signals(
+        &request.before_text,
+        &request.chapter_title,
+        &scene_plan,
+        &request.open_promise_keywords,
+        min_chars,
+        max_chars,
+        &quality_signals,
+    );
+    let quality_after = evaluate_chapter_quality_with_signals(
+        &request.after_text,
+        &request.chapter_title,
+        &scene_plan,
+        &request.open_promise_keywords,
+        min_chars,
+        max_chars,
+        &quality_signals,
+    );
+    let target_changes = build_manual_craft_edit_target_changes(
+        &quality_before,
+        &quality_after,
+        &request.before_text,
+        &request.after_text,
+        &request.metrics,
+    );
+
+    let mut craft_memory_updates = Vec::new();
+    for change in &target_changes {
+        if !is_observed_manual_change(change) {
+            continue;
+        }
+        let Some(rule) = craft_rule_for_metric(&change.metric) else {
+            continue;
+        };
+        let Some(score_after) = change.score_after else {
+            continue;
+        };
+        let delta = change.delta.unwrap_or(0.0);
+        if delta <= 0.01 {
+            continue;
+        }
+        let scope = request.chapter_title.clone();
+        let evidence_ref = format!("{}:{}", source_ref, change.metric);
+        let reason = format!(
+            "Author manual edit improved {} from {:.2} to {:.2}.",
+            change.metric, change.score_before, score_after
+        );
+        let matched_metrics = vec![change.metric.clone()];
+
+        let _ = crate::writer_agent::memory::record_craft_accept(conn, &rule.id, &scope);
+        let event = crate::writer_agent::memory::CraftFeedbackEvent {
+            rule_id: rule.id.clone(),
+            scope: scope.clone(),
+            action: "author_manual_edit_accepted".to_string(),
+            matched_metrics: matched_metrics.clone(),
+            score_before: change.score_before,
+            score_after,
+            evidence_ref: evidence_ref.clone(),
+            reason: reason.clone(),
+        };
+        let _ = crate::writer_agent::memory::record_craft_feedback_event(conn, &event);
+
+        let (example_refs, bad_pattern_refs) = record_author_manual_edit_pattern_memory(
+            conn,
+            &rule.id,
+            &scope,
+            change,
+            delta,
+            &evidence_ref,
+            &reason,
+        );
+        craft_memory_updates.push(CraftMemoryUpdate {
+            rule_id: rule.id.clone(),
+            scope,
+            decision: "author_manual_edit_accepted".to_string(),
+            diagnostic_signals: rule.diagnostic_signals.clone(),
+            matched_metrics,
+            score_before: change.score_before,
+            score_after,
+            evidence_ref,
+            reason,
+            example_refs,
+            bad_pattern_refs,
+        });
+    }
+
+    let example_refs = craft_memory_updates
+        .iter()
+        .flat_map(|update| update.example_refs.clone())
+        .collect();
+    let bad_pattern_refs = craft_memory_updates
+        .iter()
+        .flat_map(|update| update.bad_pattern_refs.clone())
+        .collect();
+
+    Ok(ManualCraftEditFeedbackResult {
+        chapter_title: request.chapter_title,
+        source_ref,
+        score_before: quality_before.overall_score,
+        score_after: quality_after.overall_score,
+        target_changes,
+        craft_memory_updates,
+        example_refs,
+        bad_pattern_refs,
+        quality_before,
+        quality_after,
+    })
+}
+
 fn record_craft_pattern_memory(
     conn: &rusqlite::Connection,
     rule_id: &str,
@@ -932,6 +1079,209 @@ fn record_craft_pattern_memory(
         }
     }
     (example_refs, bad_pattern_refs)
+}
+
+fn build_manual_craft_edit_target_changes(
+    before: &ChapterQualityReport,
+    after: &ChapterQualityReport,
+    before_text: &str,
+    after_text: &str,
+    requested_metrics: &[String],
+) -> Vec<RevisionTargetChange> {
+    let mut changes =
+        build_revision_target_changes_with_text(before, Some(after), true, false, Some(before_text), Some(after_text));
+    let requested: std::collections::BTreeSet<&str> = requested_metrics
+        .iter()
+        .map(String::as_str)
+        .filter(|metric| !metric.trim().is_empty())
+        .collect();
+    if !requested.is_empty() {
+        changes.retain(|change| requested.contains(change.metric.as_str()));
+    }
+
+    for before_metric in &before.metric_results {
+        if !requested.is_empty() && !requested.contains(before_metric.metric.as_str()) {
+            continue;
+        }
+        if changes
+            .iter()
+            .any(|change| change.metric == before_metric.metric)
+        {
+            continue;
+        }
+        let Some(after_metric) = after
+            .metric_results
+            .iter()
+            .find(|metric| metric.metric == before_metric.metric)
+        else {
+            continue;
+        };
+        let delta = after_metric.score - before_metric.score;
+        if delta <= 0.01 {
+            continue;
+        }
+        let changed = changed_text_excerpt_for_manual_edit(
+            before_text,
+            after_text,
+            &before_metric.metric,
+        );
+        changes.push(RevisionTargetChange {
+            metric: before_metric.metric.clone(),
+            revision_hint: before_metric.revision_hint.clone(),
+            score_before: before_metric.score,
+            score_after: Some(after_metric.score),
+            delta: Some(delta),
+            status: RevisionTargetChangeStatus::Improved,
+            evidence_before: before_metric.evidence_excerpt.clone(),
+            evidence_after: Some(after_metric.evidence_excerpt.clone()),
+            changed_excerpt_before: changed
+                .as_ref()
+                .map(|change| change.0.clone())
+                .unwrap_or_default(),
+            changed_excerpt_after: changed
+                .as_ref()
+                .map(|change| change.1.clone())
+                .unwrap_or_default(),
+            text_change_summary: format!(
+                "Author manual edit improved {} by {:+.2}.",
+                before_metric.metric, delta
+            ),
+        });
+    }
+    changes
+}
+
+fn record_author_manual_edit_pattern_memory(
+    conn: &rusqlite::Connection,
+    rule_id: &str,
+    scope: &str,
+    change: &RevisionTargetChange,
+    score_delta: f32,
+    evidence_ref: &str,
+    reason: &str,
+) -> (Vec<String>, Vec<String>) {
+    let mut example_refs = Vec::new();
+    let mut bad_pattern_refs = Vec::new();
+    if change.changed_excerpt_after.trim().is_empty()
+        || change.changed_excerpt_before.trim().is_empty()
+    {
+        return (example_refs, bad_pattern_refs);
+    }
+
+    let now = crate::agent_runtime::now_ms();
+    let good_id = stable_craft_memory_id(
+        "manual-good",
+        rule_id,
+        scope,
+        &change.metric,
+        &change.changed_excerpt_after,
+    );
+    let example = crate::writer_agent::memory::CraftExampleMemory {
+        id: good_id.clone(),
+        rule_id: rule_id.to_string(),
+        scope: scope.to_string(),
+        excerpt_ref: evidence_ref.to_string(),
+        excerpt: snippet_for_craft_memory(&change.changed_excerpt_after, 260),
+        reason: reason.to_string(),
+        pattern: change.metric.clone(),
+        scene_types: vec!["author_manual_edit".to_string()],
+        score_delta,
+        created_at: now,
+    };
+    if crate::writer_agent::memory::record_craft_example(conn, &example).is_ok() {
+        example_refs.push(format!("craft_examples:{}", good_id));
+    }
+
+    let bad_id = stable_craft_memory_id(
+        "manual-bad",
+        rule_id,
+        scope,
+        &change.metric,
+        &change.changed_excerpt_before,
+    );
+    let pattern = crate::writer_agent::memory::CraftBadPatternMemory {
+        id: bad_id.clone(),
+        rule_id: rule_id.to_string(),
+        scope: scope.to_string(),
+        pattern: change.metric.clone(),
+        evidence_ref: evidence_ref.to_string(),
+        evidence_excerpt: snippet_for_craft_memory(&change.changed_excerpt_before, 260),
+        correction: if change.revision_hint.trim().is_empty() {
+            "Use the author-approved after edit as the correction pattern.".to_string()
+        } else {
+            change.revision_hint.clone()
+        },
+        rejected_count: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    if crate::writer_agent::memory::record_craft_bad_pattern(conn, &pattern).is_ok() {
+        bad_pattern_refs.push(format!("craft_bad_patterns:{}", bad_id));
+    }
+
+    (example_refs, bad_pattern_refs)
+}
+
+fn craft_rule_for_metric(metric: &str) -> Option<&'static CraftRule> {
+    craft_library_for_stats()
+        .iter()
+        .find(|rule| rule.diagnostic_signals.iter().any(|signal| signal == metric))
+}
+
+fn is_observed_manual_change(change: &RevisionTargetChange) -> bool {
+    change.status == RevisionTargetChangeStatus::Improved
+        && !change.changed_excerpt_before.trim().is_empty()
+        && !change.changed_excerpt_after.trim().is_empty()
+}
+
+fn changed_text_excerpt_for_manual_edit(
+    before_text: &str,
+    after_text: &str,
+    metric: &str,
+) -> Option<(String, String)> {
+    let change_report = build_revision_target_changes_with_text(
+        &single_metric_report(metric, before_text),
+        Some(&single_metric_report(metric, after_text)),
+        true,
+        false,
+        Some(before_text),
+        Some(after_text),
+    );
+    change_report.into_iter().find_map(|change| {
+        if change.changed_excerpt_before.trim().is_empty()
+            || change.changed_excerpt_after.trim().is_empty()
+        {
+            None
+        } else {
+            Some((change.changed_excerpt_before, change.changed_excerpt_after))
+        }
+    })
+}
+
+fn single_metric_report(metric: &str, text: &str) -> ChapterQualityReport {
+    let result = QualityMetricResult {
+        metric: metric.to_string(),
+        score: 0.4,
+        severity: IssueSeverity::Major,
+        evidence_excerpt: snippet_for_craft_memory(text, 120),
+        rule_source: "manual_edit_diff".to_string(),
+        reason: "manual edit diff carrier".to_string(),
+        revision_hint: "Compare author before/after edit.".to_string(),
+    };
+    ChapterQualityReport {
+        chapter_title: "manual_edit_diff".to_string(),
+        overall_score: result.score,
+        fatal_issues: Vec::new(),
+        major_issues: vec![QualityIssue {
+            metric: result.metric.clone(),
+            severity: IssueSeverity::Major,
+            evidence: result.evidence_excerpt.clone(),
+            description: result.reason.clone(),
+        }],
+        metric_results: vec![result],
+        top_revision_targets: vec![metric.to_string()],
+        no_fatal_issue: true,
+    }
 }
 
 fn best_target_change_for_metrics<'a>(

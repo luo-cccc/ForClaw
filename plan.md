@@ -1366,22 +1366,34 @@ P4：
    - 章节修订反馈 accepted 时写入 `CraftExampleMemory`，rejected 时写入 `CraftBadPatternMemory`，并把 refs 回填到 `CraftMemoryUpdate`。
    - `eval_tasks.jsonl` 新增 `craft_memory` 任务，验证好例和坏模式能持久化并累计 rejected_count。
 
+9. 作者手动改稿回流
+   - 新增 `ManualCraftEditFeedbackRequest` / `ManualCraftEditFeedbackResult`，专门记录作者手动修改前后文本。
+   - 新增 `record_manual_craft_edit_feedback`，按 before/after 质量报告生成 `RevisionTargetChange`，只在指标确实改善且存在文本片段映射时写入 Craft Memory。
+   - 作者改后的片段写入 `CraftExampleMemory`，被替换掉的 before 片段写入 `CraftBadPatternMemory`，并保留 source ref、metric、score delta 和 excerpt mapping。
+   - Headless/MCP 新增 `record_manual_craft_edit_feedback` / `forge_record_manual_craft_edit_feedback`，要求 `authorApproved=true` 才写入。
+   - `craft_memory_stats` 已返回近期 examples / badPatterns，不再只给粗粒度接受率。
+   - `eval_tasks.jsonl` 新增 `manual_craft_edit` 任务，验证作者手改能产生好例、坏模式和文本映射。
+
+10. MCP smoke 稳定性
+   - 进程级 smoke test 的临时数据目录从按 process id 共享，改为按 process id + thread id 隔离。
+   - 避免并发 smoke 用同一个 `FORGE_AGENT_DATA_DIR` 互相清理目录导致 EOF 误报。
+
 ### 当前完成度估算
 
 | 范围 | 完成度 | 依据 |
 | --- | ---: | --- |
-| Headless MCP 写作后端底座 | 85% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；仍缺更硬的进程级 smoke 和部分长任务恢复策略。 |
-| ForClaw 写作赋能 MVP | 90% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；anchor/style 已从“报告占位”升级为真实可选信号，Craft Memory 已能沉淀好例/坏模式。 |
-| 写作质量证据闭环 | 85% | 已有 before/after quality、target changes、文本片段映射、craft memory updates、好例/坏模式记忆、8-task eval；但 fixture 仍偏小，缺跨版本趋势报告和真实作者手改专用回流。 |
+| Headless MCP 写作后端底座 | 86% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；进程级 smoke 已加固临时目录隔离；仍缺部分长任务恢复策略。 |
+| ForClaw 写作赋能 MVP | 92% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；anchor/style 已从“报告占位”升级为真实可选信号，Craft Memory 已能沉淀自动修订和作者手改产生的好例/坏模式。 |
+| 写作质量证据闭环 | 89% | 已有 before/after quality、target changes、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、9-task eval；但 fixture 仍偏小，缺跨版本趋势报告。 |
 | Context quality / preflight 可操作性 | 72% | 已能查询、阻断和建议动作，并进入章节生成 warning/block；但 source taxonomy 与 Story OS source 的映射仍偏规则化，缺来源耗时和 provider usage 校准。 |
-| plan.md 全量路线 | 64% | ForClaw 侧车核心已成型且质量闭环更实；Planner-Aware AgentLoop、provider usage 校准、read-only 并行检索、长任务 checkpoint recovery 仍未完整完成。 |
+| plan.md 全量路线 | 65% | ForClaw 侧车核心已成型且质量闭环更实；Planner-Aware AgentLoop、provider usage 校准、read-only 并行检索、长任务 checkpoint recovery 仍未完整完成。 |
 
 ### 剩余真实缺口
 
 - `anchor_carry` 和 `style_drift` 已接入真实信号，但锚点抽取仍是保守启发式；下一步应让 Project Brain / Story OS 明确产出“本章必须承载锚点”清单。
 - eval fixture 已变强，但仍只能算小样本回归；下一步至少要覆盖 canon 冲突、计划评审、跨章节伏笔推进和跨版本质量趋势。
 - Revision target change 已能记录文本片段变化，但还不是严格语义 diff；如果要解释“哪一句为何改成哪一句”，需要引入更稳的句级 diff / 语义对齐。
-- Craft Memory 已记录指标级反馈和修订产生的 GoodExampleMemory / BadPatternMemory；但仍缺“作者手动修改前后文本”的专用抽取入口。
+- Craft Memory 已记录指标级反馈、自动修订样本和作者手动改稿 before/after 样本；下一步应把这些样本接回 craft selection 的 few-shot/反例选择，而不只是统计查询。
 - Context quality 已进入 preflight，但还没有 provider usage 校准、source timing 和 read-only retrieval parallelism。
 
 ### 本轮验证
@@ -1392,7 +1404,8 @@ cargo check --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p agent-writer --lib
 cargo test -p agent-writer --test writing_eval_test
+cargo test -p forge-agent-mcp
 scripts\run-writing-eval.cmd
 ```
 
-当前 writing eval 结果：8 tasks，8 pass，0 fail。
+当前 writing eval 结果：9 tasks，9 pass，0 fail。

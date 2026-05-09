@@ -5,7 +5,7 @@ Manual eval project for Forge Agent regression testing.
 ## Contents
 
 - `project.json` — Small Chinese xianxia novel project (3 outline nodes, 2 drafted chapters, 5 lore entries)
-- `eval_tasks.jsonl` — 5 eval task definitions covering generation, continuity, and per-metric quality checks
+- `eval_tasks.jsonl` — 9 eval task definitions covering generation, continuity, per-metric quality checks, targeted revision, craft memory, and manual author-edit feedback
 
 ## Running
 

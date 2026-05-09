@@ -755,6 +755,32 @@ impl HeadlessBackend {
         Ok(storage::content_revision(&content))
     }
 
+    pub fn record_manual_craft_edit_feedback(
+        &self,
+        mut request: crate::chapter_generation::ManualCraftEditFeedbackRequest,
+    ) -> Result<crate::chapter_generation::ManualCraftEditFeedbackResult, String> {
+        if request.anchor_keywords.is_empty() {
+            request.anchor_keywords =
+                manual_quality_anchor_keywords(&self.load_lorebook().unwrap_or_default(), &request);
+        }
+        if request.author_voice.is_none() {
+            let memory_path = writer_memory_path(&self.config.data_dir, &self.project.id)?;
+            if let Ok(memory) = WriterMemory::open(&memory_path) {
+                request.author_voice = Some(
+                    crate::writer_agent::author_voice::build_author_voice_snapshot(
+                        &memory,
+                        std::slice::from_ref(&request.chapter_title),
+                        now_ms(),
+                    ),
+                );
+            }
+        }
+        let memory_path = writer_memory_path(&self.config.data_dir, &self.project.id)?;
+        let conn = rusqlite::Connection::open(&memory_path)
+            .map_err(|error| format!("open writer memory: {}", error))?;
+        crate::chapter_generation::record_manual_craft_edit_feedback(&conn, request)
+    }
+
     pub fn rename_chapter_file(&self, old_name: String, new_name: String) -> Result<(), String> {
         let dir = chapters_dir(&self.config.data_dir, &self.project.id)?;
         let old_path = safe_chapter_file_path(&dir, &old_name)?;
@@ -2630,11 +2656,21 @@ Output ONLY the JSON object, no explanation outside. Example:
                     .filter(|r| rule_id.is_none_or(|id| r.id == id))
                     .filter_map(|r| {
                         crate::writer_agent::memory::get_craft_rule_stats(&conn, &r.id).map(|s| {
+                            let examples =
+                                crate::writer_agent::memory::list_craft_examples(&conn, &r.id, 3)
+                                    .unwrap_or_default();
+                            let bad_patterns =
+                                crate::writer_agent::memory::list_craft_bad_patterns(
+                                    &conn, &r.id, 3,
+                                )
+                                .unwrap_or_default();
                             serde_json::json!({
                                 "ruleId": s.rule_id,
                                 "acceptedCount": s.accepted_count,
                                 "rejectedCount": s.rejected_count,
                                 "acceptanceRate": s.acceptance_rate(),
+                                "examples": examples,
+                                "badPatterns": bad_patterns,
                             })
                         })
                     })
@@ -2643,6 +2679,13 @@ Output ONLY the JSON object, no explanation outside. Example:
                     "rules": stats,
                     "totalRules": library.len(),
                 }))
+            }
+            "record_manual_craft_edit_feedback" => {
+                let request: crate::chapter_generation::ManualCraftEditFeedbackRequest =
+                    serde_json::from_value(params).map_err(|error| {
+                        format!("Invalid manual craft edit feedback request: {}", error)
+                    })?;
+                to_value(self.record_manual_craft_edit_feedback(request)?)
             }
             "chapter_quality_report" => {
                 let chapter_text = required_string(&params, "chapterText")?;
@@ -4709,6 +4752,36 @@ fn ingest_external_research_source_headless(
         evidence_refs,
         created_at_ms: now_ms(),
     })
+}
+
+fn manual_quality_anchor_keywords(
+    lorebook: &[LoreEntry],
+    request: &crate::chapter_generation::ManualCraftEditFeedbackRequest,
+) -> Vec<String> {
+    let mut anchors = Vec::new();
+    let combined = format!("{} {}", request.before_text, request.after_text);
+    for entry in lorebook {
+        if combined.contains(entry.keyword.as_str()) {
+            push_unique_string(&mut anchors, &entry.keyword);
+        }
+    }
+    for phrase in [
+        "代价", "旧债", "真相", "秘密", "承诺", "背叛", "选择", "入口", "线索",
+    ] {
+        if combined.contains(phrase) {
+            push_unique_string(&mut anchors, phrase);
+        }
+    }
+    anchors.truncate(16);
+    anchors
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if value.is_empty() || values.iter().any(|existing| existing == value) {
+        return;
+    }
+    values.push(value.to_string());
 }
 
 fn repair_chapter_state_headless(

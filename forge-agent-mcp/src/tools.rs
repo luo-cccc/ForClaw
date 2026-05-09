@@ -679,8 +679,39 @@ pub(crate) fn tools() -> Vec<Value> {
         tool(
             "forge_craft_memory_stats",
             "Craft Memory Stats",
-            "Return craft memory statistics: rule acceptance/rejection rates across the project.",
+            "Return craft memory statistics: rule acceptance/rejection rates plus recent good examples and bad patterns across the project.",
             empty_schema(),
+        ),
+        tool(
+            "forge_record_manual_craft_edit_feedback",
+            "Record Manual Craft Edit Feedback",
+            "Record an author-approved before/after manuscript edit as craft memory, capturing improved examples and rejected bad patterns.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "chapterTitle": { "type": "string" },
+                    "beforeText": { "type": "string" },
+                    "afterText": { "type": "string" },
+                    "metrics": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "anchorKeywords": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "openPromiseKeywords": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "targetMinChars": { "type": "integer", "minimum": 0 },
+                    "targetMaxChars": { "type": "integer", "minimum": 1 },
+                    "sourceRef": { "type": "string" },
+                    "authorApproved": { "type": "boolean" }
+                },
+                "required": ["chapterTitle", "beforeText", "afterText", "authorApproved"],
+                "additionalProperties": false
+            }),
         ),
         tool(
             "forge_chapter_quality_report",

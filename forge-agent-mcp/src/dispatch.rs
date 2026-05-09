@@ -216,6 +216,9 @@ pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Resul
         }
         "forge_craft_library" => backend.dispatch("craft_library", json!({})),
         "forge_craft_memory_stats" => backend.dispatch("craft_memory_stats", json!({})),
+        "forge_record_manual_craft_edit_feedback" => {
+            backend.dispatch("record_manual_craft_edit_feedback", arguments)
+        }
         "forge_chapter_quality_report" => backend.dispatch("chapter_quality_report", arguments),
         "forge_context_quality_report" => backend.dispatch("context_quality_report", arguments),
         "forge_budget_calibration" => backend.dispatch("budget_calibration", json!({})),

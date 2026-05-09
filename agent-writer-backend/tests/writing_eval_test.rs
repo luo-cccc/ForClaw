@@ -2,6 +2,7 @@ use agent_writer_lib::chapter_generation::compile_empowerment_prompt;
 use agent_writer_lib::chapter_generation::evaluate_chapter_quality;
 use agent_writer_lib::chapter_generation::evaluate_chapter_quality_with_signals;
 use agent_writer_lib::chapter_generation::ChapterQualitySignals;
+use agent_writer_lib::chapter_generation::ManualCraftEditFeedbackRequest;
 use agent_writer_lib::chapter_generation::SceneCraftPlan;
 use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
@@ -144,7 +145,7 @@ fn eval_quality_evaluation_task() {
 fn eval_fixture_has_expanded_task_coverage() {
     let tasks = load_tasks();
     assert!(
-        tasks.len() >= 8,
+        tasks.len() >= 9,
         "eval fixture should cover more than the initial 3 shallow tasks"
     );
     assert!(tasks
@@ -162,6 +163,9 @@ fn eval_fixture_has_expanded_task_coverage() {
     assert!(tasks
         .iter()
         .any(|task| task.task == "craft_memory" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "manual_craft_edit" && task.chapter == "第二章"));
 }
 
 #[test]
@@ -335,4 +339,42 @@ fn fixture_quality_signals() -> ChapterQualitySignals {
             last_updated_ms: 0,
         }),
     }
+}
+
+#[test]
+fn manual_craft_edit_feedback_persists_examples_and_bad_patterns() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    agent_writer_lib::writer_agent::memory::ensure_craft_tables(&conn).unwrap();
+    let request = ManualCraftEditFeedbackRequest {
+        chapter_title: "第二章".to_string(),
+        before_text: "林墨说：这是古剑。散修站在门口，没有回答。".to_string(),
+        after_text: "林墨握紧寒影剑，低声说：现在你必须选择。散修因此停在门口，第一次露出退意。"
+            .to_string(),
+        metrics: vec![
+            "dialogue_function".to_string(),
+            "scene_causality".to_string(),
+        ],
+        anchor_keywords: vec!["寒影剑".to_string(), "林墨".to_string(), "选择".to_string()],
+        open_promise_keywords: vec!["寒影剑".to_string()],
+        author_voice: fixture_quality_signals().author_voice,
+        target_min_chars: Some(0),
+        target_max_chars: Some(2000),
+        source_ref: Some("test:manual_author_edit".to_string()),
+        author_approved: true,
+    };
+    let result =
+        agent_writer_lib::chapter_generation::record_manual_craft_edit_feedback(&conn, request)
+            .unwrap();
+
+    assert!(
+        !result.example_refs.is_empty(),
+        "manual edit should create good craft examples"
+    );
+    assert!(
+        !result.bad_pattern_refs.is_empty(),
+        "manual edit should create rejected before-pattern memory"
+    );
+    assert!(result.target_changes.iter().any(|change| {
+        !change.changed_excerpt_before.is_empty() && !change.changed_excerpt_after.is_empty()
+    }));
 }

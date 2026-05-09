@@ -1,7 +1,7 @@
 use agent_writer_lib::chapter_generation::{
     build_revision_target_changes, build_revision_target_changes_with_text,
     compile_empowerment_prompt, evaluate_chapter_quality_with_signals, ChapterQualitySignals,
-    SceneCraftPlan,
+    ManualCraftEditFeedbackRequest, SceneCraftPlan,
 };
 use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
@@ -516,6 +516,82 @@ fn run_craft_memory_eval(task: &EvalTask, _fixture: &serde_json::Value) -> EvalR
     }
 }
 
+fn run_manual_craft_edit_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
+    let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+    agent_writer_lib::writer_agent::memory::ensure_craft_tables(&conn)
+        .expect("ensure craft tables");
+    let before_text = task
+        .expected
+        .get("before_text")
+        .and_then(|value| value.as_str())
+        .unwrap_or("林墨说：这是古剑。散修听完，没有变化。");
+    let after_text = task
+        .expected
+        .get("after_text")
+        .and_then(|value| value.as_str())
+        .unwrap_or("林墨握紧寒影剑，低声说：现在你必须选择。散修因此停在门口。");
+    let request = ManualCraftEditFeedbackRequest {
+        chapter_title: task.chapter.clone(),
+        before_text: before_text.to_string(),
+        after_text: after_text.to_string(),
+        metrics: task.metrics.clone().unwrap_or_default(),
+        anchor_keywords: ["寒影剑", "林墨", "代价", "选择"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        open_promise_keywords: vec!["寒影剑".to_string(), "代价".to_string()],
+        author_voice: quality_signals_from_fixture(fixture).author_voice,
+        target_min_chars: Some(0),
+        target_max_chars: Some(2000),
+        source_ref: Some("eval:manual_author_edit".to_string()),
+        author_approved: true,
+    };
+    let result =
+        agent_writer_lib::chapter_generation::record_manual_craft_edit_feedback(&conn, request)
+            .expect("record manual craft edit feedback");
+    let min_examples = task.expected["min_examples"].as_u64().unwrap_or(1) as usize;
+    let min_bad_patterns = task.expected["min_bad_patterns"].as_u64().unwrap_or(1) as usize;
+    let requires_mapping = task.expected["requires_excerpt_mapping"]
+        .as_bool()
+        .unwrap_or(true);
+    let has_mapping = result.target_changes.iter().any(|change| {
+        !change.changed_excerpt_before.is_empty() && !change.changed_excerpt_after.is_empty()
+    });
+    let status = if result.example_refs.len() >= min_examples
+        && result.bad_pattern_refs.len() >= min_bad_patterns
+        && (!requires_mapping || has_mapping)
+    {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({
+            "score": result.score_before,
+        })),
+        after: Some(serde_json::json!({
+            "score": result.score_after,
+            "example_refs": result.example_refs,
+            "bad_pattern_refs": result.bad_pattern_refs,
+        })),
+        delta: Some(serde_json::json!({
+            "target_changes": result.target_changes,
+            "craft_memory_updates": result.craft_memory_updates,
+            "has_excerpt_mapping": has_mapping,
+        })),
+        message: format!(
+            "manual_craft_edit examples={}, bad_patterns={}, mapping={}",
+            result.example_refs.len(),
+            result.bad_pattern_refs.len(),
+            has_mapping
+        ),
+    }
+}
+
 fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySignals {
     let mut anchors = Vec::new();
     for entry in fixture["lorebook"].as_array().into_iter().flatten() {
@@ -644,6 +720,7 @@ fn main() {
             "quality_signals" => run_quality_signal_eval(task, &fixture),
             "targeted_revision" => run_targeted_revision_eval(task, &fixture),
             "craft_memory" => run_craft_memory_eval(task, &fixture),
+            "manual_craft_edit" => run_manual_craft_edit_eval(task, &fixture),
             "continuity_diagnostic" => run_continuity_diagnostic_eval(task, &fixture),
             other => EvalResult {
                 task: task.task.clone(),

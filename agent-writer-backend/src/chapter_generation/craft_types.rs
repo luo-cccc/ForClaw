@@ -190,6 +190,45 @@ pub struct RevisionReport {
     pub craft_memory_updates: Vec<CraftMemoryUpdate>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualCraftEditFeedbackRequest {
+    pub chapter_title: String,
+    pub before_text: String,
+    pub after_text: String,
+    #[serde(default)]
+    pub metrics: Vec<String>,
+    #[serde(default)]
+    pub anchor_keywords: Vec<String>,
+    #[serde(default)]
+    pub open_promise_keywords: Vec<String>,
+    #[serde(default)]
+    pub author_voice: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,
+    #[serde(default)]
+    pub target_min_chars: Option<usize>,
+    #[serde(default)]
+    pub target_max_chars: Option<usize>,
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    #[serde(default)]
+    pub author_approved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualCraftEditFeedbackResult {
+    pub chapter_title: String,
+    pub source_ref: String,
+    pub score_before: f32,
+    pub score_after: f32,
+    pub target_changes: Vec<RevisionTargetChange>,
+    pub craft_memory_updates: Vec<CraftMemoryUpdate>,
+    pub example_refs: Vec<String>,
+    pub bad_pattern_refs: Vec<String>,
+    pub quality_before: ChapterQualityReport,
+    pub quality_after: ChapterQualityReport,
+}
+
 #[cfg(test)]
 mod craft_types_tests {
     use super::*;
