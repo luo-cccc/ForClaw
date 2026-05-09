@@ -735,6 +735,8 @@ pub struct BuiltChapterContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub craft_rule_stats: Option<std::collections::HashMap<String, crate::writer_agent::memory::CraftRuleStats>>,
     #[serde(default)]
+    pub craft_memory_prompt_samples: Vec<CraftMemoryPromptSamples>,
+    #[serde(default)]
     pub quality_anchor_keywords: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_voice_snapshot: Option<crate::writer_agent::author_voice::AuthorVoiceSnapshot>,

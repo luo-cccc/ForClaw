@@ -7,3 +7,4 @@
 {"task":"targeted_revision","chapter":"第二章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林墨看着寒影剑。散修站在门口。","after_text":"散修逼近门口时，林墨只好拔出寒影剑，因此付出鬓发变白的代价。","requires_excerpt_mapping":true}}
 {"task":"craft_memory","chapter":"第二章","metrics":["dialogue_function"],"expected":{"min_examples":1,"min_bad_patterns":1}}
 {"task":"manual_craft_edit","chapter":"第二章","metrics":["dialogue_function","scene_causality"],"expected":{"before_text":"林墨说：这是古剑。散修站在门口，没有回答。","after_text":"林墨握紧寒影剑，低声说：现在你必须选择。散修因此停在门口，第一次露出退意。","min_examples":1,"min_bad_patterns":1,"requires_excerpt_mapping":true}}
+{"task":"craft_memory_prompt","chapter":"第二章","metrics":["dialogue_function"],"expected":{"must_contain":["项目写法记忆","必须选择","一整段古剑来历"]}}

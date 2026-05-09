@@ -5,7 +5,9 @@ Manual eval project for Forge Agent regression testing.
 ## Contents
 
 - `project.json` — Small Chinese xianxia novel project (3 outline nodes, 2 drafted chapters, 5 lore entries)
-- `eval_tasks.jsonl` — 9 eval task definitions covering generation, continuity, per-metric quality checks, targeted revision, craft memory, and manual author-edit feedback
+- `eval_tasks.jsonl` — 10 eval task definitions covering generation, continuity, per-metric quality checks, targeted revision, craft memory, manual author-edit feedback, and craft memory prompt injection
+- `eval_output.jsonl` — Generated per-task run output, ignored by git
+- `eval_trend.json` — Generated cross-run trend report comparing the latest run with the previous output, ignored by git
 
 ## Running
 
@@ -28,4 +30,4 @@ cargo test -p agent-writer --lib writer_agent::diagnostics
 
 1. Add a JSONL line to `eval_tasks.jsonl`
 2. Run the eval script
-3. Compare output JSONL to expected values
+3. Compare `eval_output.jsonl` and `eval_trend.json` to expected values

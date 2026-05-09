@@ -1,7 +1,12 @@
 use agent_writer_lib::chapter_generation::compile_empowerment_prompt;
+use agent_writer_lib::chapter_generation::compile_empowerment_prompt_with_memory;
 use agent_writer_lib::chapter_generation::evaluate_chapter_quality;
 use agent_writer_lib::chapter_generation::evaluate_chapter_quality_with_signals;
+use agent_writer_lib::chapter_generation::format_craft_prompt_section;
 use agent_writer_lib::chapter_generation::ChapterQualitySignals;
+use agent_writer_lib::chapter_generation::CraftMemoryPromptBadPattern;
+use agent_writer_lib::chapter_generation::CraftMemoryPromptExample;
+use agent_writer_lib::chapter_generation::CraftMemoryPromptSamples;
 use agent_writer_lib::chapter_generation::ManualCraftEditFeedbackRequest;
 use agent_writer_lib::chapter_generation::SceneCraftPlan;
 use agent_writer_lib::writer_agent::author_voice::{
@@ -145,7 +150,7 @@ fn eval_quality_evaluation_task() {
 fn eval_fixture_has_expanded_task_coverage() {
     let tasks = load_tasks();
     assert!(
-        tasks.len() >= 9,
+        tasks.len() >= 10,
         "eval fixture should cover more than the initial 3 shallow tasks"
     );
     assert!(tasks
@@ -166,6 +171,9 @@ fn eval_fixture_has_expanded_task_coverage() {
     assert!(tasks
         .iter()
         .any(|task| task.task == "manual_craft_edit" && task.chapter == "第二章"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.task == "craft_memory_prompt" && task.chapter == "第二章"));
 }
 
 #[test]
@@ -377,4 +385,39 @@ fn manual_craft_edit_feedback_persists_examples_and_bad_patterns() {
     assert!(result.target_changes.iter().any(|change| {
         !change.changed_excerpt_before.is_empty() && !change.changed_excerpt_after.is_empty()
     }));
+}
+
+#[test]
+fn craft_memory_samples_flow_into_prompt_section() {
+    let packet = compile_empowerment_prompt_with_memory(
+        "审讯场景，林墨必须逼问散修",
+        "对话推进",
+        0,
+        false,
+        Some(5),
+        Some(2000),
+        None,
+        &[CraftMemoryPromptSamples {
+            rule_id: "dialogue_function".to_string(),
+            examples: vec![CraftMemoryPromptExample {
+                rule_id: "dialogue_function".to_string(),
+                excerpt_ref: "test:example".to_string(),
+                excerpt: "林墨握紧寒影剑，低声说：现在你必须选择。".to_string(),
+                reason: "作者认可：对话改变选择。".to_string(),
+                score_delta: 0.42,
+            }],
+            bad_patterns: vec![CraftMemoryPromptBadPattern {
+                rule_id: "dialogue_function".to_string(),
+                evidence_ref: "test:bad".to_string(),
+                evidence_excerpt: "林墨说了一整段古剑来历，散修没有任何反应。".to_string(),
+                correction: "让台词改变权力、信息或选择。".to_string(),
+                rejected_count: 2,
+            }],
+        }],
+    );
+    let section = format_craft_prompt_section(&packet);
+
+    assert!(section.contains("项目写法记忆"));
+    assert!(section.contains("必须选择"));
+    assert!(section.contains("一整段古剑来历"));
 }

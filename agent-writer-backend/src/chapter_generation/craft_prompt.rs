@@ -68,6 +68,28 @@ pub fn compile_empowerment_prompt(
     max_prompt_chars: Option<usize>,
     rule_stats: Option<&HashMap<String, CraftRuleStats>>,
 ) -> EmpowermentPromptPacket {
+    compile_empowerment_prompt_with_memory(
+        objective,
+        target_beat,
+        _open_promise_count,
+        has_near_payoff,
+        max_rules,
+        max_prompt_chars,
+        rule_stats,
+        &[],
+    )
+}
+
+pub fn compile_empowerment_prompt_with_memory(
+    objective: &str,
+    target_beat: &str,
+    _open_promise_count: usize,
+    has_near_payoff: bool,
+    max_rules: Option<usize>,
+    max_prompt_chars: Option<usize>,
+    rule_stats: Option<&HashMap<String, CraftRuleStats>>,
+    memory_samples: &[CraftMemoryPromptSamples],
+) -> EmpowermentPromptPacket {
     let max_rules = max_rules.unwrap_or(DEFAULT_MAX_RULES);
     let max_prompt_chars = max_prompt_chars.unwrap_or(DEFAULT_MAX_PROMPT_CHARS);
     let library = craft_library();
@@ -146,11 +168,37 @@ pub fn compile_empowerment_prompt(
         .filter(|s| !s.is_empty())
         .collect();
 
+    let selected_rule_ids: Vec<&str> = selected.iter().map(|sel| sel.rule_id.as_str()).collect();
+    let memory_examples = memory_samples
+        .iter()
+        .filter(|sample| selected_rule_ids.contains(&sample.rule_id.as_str()))
+        .flat_map(|sample| sample.examples.iter().take(1).cloned())
+        .take(3)
+        .collect::<Vec<_>>();
+    let memory_bad_patterns = memory_samples
+        .iter()
+        .filter(|sample| selected_rule_ids.contains(&sample.rule_id.as_str()))
+        .flat_map(|sample| sample.bad_patterns.iter().take(1).cloned())
+        .take(3)
+        .collect::<Vec<_>>();
+    chars_used += memory_examples
+        .iter()
+        .map(|example| example.excerpt.chars().count() + example.reason.chars().count())
+        .sum::<usize>();
+    chars_used += memory_bad_patterns
+        .iter()
+        .map(|pattern| {
+            pattern.evidence_excerpt.chars().count() + pattern.correction.chars().count()
+        })
+        .sum::<usize>();
+
     EmpowermentPromptPacket {
         craft_rules: selected,
         chapter_discipline,
         must_avoid,
         self_checklist,
+        memory_examples,
+        memory_bad_patterns,
         total_token_estimate: chars_used,
     }
 }
@@ -277,7 +325,46 @@ pub fn format_craft_prompt_section(packet: &EmpowermentPromptPacket) -> String {
         }
     }
 
+    if !packet.memory_examples.is_empty() || !packet.memory_bad_patterns.is_empty() {
+        section.push_str("\n## 项目写法记忆\n\n");
+        if !packet.memory_examples.is_empty() {
+            section.push_str("可借鉴的作者认可写法：\n");
+            for example in &packet.memory_examples {
+                section.push_str(&format!(
+                    "- [{}] {}（{}）\n",
+                    example.rule_id,
+                    sanitize_prompt_memory_line(&example.excerpt, 120),
+                    sanitize_prompt_memory_line(&example.reason, 80)
+                ));
+            }
+        }
+        if !packet.memory_bad_patterns.is_empty() {
+            section.push_str("必须避开的已拒绝写法：\n");
+            for pattern in &packet.memory_bad_patterns {
+                section.push_str(&format!(
+                    "- [{}] 避免：{}；改法：{}\n",
+                    pattern.rule_id,
+                    sanitize_prompt_memory_line(&pattern.evidence_excerpt, 120),
+                    sanitize_prompt_memory_line(&pattern.correction, 80)
+                ));
+            }
+        }
+    }
+
     section
+}
+
+fn sanitize_prompt_memory_line(text: &str, max_chars: usize) -> String {
+    let normalized = text
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut snippet: String = normalized.chars().take(max_chars).collect();
+    if normalized.chars().count() > max_chars {
+        snippet.push_str("...");
+    }
+    snippet
 }
 
 // ── Tests ──
@@ -337,6 +424,8 @@ mod craft_prompt_tests {
             chapter_discipline: vec![],
             must_avoid: vec![],
             self_checklist: vec![],
+            memory_examples: vec![],
+            memory_bad_patterns: vec![],
             total_token_estimate: 0,
         };
         let plan = build_scene_craft_plan(
@@ -354,11 +443,47 @@ mod craft_prompt_tests {
             chapter_discipline: vec!["规则1".into()],
             must_avoid: vec!["禁忌1".into()],
             self_checklist: vec!["检查1".into()],
+            memory_examples: vec![],
+            memory_bad_patterns: vec![],
             total_token_estimate: 100,
         };
         let section = format_craft_prompt_section(&packet);
         assert!(section.contains("本章写作纪律"));
         assert!(section.contains("本章禁忌"));
         assert!(section.contains("写后自检"));
+    }
+
+    #[test]
+    fn prompt_section_includes_memory_examples_and_bad_patterns() {
+        let packet = compile_empowerment_prompt_with_memory(
+            "审讯场景，林墨必须逼问真相",
+            "对话推进",
+            0,
+            false,
+            Some(5),
+            Some(2000),
+            None,
+            &[CraftMemoryPromptSamples {
+                rule_id: "dialogue_function".to_string(),
+                examples: vec![CraftMemoryPromptExample {
+                    rule_id: "dialogue_function".to_string(),
+                    excerpt_ref: "craft_examples:good".to_string(),
+                    excerpt: "他说：现在你必须选择。".to_string(),
+                    reason: "作者手改后对话改变选择".to_string(),
+                    score_delta: 0.4,
+                }],
+                bad_patterns: vec![CraftMemoryPromptBadPattern {
+                    rule_id: "dialogue_function".to_string(),
+                    evidence_ref: "craft_bad_patterns:bad".to_string(),
+                    evidence_excerpt: "他说了一整段背景。".to_string(),
+                    correction: "让台词改变权力、信息或选择。".to_string(),
+                    rejected_count: 2,
+                }],
+            }],
+        );
+        let section = format_craft_prompt_section(&packet);
+        assert!(section.contains("项目写法记忆"));
+        assert!(section.contains("必须选择"));
+        assert!(section.contains("一整段背景"));
     }
 }

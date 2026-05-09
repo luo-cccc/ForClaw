@@ -1,13 +1,18 @@
 use agent_writer_lib::chapter_generation::{
     build_revision_target_changes, build_revision_target_changes_with_text,
-    compile_empowerment_prompt, evaluate_chapter_quality_with_signals, ChapterQualitySignals,
+    compile_empowerment_prompt, compile_empowerment_prompt_with_memory,
+    evaluate_chapter_quality_with_signals, format_craft_prompt_section, ChapterQualitySignals,
+    CraftMemoryPromptBadPattern, CraftMemoryPromptExample, CraftMemoryPromptSamples,
     ManualCraftEditFeedbackRequest, SceneCraftPlan,
 };
 use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+const TREND_REGRESSION_THRESHOLD: f32 = 0.05;
 
 #[derive(Debug, Deserialize)]
 struct EvalTask {
@@ -19,7 +24,7 @@ struct EvalTask {
     expected: serde_json::Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct EvalResult {
     task: String,
     chapter: String,
@@ -31,6 +36,52 @@ struct EvalResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     delta: Option<serde_json::Value>,
     message: String,
+}
+
+#[derive(Debug)]
+struct PreviousEvalRun {
+    timestamp: String,
+    results: Vec<EvalResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EvalRunTrend {
+    timestamp: String,
+    task_count: usize,
+    pass: usize,
+    fail: usize,
+    average_after_score: Option<f32>,
+    average_score_delta: Option<f32>,
+    metric_after_average: BTreeMap<String, f32>,
+    task_status: BTreeMap<String, String>,
+    task_after_score: BTreeMap<String, f32>,
+    failing_tasks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EvalTrendDelta {
+    pass_delta: isize,
+    fail_delta: isize,
+    average_after_score_delta: Option<f32>,
+    average_score_delta_delta: Option<f32>,
+    metric_after_average_delta: BTreeMap<String, f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EvalTrendRegression {
+    kind: String,
+    subject: String,
+    previous: serde_json::Value,
+    current: serde_json::Value,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EvalTrendReport {
+    current: EvalRunTrend,
+    previous: Option<EvalRunTrend>,
+    delta: Option<EvalTrendDelta>,
+    regressions: Vec<EvalTrendRegression>,
 }
 
 fn fixture_dir() -> PathBuf {
@@ -592,6 +643,70 @@ fn run_manual_craft_edit_eval(task: &EvalTask, fixture: &serde_json::Value) -> E
     }
 }
 
+fn run_craft_memory_prompt_eval(task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let sample = CraftMemoryPromptSamples {
+        rule_id: "dialogue_function".to_string(),
+        examples: vec![CraftMemoryPromptExample {
+            rule_id: "dialogue_function".to_string(),
+            excerpt_ref: "eval:craft_examples:dialogue".to_string(),
+            excerpt: "林墨握紧寒影剑，低声说：现在你必须选择。".to_string(),
+            reason: "作者认可：对话改变选择。".to_string(),
+            score_delta: 0.42,
+        }],
+        bad_patterns: vec![CraftMemoryPromptBadPattern {
+            rule_id: "dialogue_function".to_string(),
+            evidence_ref: "eval:craft_bad_patterns:dialogue".to_string(),
+            evidence_excerpt: "林墨说了一整段古剑来历，散修没有任何反应。".to_string(),
+            correction: "让台词改变权力、信息或选择。".to_string(),
+            rejected_count: 2,
+        }],
+    };
+    let packet = compile_empowerment_prompt_with_memory(
+        "审讯场景，林墨必须逼问散修",
+        "对话推进",
+        0,
+        false,
+        Some(5),
+        Some(2000),
+        None,
+        &[sample],
+    );
+    let section = format_craft_prompt_section(&packet);
+    let must_contain: Vec<String> = task.expected["must_contain"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect();
+    let missing = must_contain
+        .iter()
+        .filter(|needle| !section.contains(needle.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let status = if missing.is_empty()
+        && !packet.memory_examples.is_empty()
+        && !packet.memory_bad_patterns.is_empty()
+    {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: None,
+        after: Some(serde_json::json!({
+            "memory_examples": packet.memory_examples,
+            "memory_bad_patterns": packet.memory_bad_patterns,
+            "prompt_section": section,
+        })),
+        delta: None,
+        message: format!("craft_memory_prompt missing={:?}", missing),
+    }
+}
+
 fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySignals {
     let mut anchors = Vec::new();
     for entry in fixture["lorebook"].as_array().into_iter().flatten() {
@@ -669,6 +784,233 @@ fn metric_delta_map(
         .collect()
 }
 
+fn result_key(result: &EvalResult) -> String {
+    format!("{}:{}", result.task, result.chapter)
+}
+
+fn json_number(value: &serde_json::Value, path: &[&str]) -> Option<f32> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_f64().map(|number| number as f32)
+}
+
+fn metric_scores(value: &serde_json::Value) -> BTreeMap<String, f32> {
+    value
+        .get("metric_results")
+        .and_then(|metric_results| metric_results.as_object())
+        .map(|metric_results| {
+            metric_results
+                .iter()
+                .filter_map(|(metric, score)| {
+                    score.as_f64().map(|score| (metric.clone(), score as f32))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn average(values: &[f32]) -> Option<f32> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().sum::<f32>() / values.len() as f32)
+    }
+}
+
+fn load_previous_eval_run(path: &Path) -> Option<PreviousEvalRun> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut timestamp = String::new();
+    let mut results = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("run").and_then(|run| run.as_str()) == Some("eval") {
+            timestamp = value
+                .get("timestamp")
+                .and_then(|timestamp| timestamp.as_str())
+                .unwrap_or("")
+                .to_string();
+            continue;
+        }
+        if value.get("summary").and_then(|summary| summary.as_bool()) == Some(true) {
+            continue;
+        }
+        if let Ok(result) = serde_json::from_value::<EvalResult>(value) {
+            results.push(result);
+        }
+    }
+    if results.is_empty() {
+        None
+    } else {
+        Some(PreviousEvalRun { timestamp, results })
+    }
+}
+
+fn build_eval_run_trend(timestamp: String, results: &[EvalResult]) -> EvalRunTrend {
+    let pass = results
+        .iter()
+        .filter(|result| result.status == "pass")
+        .count();
+    let fail = results.len().saturating_sub(pass);
+    let mut after_scores = Vec::new();
+    let mut score_deltas = Vec::new();
+    let mut metric_totals = BTreeMap::<String, (f32, usize)>::new();
+    let mut task_status = BTreeMap::new();
+    let mut task_after_score = BTreeMap::new();
+    let mut failing_tasks = Vec::new();
+
+    for result in results {
+        let key = result_key(result);
+        task_status.insert(key.clone(), result.status.clone());
+        if result.status != "pass" {
+            failing_tasks.push(key.clone());
+        }
+
+        if let Some(after) = result.after.as_ref() {
+            if let Some(score) = json_number(after, &["overall_score"]) {
+                after_scores.push(score);
+                task_after_score.insert(key.clone(), score);
+            } else if let Some(score) = json_number(after, &["score"]) {
+                after_scores.push(score);
+                task_after_score.insert(key.clone(), score);
+            }
+
+            for (metric, score) in metric_scores(after) {
+                let entry = metric_totals.entry(metric).or_insert((0.0, 0));
+                entry.0 += score;
+                entry.1 += 1;
+            }
+        }
+
+        if let Some(delta) = result.delta.as_ref() {
+            if let Some(score_delta) = json_number(delta, &["overall_score"]) {
+                score_deltas.push(score_delta);
+            }
+        }
+    }
+
+    let metric_after_average = metric_totals
+        .into_iter()
+        .filter_map(|(metric, (total, count))| {
+            if count > 0 {
+                Some((metric, total / count as f32))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    EvalRunTrend {
+        timestamp,
+        task_count: results.len(),
+        pass,
+        fail,
+        average_after_score: average(&after_scores),
+        average_score_delta: average(&score_deltas),
+        metric_after_average,
+        task_status,
+        task_after_score,
+        failing_tasks,
+    }
+}
+
+fn option_delta(current: Option<f32>, previous: Option<f32>) -> Option<f32> {
+    match (current, previous) {
+        (Some(current), Some(previous)) => Some(current - previous),
+        _ => None,
+    }
+}
+
+fn build_eval_trend_report(
+    current: EvalRunTrend,
+    previous: Option<EvalRunTrend>,
+) -> EvalTrendReport {
+    let Some(previous_trend) = previous else {
+        return EvalTrendReport {
+            current,
+            previous: None,
+            delta: None,
+            regressions: Vec::new(),
+        };
+    };
+
+    let mut metric_after_average_delta = BTreeMap::new();
+    for (metric, current_score) in &current.metric_after_average {
+        if let Some(previous_score) = previous_trend.metric_after_average.get(metric) {
+            metric_after_average_delta.insert(metric.clone(), current_score - previous_score);
+        }
+    }
+
+    let delta = EvalTrendDelta {
+        pass_delta: current.pass as isize - previous_trend.pass as isize,
+        fail_delta: current.fail as isize - previous_trend.fail as isize,
+        average_after_score_delta: option_delta(
+            current.average_after_score,
+            previous_trend.average_after_score,
+        ),
+        average_score_delta_delta: option_delta(
+            current.average_score_delta,
+            previous_trend.average_score_delta,
+        ),
+        metric_after_average_delta,
+    };
+
+    let mut regressions = Vec::new();
+    for (task, status) in &current.task_status {
+        if status == "pass" {
+            continue;
+        }
+        let previous_status = previous_trend
+            .task_status
+            .get(task)
+            .map(String::as_str)
+            .unwrap_or("missing");
+        if previous_status == "pass" {
+            regressions.push(EvalTrendRegression {
+                kind: "task_status".to_string(),
+                subject: task.clone(),
+                previous: serde_json::json!(previous_status),
+                current: serde_json::json!(status),
+                message: format!("{task} regressed from pass to {status}"),
+            });
+        }
+    }
+
+    if let Some(score_delta) = delta.average_after_score_delta {
+        if score_delta < -TREND_REGRESSION_THRESHOLD {
+            regressions.push(EvalTrendRegression {
+                kind: "average_after_score".to_string(),
+                subject: "all_tasks".to_string(),
+                previous: serde_json::json!(previous_trend.average_after_score),
+                current: serde_json::json!(current.average_after_score),
+                message: format!("average after score dropped by {:.3}", score_delta),
+            });
+        }
+    }
+
+    for (metric, metric_delta) in &delta.metric_after_average_delta {
+        if *metric_delta < -TREND_REGRESSION_THRESHOLD {
+            regressions.push(EvalTrendRegression {
+                kind: "metric_after_average".to_string(),
+                subject: metric.clone(),
+                previous: serde_json::json!(previous_trend.metric_after_average.get(metric)),
+                current: serde_json::json!(current.metric_after_average.get(metric)),
+                message: format!("{metric} average dropped by {:.3}", metric_delta),
+            });
+        }
+    }
+
+    EvalTrendReport {
+        current,
+        previous: Some(previous_trend),
+        delta: Some(delta),
+        regressions,
+    }
+}
+
 fn run_continuity_diagnostic_eval(task: &EvalTask, fixture: &serde_json::Value) -> EvalResult {
     let chapter_text = fixture["chapters"][&task.chapter].as_str().unwrap_or("");
     let lorebook = fixture["lorebook"].as_array().unwrap();
@@ -711,6 +1053,10 @@ fn run_continuity_diagnostic_eval(task: &EvalTask, fixture: &serde_json::Value) 
 fn main() {
     let fixture = load_fixture();
     let tasks = load_tasks();
+    let output_dir = fixture_dir();
+    let output_path = output_dir.join("eval_output.jsonl");
+    let trend_path = output_dir.join("eval_trend.json");
+    let previous_run = load_previous_eval_run(&output_path);
 
     let mut results = Vec::new();
     for task in &tasks {
@@ -721,6 +1067,7 @@ fn main() {
             "targeted_revision" => run_targeted_revision_eval(task, &fixture),
             "craft_memory" => run_craft_memory_eval(task, &fixture),
             "manual_craft_edit" => run_manual_craft_edit_eval(task, &fixture),
+            "craft_memory_prompt" => run_craft_memory_prompt_eval(task, &fixture),
             "continuity_diagnostic" => run_continuity_diagnostic_eval(task, &fixture),
             other => EvalResult {
                 task: task.task.clone(),
@@ -735,14 +1082,12 @@ fn main() {
         results.push(result);
     }
 
-    let output_dir = fixture_dir();
-    let output_path = output_dir.join("eval_output.jsonl");
-
     let mut lines = Vec::new();
+    let timestamp = chrono::Utc::now().to_rfc3339();
     // Header with run metadata
     lines.push(serde_json::json!({
         "run": "eval",
-        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "timestamp": timestamp,
         "task_count": tasks.len(),
     }));
 
@@ -767,7 +1112,15 @@ fn main() {
 
     std::fs::write(&output_path, output).expect("write eval_output.jsonl");
 
+    let current_trend = build_eval_run_trend(timestamp, &results);
+    let previous_trend = previous_run.map(|run| build_eval_run_trend(run.timestamp, &run.results));
+    let trend_report = build_eval_trend_report(current_trend, previous_trend);
+    let trend_output =
+        serde_json::to_string_pretty(&trend_report).expect("serialize eval trend report");
+    std::fs::write(&trend_path, trend_output).expect("write eval_trend.json");
+
     println!("Writing eval complete: {}", output_path.display());
+    println!("Trend report: {}", trend_path.display());
     println!(
         "  tasks: {}, pass: {}, fail: {}",
         results.len(),
@@ -777,7 +1130,80 @@ fn main() {
     for r in &results {
         println!("  [{}] {} {}: {}", r.status, r.task, r.chapter, r.message);
     }
-    if pass_count != results.len() {
+    if !trend_report.regressions.is_empty() {
+        println!("  regressions: {}", trend_report.regressions.len());
+        for regression in &trend_report.regressions {
+            println!("    - {}", regression.message);
+        }
+    }
+    if pass_count != results.len() || !trend_report.regressions.is_empty() {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eval_result_with_score(task: &str, chapter: &str, status: &str, score: f32) -> EvalResult {
+        EvalResult {
+            task: task.to_string(),
+            chapter: chapter.to_string(),
+            status: status.to_string(),
+            before: None,
+            after: Some(serde_json::json!({
+                "overall_score": score,
+                "metric_results": {
+                    "dialogue_function": score,
+                },
+            })),
+            delta: Some(serde_json::json!({
+                "overall_score": 0.0,
+            })),
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn eval_trend_reports_status_and_metric_regressions() {
+        let previous = build_eval_run_trend(
+            "previous".to_string(),
+            &[eval_result_with_score(
+                "quality_evaluation",
+                "第二章",
+                "pass",
+                0.8,
+            )],
+        );
+        let current = build_eval_run_trend(
+            "current".to_string(),
+            &[eval_result_with_score(
+                "quality_evaluation",
+                "第二章",
+                "fail",
+                0.6,
+            )],
+        );
+
+        let report = build_eval_trend_report(current, Some(previous));
+
+        assert_eq!(report.current.pass, 0);
+        assert_eq!(report.current.fail, 1);
+        assert!(report.delta.as_ref().is_some_and(|delta| {
+            delta.pass_delta == -1
+                && delta.fail_delta == 1
+                && delta
+                    .metric_after_average_delta
+                    .get("dialogue_function")
+                    .is_some_and(|delta| *delta < -TREND_REGRESSION_THRESHOLD)
+        }));
+        assert!(report
+            .regressions
+            .iter()
+            .any(|regression| regression.kind == "task_status"));
+        assert!(report
+            .regressions
+            .iter()
+            .any(|regression| regression.kind == "metric_after_average"));
     }
 }

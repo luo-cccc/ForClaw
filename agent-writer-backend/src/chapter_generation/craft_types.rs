@@ -30,7 +30,39 @@ pub struct EmpowermentPromptPacket {
     pub chapter_discipline: Vec<String>,
     pub must_avoid: Vec<String>,
     pub self_checklist: Vec<String>,
+    #[serde(default)]
+    pub memory_examples: Vec<CraftMemoryPromptExample>,
+    #[serde(default)]
+    pub memory_bad_patterns: Vec<CraftMemoryPromptBadPattern>,
     pub total_token_estimate: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftMemoryPromptSamples {
+    pub rule_id: String,
+    pub examples: Vec<CraftMemoryPromptExample>,
+    pub bad_patterns: Vec<CraftMemoryPromptBadPattern>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftMemoryPromptExample {
+    pub rule_id: String,
+    pub excerpt_ref: String,
+    pub excerpt: String,
+    pub reason: String,
+    pub score_delta: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftMemoryPromptBadPattern {
+    pub rule_id: String,
+    pub evidence_ref: String,
+    pub evidence_excerpt: String,
+    pub correction: String,
+    pub rejected_count: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

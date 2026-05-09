@@ -623,9 +623,51 @@ pub async fn build_chapter_context(
             }
             stats
         }),
+        craft_memory_prompt_samples: project
+            .open_memory_db()
+            .map(|conn| build_craft_memory_prompt_samples(&conn))
+            .unwrap_or_default(),
         quality_anchor_keywords,
         author_voice_snapshot,
     })
+}
+
+fn build_craft_memory_prompt_samples(
+    conn: &rusqlite::Connection,
+) -> Vec<CraftMemoryPromptSamples> {
+    let mut samples = Vec::new();
+    for rule in craft_library_for_stats() {
+        let examples = crate::writer_agent::memory::list_craft_examples(conn, &rule.id, 2)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|example| CraftMemoryPromptExample {
+                rule_id: example.rule_id,
+                excerpt_ref: example.excerpt_ref,
+                excerpt: example.excerpt,
+                reason: example.reason,
+                score_delta: example.score_delta,
+            })
+            .collect::<Vec<_>>();
+        let bad_patterns = crate::writer_agent::memory::list_craft_bad_patterns(conn, &rule.id, 2)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pattern| CraftMemoryPromptBadPattern {
+                rule_id: pattern.rule_id,
+                evidence_ref: pattern.evidence_ref,
+                evidence_excerpt: pattern.evidence_excerpt,
+                correction: pattern.correction,
+                rejected_count: pattern.rejected_count,
+            })
+            .collect::<Vec<_>>();
+        if !examples.is_empty() || !bad_patterns.is_empty() {
+            samples.push(CraftMemoryPromptSamples {
+                rule_id: rule.id.clone(),
+                examples,
+                bad_patterns,
+            });
+        }
+    }
+    samples
 }
 
 fn build_quality_anchor_keywords(

@@ -6,4 +6,5 @@ reports/
 dist/
 node_modules/
 /fixtures/writing_eval/eval_output.jsonl
+/fixtures/writing_eval/eval_trend.json
 /ruvector.db

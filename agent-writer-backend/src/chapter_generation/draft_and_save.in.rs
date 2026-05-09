@@ -56,7 +56,7 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
     // Craft memory stats: if preflight cached stats in BuiltChapterContext,
     // the compiler adjusts rule priority by acceptance rate. Otherwise, default
     // priorities are used (no historical data yet).
-    let craft_packet = compile_empowerment_prompt(
+    let craft_packet = compile_empowerment_prompt_with_memory(
         &summary_snippet,
         target_beat,
         open_promise_count,
@@ -64,6 +64,7 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         Some(5),
         Some(600),
         context.craft_rule_stats.as_ref(),
+        &context.craft_memory_prompt_samples,
     );
 
     let system_prompt = if !craft_packet.chapter_discipline.is_empty() {
