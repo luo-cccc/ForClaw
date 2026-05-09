@@ -2628,13 +2628,14 @@ Output ONLY the JSON object, no explanation outside. Example:
                     .iter()
                     .filter(|r| rule_id.is_none_or(|id| r.id == id))
                     .filter_map(|r| {
-                        crate::writer_agent::memory::get_craft_rule_stats(&conn, &r.id)
-                            .map(|s| serde_json::json!({
+                        crate::writer_agent::memory::get_craft_rule_stats(&conn, &r.id).map(|s| {
+                            serde_json::json!({
                                 "ruleId": s.rule_id,
                                 "acceptedCount": s.accepted_count,
                                 "rejectedCount": s.rejected_count,
                                 "acceptanceRate": s.acceptance_rate(),
-                            }))
+                            })
+                        })
                     })
                     .collect();
                 to_value(serde_json::json!({
@@ -2672,7 +2673,6 @@ Output ONLY the JSON object, no explanation outside. Example:
                 // Context quality reports are persisted as artifacts during generation.
                 // Check chapter_runtime/{chapter}-*.quality_report.before.json
                 let runtime_dir = project_data_dir(&self.config.data_dir, &self.project.id)
-                    .map(|p| p.join("chapter_runtime"))
                     .map(|p| p.join("chapter_runtime"))
                     .unwrap_or_default();
                 to_value(serde_json::json!({
@@ -4732,33 +4732,32 @@ fn repair_chapter_state_headless(
         crate::chapter_generation::ChapterGenerationProject::memory_path(&project),
     )
     .map_err(|error| error.to_string())?;
-    let context = tokio::runtime::Handle::current()
-        .block_on(async {
-            crate::chapter_generation::build_chapter_context(
-                &project,
-                crate::chapter_generation::BuildChapterContextInput {
-                    request_id: crate::chapter_generation::make_request_id("repair-state"),
-                    target_chapter_title: Some(chapter_title.clone()),
-                    target_chapter_number: None,
-                    user_instruction: format!(
-                        "Repair chapter settlement state for '{}' without rewriting the chapter.",
-                        chapter_title
-                    ),
-                    budget: crate::chapter_generation::ChapterContextBudget::default(),
-                    chapter_contract: crate::chapter_generation::ChapterContract::default(),
-                    chapter_summary_override: None,
-                    user_profile_entries: backend.user_profile_entries(),
-                    compiled_input: None,
-                    open_promise_count: memory
-                        .get_open_promises()
-                        .ok()
-                        .map(|promises| promises.len())
-                        .unwrap_or(0),
-                },
-            )
-            .await
-            .map_err(|error| error.message.clone())
-        })?;
+    let context = tokio::runtime::Handle::current().block_on(async {
+        crate::chapter_generation::build_chapter_context(
+            &project,
+            crate::chapter_generation::BuildChapterContextInput {
+                request_id: crate::chapter_generation::make_request_id("repair-state"),
+                target_chapter_title: Some(chapter_title.clone()),
+                target_chapter_number: None,
+                user_instruction: format!(
+                    "Repair chapter settlement state for '{}' without rewriting the chapter.",
+                    chapter_title
+                ),
+                budget: crate::chapter_generation::ChapterContextBudget::default(),
+                chapter_contract: crate::chapter_generation::ChapterContract::default(),
+                chapter_summary_override: None,
+                user_profile_entries: backend.user_profile_entries(),
+                compiled_input: None,
+                open_promise_count: memory
+                    .get_open_promises()
+                    .ok()
+                    .map(|promises| promises.len())
+                    .unwrap_or(0),
+            },
+        )
+        .await
+        .map_err(|error| error.message.clone())
+    })?;
     let saved = crate::chapter_generation::SaveGeneratedChapterOutput {
         chapter_title: chapter_title.clone(),
         new_revision: revision.clone(),

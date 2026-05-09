@@ -361,51 +361,81 @@ where
             ));
             let revision_messages =
                 vec![serde_json::json!({"role": "user", "content": revision_prompt})];
-            // Record revision provider budget
+            // Record revision provider budget with approval gate
             let revision_budget = chapter_generation_provider_budget_for_profile(
                 &config.settings,
                 &revision_messages,
                 crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
             );
-            record_provider_budget(&context, &revision_budget);
-            let revision_result = crate::llm_runtime::chat_text_profile(
-                &config.settings,
-                revision_messages,
-                crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
-                300,
-            )
-            .await;
-            if let Ok(revised) = revision_result {
-                // Length validation after revision
-                let length_ok = match chapter_contract_outcome(
-                    &revised,
-                    &context.chapter_contract,
-                    ChapterContractPhase::ModelOutput,
-                ) {
-                    ChapterContractOutcome::Valid => true,
-                    _ => revised.chars().count() >= context.chapter_contract.save_hard_floor_chars
-                        && revised.chars().count() <= context.chapter_contract.save_hard_ceiling_chars,
-                };
-                if length_ok {
-                    let after = evaluate_chapter_quality(
-                        &revised,
-                        &context.target.title,
-                        &scene_craft_plan,
-                        &[],
-                        context.chapter_contract.min_chars,
-                        context.chapter_contract.max_chars,
+            let revision_budget = crate::writer_agent::provider_budget::apply_provider_budget_approval(
+                revision_budget,
+                config.payload.provider_budget_approval.as_ref(),
+            );
+            if revision_budget.decision
+                == crate::writer_agent::provider_budget::WriterProviderBudgetDecision::ApprovalRequired
+            {
+                // Budget not approved — skip revision, keep original draft
+            } else if ensure_provider_budget_allowed(&context, &revision_budget).is_err() {
+                // Budget denied — skip revision
+            } else {
+                record_provider_budget(&context, &revision_budget);
+                let revision_result = crate::llm_runtime::chat_text_profile(
+                    &config.settings,
+                    revision_messages,
+                    crate::llm_runtime::LlmRequestProfile::ChapterTargetedRevision,
+                    300,
+                )
+                .await;
+                if let Ok(revised) = revision_result {
+                    // Strict length validation per plan.md: re-run ModelOutput contract
+                    let length_ok = matches!(
+                        chapter_contract_outcome(
+                            &revised,
+                            &context.chapter_contract,
+                            ChapterContractPhase::ModelOutput,
+                        ),
+                        ChapterContractOutcome::Valid
                     );
-                    if after.overall_score > quality_report_before.overall_score {
-                        draft.content = revised;
-                        draft.output_chars = char_count(&draft.content);
-                        quality_report_after_revision = Some(after);
-                        
+                    if length_ok {
+                        let after = evaluate_chapter_quality(
+                            &revised,
+                            &context.target.title,
+                            &scene_craft_plan,
+                            &[],
+                            context.chapter_contract.min_chars,
+                            context.chapter_contract.max_chars,
+                        );
+                        if after.overall_score > quality_report_before.overall_score {
+                            draft.content = revised;
+                            draft.output_chars = char_count(&draft.content);
+                            quality_report_after_revision = Some(after);
+                        }
                     }
                 }
             }
         }
     }
+    let revision_improved = quality_report_after_revision.is_some();
+    let had_issues = !quality_report_before.fatal_issues.is_empty()
+        || !quality_report_before.major_issues.is_empty();
     let final_quality = quality_report_after_revision.unwrap_or(quality_report_before.clone());
+
+    // Craft memory feedback: record accept/reject based on revision outcome
+    if let Some(ref conn) = config.project.open_memory_db() {
+        let scope = &context.target.title;
+        let rule_ids: Vec<String> = context
+            .craft_rule_stats
+            .as_ref()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        for rule_id in &rule_ids {
+            if revision_improved {
+                let _ = crate::writer_agent::memory::record_craft_accept(conn, rule_id, scope);
+            } else if had_issues {
+                let _ = crate::writer_agent::memory::record_craft_reject(conn, rule_id, scope);
+            }
+        }
+    }
 
     emit(ChapterGenerationEvent::progress_with_detail(
         &request_id,
@@ -560,7 +590,11 @@ where
                     &after_path,
                     serde_json::to_string_pretty(&final_quality).unwrap_or_default(),
                 );
-                Some(artifacts.artifact_refs)
+                // Include quality reports in artifact refs
+                let mut refs = artifacts.artifact_refs;
+                refs.push(format!("chapter_runtime/{}.quality_report.before.json", stem));
+                refs.push(format!("chapter_runtime/{}.quality_report.after.json", stem));
+                Some(refs)
             }
             Err(error) => {
                 warnings.push(format!("Runtime artifacts skipped: {}", error));
