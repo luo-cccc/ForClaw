@@ -836,6 +836,14 @@ fn summarize_revision_text_change(
     }
 }
 
+/// Compute sentence-level changes between before/after revision text.
+///
+/// Uses character-set Jaccard similarity for alignment. This is intentionally
+/// lightweight (no embedding dependency) but has a known limitation: sentences
+/// with heavy synonym substitution or major word-order rearrangement may score
+/// below the match threshold and be reported as deleted+inserted instead of
+/// modified. Such cases are marked with Low confidence or Unaligned so callers
+/// do not treat them as reliable semantic mappings.
 pub fn compute_sentence_changes(
     before_text: &str,
     after_text: &str,
