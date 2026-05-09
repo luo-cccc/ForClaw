@@ -666,9 +666,7 @@ fn context_quality_source_type(
     }
 }
 
-fn taxonomy_for_source(
-    source: &crate::writer_agent::context::ContextSource,
-) -> &'static str {
+fn taxonomy_for_source(source: &crate::writer_agent::context::ContextSource) -> &'static str {
     use crate::writer_agent::context::ContextSource;
     use agent_harness_core::{
         TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON, TAXONOMY_INSTRUCTION, TAXONOMY_LORE,

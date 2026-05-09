@@ -597,11 +597,18 @@ fn run_targeted_revision_eval(
             "mapping_count": actual_mapping_count,
             "sentence_mapping_count": sentence_mapping_count,
         })),
-        message: format!("targeted_revision excerpt_mapping={} count={} sentence_mapping={}", has_excerpt_mapping, actual_mapping_count, sentence_mapping_count),
+        message: format!(
+            "targeted_revision excerpt_mapping={} count={} sentence_mapping={}",
+            has_excerpt_mapping, actual_mapping_count, sentence_mapping_count
+        ),
     }
 }
 
-fn run_craft_memory_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_craft_memory_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
     agent_writer_lib::writer_agent::memory::ensure_craft_tables(&conn)
         .expect("ensure craft tables");
@@ -786,7 +793,10 @@ fn run_craft_memory_prompt_eval(
         .flatten()
         .filter_map(|value| value.as_str().map(str::to_string))
         .collect();
-    let example_excerpt = must_contain.first().cloned().unwrap_or_else(|| "对话改变选择。".to_string());
+    let example_excerpt = must_contain
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "对话改变选择。".to_string());
     let bad_excerpt = must_contain
         .get(1)
         .filter(|_| must_contain.len() == 2)
@@ -1128,9 +1138,7 @@ fn run_negative_missing_anchor_eval(
         .and_then(|v| v.as_str())
         .unwrap_or("");
     // Remove the anchor from signals to simulate it being missing
-    quality_signals
-        .anchor_keywords
-        .retain(|a| a != must_miss);
+    quality_signals.anchor_keywords.retain(|a| a != must_miss);
     let report = evaluate_chapter_quality_with_signals(
         chapter_text,
         &task.chapter,
@@ -1164,9 +1172,7 @@ fn run_negative_missing_anchor_eval(
             "anchor_carry": anchor_result,
         })),
         delta: None,
-        message: format!(
-            "negative_missing_anchor removed='{must_miss}' score={anchor_result:.2}"
-        ),
+        message: format!("negative_missing_anchor removed='{must_miss}' score={anchor_result:.2}"),
     }
 }
 
@@ -1220,7 +1226,9 @@ fn run_negative_style_drift_eval(
         .find(|m| m.metric == "style_drift")
         .map(|m| (m.score, m.reason.clone()))
         .unwrap_or((0.0, String::new()));
-    let max_score = task.expected["style_drift_score_max"].as_f64().unwrap_or(1.0) as f32;
+    let max_score = task.expected["style_drift_score_max"]
+        .as_f64()
+        .unwrap_or(1.0) as f32;
     let reason_contains = task
         .expected
         .get("reason_contains")
@@ -1244,8 +1252,7 @@ fn run_negative_style_drift_eval(
         delta: None,
         message: format!(
             "negative_style_drift score={:.2} reason='{}'",
-            style_result.0,
-            style_result.1
+            style_result.0, style_result.1
         ),
     }
 }
@@ -1277,9 +1284,7 @@ fn run_negative_promise_stalled_eval(
         .find(|m| m.metric == "promise_progress")
         .map(|m| (m.score, m.reason.clone()))
         .unwrap_or((0.0, String::new()));
-    let max_score = task
-        .expected
-        ["promise_progress_score_max"]
+    let max_score = task.expected["promise_progress_score_max"]
         .as_f64()
         .unwrap_or(1.0) as f32;
     let reason_contains = task
@@ -1305,8 +1310,7 @@ fn run_negative_promise_stalled_eval(
         delta: None,
         message: format!(
             "negative_promise_stalled score={:.2} reason='{}'",
-            promise_result.0,
-            promise_result.1
+            promise_result.0, promise_result.1
         ),
     }
 }
@@ -1363,9 +1367,7 @@ fn run_negative_revision_no_change_eval(
     let should_be_empty = task.expected["revision_should_be_empty"]
         .as_bool()
         .unwrap_or(false);
-    let status = if should_be_empty && mapping_count == 0 {
-        "pass"
-    } else if !should_be_empty {
+    let status = if !should_be_empty || mapping_count == 0 {
         "pass"
     } else {
         "fail"
@@ -1381,7 +1383,10 @@ fn run_negative_revision_no_change_eval(
             "changes": changes,
         })),
         delta: None,
-        message: format!("negative_revision_no_change mapping_count={}", mapping_count),
+        message: format!(
+            "negative_revision_no_change mapping_count={}",
+            mapping_count
+        ),
     }
 }
 
@@ -1548,7 +1553,9 @@ fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySi
 fn extract_profile_agnostic_terms(text: &str) -> Vec<String> {
     // Extract common Chinese narrative keywords without profile-specific hardcoding
     let mut terms = Vec::new();
-    for keyword in ["代价", "选择", "秘密", "真相", "承诺", "背叛", "入口", "线索"] {
+    for keyword in [
+        "代价", "选择", "秘密", "真相", "承诺", "背叛", "入口", "线索",
+    ] {
         if text.contains(keyword) {
             terms.push(keyword.to_string());
         }
@@ -1787,11 +1794,7 @@ fn load_previous_eval_run(path: &Path) -> Option<PreviousEvalRun> {
     }
 }
 
-fn build_eval_run_trend(
-    profile: &str,
-    timestamp: String,
-    results: &[EvalResult],
-) -> EvalRunTrend {
+fn build_eval_run_trend(profile: &str, timestamp: String, results: &[EvalResult]) -> EvalRunTrend {
     let pass = results
         .iter()
         .filter(|result| result.status == "pass")
@@ -2070,14 +2073,11 @@ fn build_eval_trend_report(
     }
 }
 
-fn run_profile_eval(
-    profile: &str,
-    smoke: bool,
-) -> (Vec<EvalResult>, EvalTrendReport) {
+fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendReport) {
     let fixture = load_fixture(profile);
     let all_tasks = load_tasks(profile);
     let tasks: Vec<_> = if smoke {
-        all_tasks.into_iter().filter(|t| is_smoke_task(t)).collect()
+        all_tasks.into_iter().filter(is_smoke_task).collect()
     } else {
         all_tasks
     };
@@ -2101,9 +2101,7 @@ fn run_profile_eval(
             "planning_review" => run_planning_review_eval(profile, task, &fixture),
             "promise_progression" => run_promise_progression_eval(profile, task, &fixture),
             "continuity_diagnostic" => run_continuity_diagnostic_eval(profile, task, &fixture),
-            "negative_missing_anchor" => {
-                run_negative_missing_anchor_eval(profile, task, &fixture)
-            }
+            "negative_missing_anchor" => run_negative_missing_anchor_eval(profile, task, &fixture),
             "negative_style_drift" => run_negative_style_drift_eval(profile, task, &fixture),
             "negative_promise_stalled" => {
                 run_negative_promise_stalled_eval(profile, task, &fixture)
@@ -2160,7 +2158,8 @@ fn run_profile_eval(
     std::fs::write(&output_path, output).expect("write eval_output.jsonl");
 
     let current_trend = build_eval_run_trend(profile, timestamp, &results);
-    let previous_trend = previous_run.map(|run| build_eval_run_trend(profile, run.timestamp, &run.results));
+    let previous_trend =
+        previous_run.map(|run| build_eval_run_trend(profile, run.timestamp, &run.results));
     let trend_report = build_eval_trend_report(profile, current_trend, previous_trend);
     let trend_output =
         serde_json::to_string_pretty(&trend_report).expect("serialize eval trend report");
@@ -2213,7 +2212,10 @@ fn main() {
         );
         profile_trend_reports.insert(profile.to_string(), trend_report.clone());
 
-        println!("Profile {}: {} tasks, {} pass, {} fail", profile, trend_report.current.task_count, pass_count, fail_count);
+        println!(
+            "Profile {}: {} tasks, {} pass, {} fail",
+            profile, trend_report.current.task_count, pass_count, fail_count
+        );
         if !trend_report.regressions.is_empty() {
             println!("  Regressions:");
             for reg in &trend_report.regressions {
@@ -2247,7 +2249,12 @@ fn main() {
 
     println!();
     println!("=== Eval Summary ===");
-    println!("Total tasks: {}, Pass: {}, Fail: {}", all_results.len(), total_pass, total_fail);
+    println!(
+        "Total tasks: {}, Pass: {}, Fail: {}",
+        all_results.len(),
+        total_pass,
+        total_fail
+    );
     if !all_regressions.is_empty() {
         println!("Regressions: {}", all_regressions.len());
         for msg in &all_regressions {
@@ -2272,7 +2279,11 @@ fn build_markdown_summary(
     md.push_str(&format!("**Mode:** {}\n", summary.mode));
     md.push_str(&format!(
         "**Profiles:** {}\n\n",
-        profile_trends.keys().cloned().collect::<Vec<_>>().join(", ")
+        profile_trends
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
     ));
 
     md.push_str("## Summary\n\n");

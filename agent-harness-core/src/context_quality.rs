@@ -23,7 +23,9 @@ pub enum ContextQualityRecommendation {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         actions: Vec<String>,
     },
-    Critical { reason: String },
+    Critical {
+        reason: String,
+    },
 }
 
 pub fn evaluate_context_quality(
@@ -234,7 +236,11 @@ mod context_quality_tests {
         let report = evaluate_context_quality(
             "r6",
             &packed,
-            &["outline".into(), "project_brief".into(), "previous_chapter".into()],
+            &[
+                "outline".into(),
+                "project_brief".into(),
+                "previous_chapter".into(),
+            ],
         );
         match report.recommendation {
             ContextQualityRecommendation::Supplement { actions, .. } => {

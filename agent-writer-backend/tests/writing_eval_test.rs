@@ -25,7 +25,10 @@ struct EvalTask {
 }
 
 fn fixture_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/writing_eval"))
+    std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/writing_eval"
+    ))
 }
 
 fn load_fixture(profile: &str) -> serde_json::Value {
@@ -160,7 +163,10 @@ fn eval_matrix_has_three_profiles() {
     for profile in ["xianxia", "mystery", "scifi"] {
         let fixture = load_fixture(profile);
         assert!(
-            fixture["chapters"].as_object().map(|o| !o.is_empty()).unwrap_or(false),
+            fixture["chapters"]
+                .as_object()
+                .map(|o| !o.is_empty())
+                .unwrap_or(false),
             "profile {} should have chapters",
             profile
         );
@@ -186,10 +192,8 @@ fn eval_matrix_has_30_plus_tasks() {
 #[test]
 fn eval_matrix_covers_required_task_types() {
     let all = all_tasks();
-    let task_types: std::collections::HashSet<String> = all
-        .iter()
-        .map(|(_, task)| task.task.clone())
-        .collect();
+    let task_types: std::collections::HashSet<String> =
+        all.iter().map(|(_, task)| task.task.clone()).collect();
 
     let required = [
         "chapter_generation",
@@ -223,7 +227,9 @@ fn eval_matrix_has_negative_cases() {
         .collect();
 
     assert!(
-        negative_types.iter().any(|t| t == "negative_missing_anchor"),
+        negative_types
+            .iter()
+            .any(|t| t == "negative_missing_anchor"),
         "should have negative_missing_anchor"
     );
     assert!(
@@ -231,11 +237,15 @@ fn eval_matrix_has_negative_cases() {
         "should have negative_style_drift"
     );
     assert!(
-        negative_types.iter().any(|t| t == "negative_promise_stalled"),
+        negative_types
+            .iter()
+            .any(|t| t == "negative_promise_stalled"),
         "should have negative_promise_stalled"
     );
     assert!(
-        negative_types.iter().any(|t| t == "negative_revision_no_change"),
+        negative_types
+            .iter()
+            .any(|t| t == "negative_revision_no_change"),
         "should have negative_revision_no_change"
     );
     assert!(

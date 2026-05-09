@@ -713,8 +713,12 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                 steps_failed,
                                 steps_skipped,
                             });
-                            let bundle =
-                                classify_failure(&plan.plan_id, &e, &step.step_id, &completed_step_ids);
+                            let bundle = classify_failure(
+                                &plan.plan_id,
+                                &e,
+                                &step.step_id,
+                                &completed_step_ids,
+                            );
                             self.emit(AgentLoopEvent::FailureBundle {
                                 run_id: bundle.run_id,
                                 failed_step: bundle.failed_step,

@@ -636,10 +636,16 @@ mod tests {
 
     #[test]
     fn long_task_checkpoint_builder() {
-        let cp = LongTaskCheckpoint::new("cp-1", "t1", "chapter_generation", "draft", serde_json::json!({}))
-            .with_budget(1_200_000)
-            .with_artifacts(vec!["a.txt".to_string()])
-            .with_source("test");
+        let cp = LongTaskCheckpoint::new(
+            "cp-1",
+            "t1",
+            "chapter_generation",
+            "draft",
+            serde_json::json!({}),
+        )
+        .with_budget(1_200_000)
+        .with_artifacts(vec!["a.txt".to_string()])
+        .with_source("test");
         assert_eq!(cp.budget_spent_micros, 1_200_000);
         assert_eq!(cp.artifact_refs, vec!["a.txt"]);
         assert_eq!(cp.source, "test");

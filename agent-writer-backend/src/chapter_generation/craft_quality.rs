@@ -871,7 +871,7 @@ pub fn compute_sentence_changes(
                 continue;
             }
             let sim = sentence_similarity(before_sent, after_sent);
-            if sim > 0.4 && best_match.map_or(true, |(_, best_sim)| sim > best_sim) {
+            if sim > 0.4 && best_match.is_none_or(|(_, best_sim)| sim > best_sim) {
                 best_match = Some((before_idx, sim));
             }
         }

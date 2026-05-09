@@ -31,9 +31,7 @@ impl ExecutionStep {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status,
-            StepStatus::Completed { .. }
-                | StepStatus::Failed { .. }
-                | StepStatus::Skipped { .. }
+            StepStatus::Completed { .. } | StepStatus::Failed { .. } | StepStatus::Skipped { .. }
         )
     }
 
@@ -112,8 +110,7 @@ pub enum StepFailureAction {
 impl ExecutionPlan {
     /// Find the first step that is not in a terminal state.
     /// Returns `None` if all steps are terminal (Completed, Failed, or Skipped).
-    pub fn first_runnable_step(&self,
-    ) -> Option<&ExecutionStep> {
+    pub fn first_runnable_step(&self) -> Option<&ExecutionStep> {
         self.steps.iter().find(|s| !s.is_terminal())
     }
 
@@ -375,11 +372,13 @@ mod execution_plan_tests {
 
     #[test]
     fn blocked_step_is_not_terminal() {
-        let mut step = ExecutionStep::default();
-        step.status = StepStatus::Blocked {
-            reason: "awaiting approval".to_string(),
-            context_summary: vec![],
-            recovery_suggestion: "wait".to_string(),
+        let step = ExecutionStep {
+            status: StepStatus::Blocked {
+                reason: "awaiting approval".to_string(),
+                context_summary: vec![],
+                recovery_suggestion: "wait".to_string(),
+            },
+            ..Default::default()
         };
         assert!(!step.is_terminal());
         assert!(step.is_blocked());
