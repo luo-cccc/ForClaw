@@ -181,6 +181,29 @@ impl WriterMemory {
             .optional()
     }
 
+    pub fn get_long_task_checkpoint_by_id(
+        &self,
+        project_id: &str,
+        checkpoint_id: &str,
+    ) -> rusqlite::Result<Option<LongTaskCheckpoint>> {
+        self.conn
+            .query_row(
+                "SELECT checkpoint_json
+                 FROM long_task_checkpoints
+                 WHERE project_id=?1 AND checkpoint_id=?2
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                rusqlite::params![project_id, checkpoint_id],
+                |row| {
+                    let raw: String = row.get(0)?;
+                    serde_json::from_str(&raw).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                    })
+                },
+            )
+            .optional()
+    }
+
     pub fn list_long_task_checkpoints(
         &self,
         project_id: &str,
@@ -208,6 +231,55 @@ impl WriterMemory {
         };
         rows.collect::<Result<Vec<_>, _>>()
     }
+    /// Write (insert or replace) a long-task checkpoint. Convenience alias
+    /// for `insert_long_task_checkpoint`.
+    pub fn write_long_task_checkpoint(
+        &self,
+        project_id: &str,
+        checkpoint: &LongTaskCheckpoint,
+    ) -> rusqlite::Result<()> {
+        self.insert_long_task_checkpoint(project_id, checkpoint)
+    }
+
+    /// Read the latest checkpoint for a given project and task kind,
+    /// regardless of task_id.
+    pub fn read_latest_checkpoint(
+        &self,
+        project_id: &str,
+        task_kind: &str,
+    ) -> rusqlite::Result<Option<LongTaskCheckpoint>> {
+        self.conn
+            .query_row(
+                "SELECT checkpoint_json
+                 FROM long_task_checkpoints
+                 WHERE project_id=?1 AND task_kind=?2
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                rusqlite::params![project_id, task_kind],
+                |row| {
+                    let raw: String = row.get(0)?;
+                    serde_json::from_str(&raw).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Delete all checkpoints for a given task. Returns the number of rows
+    /// deleted.
+    pub fn clear_checkpoints_for_task(
+        &self,
+        project_id: &str,
+        task_id: &str,
+    ) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            "DELETE FROM long_task_checkpoints
+             WHERE project_id=?1 AND task_id=?2",
+            rusqlite::params![project_id, task_id],
+        )
+    }
+
 }
 
 #[cfg(test)]
@@ -450,5 +522,143 @@ mod sprint_persistence_tests {
             .unwrap()
             .unwrap();
         assert_eq!(latest.budget_spent_micros, 2500);
+    }
+    #[test]
+    fn write_read_latest_by_kind_roundtrip() {
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+        let cp = LongTaskCheckpoint::new(
+            "cp-roundtrip",
+            "task-abc",
+            "batch_sprint",
+            "draft_produced",
+            serde_json::json!({"step": "draft", "data": 42}),
+        )
+        .with_budget(5_000)
+        .with_artifacts(vec!["artifact-1.txt".to_string()])
+        .with_source("unit-test");
+
+        // Write via the new write_long_task_checkpoint alias
+        memory.write_long_task_checkpoint("proj-1", &cp).unwrap();
+
+        // Read back via read_latest_checkpoint by task_kind
+        let restored = memory
+            .read_latest_checkpoint("proj-1", "batch_sprint")
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.checkpoint_id, "cp-roundtrip");
+        assert_eq!(restored.task_id, "task-abc");
+        assert_eq!(restored.task_kind, "batch_sprint");
+        assert_eq!(restored.current_step, "draft_produced");
+        assert_eq!(restored.budget_spent_micros, 5_000);
+        assert_eq!(restored.artifact_refs, vec!["artifact-1.txt"]);
+    }
+
+    #[test]
+    fn clear_checkpoints_after_task_completion() {
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+
+        // Write two checkpoints for same task
+        for i in 0..3 {
+            let cp = LongTaskCheckpoint::new(
+                format!("cp-{}", i),
+                "task-clear",
+                "chapter_generation",
+                format!("step-{}", i),
+                serde_json::json!({}),
+            );
+            memory.write_long_task_checkpoint("proj-1", &cp).unwrap();
+        }
+
+        // Verify they exist
+        let before = memory
+            .get_latest_long_task_checkpoint("proj-1", "task-clear")
+            .unwrap();
+        assert!(before.is_some());
+
+        // Clear checkpoints for the completed task
+        let deleted = memory
+            .clear_checkpoints_for_task("proj-1", "task-clear")
+            .unwrap();
+        assert_eq!(deleted, 3);
+
+        // Verify they are gone
+        let after = memory
+            .get_latest_long_task_checkpoint("proj-1", "task-clear")
+            .unwrap();
+        assert!(after.is_none());
+    }
+
+    #[test]
+    fn read_latest_by_kind_project_mismatch_returns_none() {
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+        let cp = LongTaskCheckpoint::new(
+            "cp-mismatch",
+            "task-1",
+            "project_brain_rebuild",
+            "analyze",
+            serde_json::json!({}),
+        );
+        memory
+            .write_long_task_checkpoint("proj-a", &cp)
+            .unwrap();
+
+        // Wrong project -> None
+        let wrong_proj = memory
+            .read_latest_checkpoint("proj-b", "project_brain_rebuild")
+            .unwrap();
+        assert!(wrong_proj.is_none());
+
+        // Wrong task_kind -> None
+        let wrong_kind = memory
+            .read_latest_checkpoint("proj-a", "chapter_generation")
+            .unwrap();
+        assert!(wrong_kind.is_none());
+    }
+
+    #[test]
+    fn clear_only_target_task_leaves_others_intact() {
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+
+        // Task A checkpoints
+        for i in 0..2 {
+            let cp = LongTaskCheckpoint::new(
+                format!("cp-a-{}", i),
+                "task-a",
+                "chapter_generation",
+                format!("step-{}", i),
+                serde_json::json!({}),
+            );
+            memory.write_long_task_checkpoint("proj-1", &cp).unwrap();
+        }
+
+        // Task B checkpoints
+        for i in 0..3 {
+            let cp = LongTaskCheckpoint::new(
+                format!("cp-b-{}", i),
+                "task-b",
+                "batch_sprint",
+                format!("step-{}", i),
+                serde_json::json!({}),
+            );
+            memory.write_long_task_checkpoint("proj-1", &cp).unwrap();
+        }
+
+        // Clear only task A
+        let deleted = memory
+            .clear_checkpoints_for_task("proj-1", "task-a")
+            .unwrap();
+        assert_eq!(deleted, 2);
+
+        // Task A gone
+        assert!(memory
+            .get_latest_long_task_checkpoint("proj-1", "task-a")
+            .unwrap()
+            .is_none());
+
+        // Task B still has 3
+        let b_checkpoints = memory
+            .list_long_task_checkpoints("proj-1", Some("batch_sprint"), 10)
+            .unwrap();
+        assert_eq!(b_checkpoints.len(), 3);
     }
 }

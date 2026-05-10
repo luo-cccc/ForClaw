@@ -120,6 +120,8 @@ pub struct ToolFilter {
     pub include_disabled: bool,
     pub max_side_effect_level: Option<ToolSideEffectLevel>,
     pub required_tags: Vec<String>,
+    /// If non-empty, only tools whose names are in this list are allowed.
+    pub allowed_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

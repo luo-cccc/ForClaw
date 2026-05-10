@@ -25,6 +25,7 @@ pub fn effective_tool_inventory() -> EffectiveToolInventory {
         include_disabled: false,
         max_side_effect_level: Some(ToolSideEffectLevel::Write),
         required_tags: Vec::new(),
+        allowed_names: Vec::new(),
     };
     let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
     registry.effective_inventory(&filter, &policy)

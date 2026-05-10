@@ -699,6 +699,19 @@ pub(crate) fn tools() -> Vec<Value> {
             empty_schema(),
         ),
         tool(
+            "forge_resume_chapter_generation",
+            "Resume Chapter Generation",
+            "Resume a chapter generation from a saved checkpoint. Returns a structured resume plan with completed steps, recommended recovery step, and any missing context.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "checkpointId": { "type": "string" }
+                },
+                "required": ["checkpointId"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
             "forge_craft_library",
             "Craft Library",
             "Return the loaded craft rule library with all available writing quality rules.",

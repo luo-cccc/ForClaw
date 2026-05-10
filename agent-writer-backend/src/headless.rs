@@ -112,6 +112,19 @@ pub struct HeadlessProjectGraphData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationResumePlan {
+    pub can_resume: bool,
+    pub checkpoint_id: String,
+    pub chapter_title: String,
+    pub request_id: String,
+    pub completed_steps: Vec<String>,
+    pub resume_from_step: String,
+    pub budget_spent_micros: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileEvalTrend {
     pub profile: String,
     pub trend: serde_json::Value,
@@ -1347,12 +1360,10 @@ Output ONLY the JSON object, no explanation outside. Example:
         if payload.quality_mode.is_none() {
             if let Ok(sprint_guard) = self.lock_sprint() {
                 if let Some(sprint) = sprint_guard.as_ref() {
-                    let sprint_mode = sprint.quality_mode.clone();
+                    let sprint_mode = sprint.quality_mode;
                     let chapter_mode = sprint_current_chapter_title(sprint)
-                        .and_then(|title| {
-                            sprint.chapters.iter().find(|c| c.chapter_title == title)
-                        })
-                        .and_then(|ch| ch.quality_mode.clone());
+                        .and_then(|title| sprint.chapters.iter().find(|c| c.chapter_title == title))
+                        .and_then(|ch| ch.quality_mode);
                     payload.quality_mode = chapter_mode.or(sprint_mode);
                 }
             }
@@ -2174,6 +2185,99 @@ Output ONLY the JSON object, no explanation outside. Example:
             .map_err(|e| e.to_string())
     }
 
+    /// Query the latest checkpoint for a given task kind across all tasks
+    /// in the current project.
+    pub fn query_latest_checkpoint(
+        &self,
+        task_kind: String,
+    ) -> Result<Option<crate::writer_agent::supervised_sprint::LongTaskCheckpoint>, String> {
+        let kernel = self.lock_kernel()?;
+        kernel
+            .memory
+            .read_latest_checkpoint(&self.project.id, &task_kind)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Attempt to resume a chapter generation from its latest checkpoint.
+    /// Returns a structured resume plan with completed steps, recommended
+    /// recovery step, and any missing context that must be re-supplied.
+    pub fn resume_chapter_generation(
+        &self,
+        checkpoint_id: String,
+    ) -> Result<ChapterGenerationResumePlan, String> {
+        let kernel = self.lock_kernel()?;
+        let checkpoint = kernel
+            .memory
+            .get_long_task_checkpoint_by_id(&self.project.id, &checkpoint_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Checkpoint not found".to_string())?;
+
+        if checkpoint.task_kind != "chapter_generation" {
+            return Err(format!(
+                "Expected task_kind='chapter_generation', got '{}'",
+                checkpoint.task_kind
+            ));
+        }
+
+        let completed_steps = match checkpoint.current_step.as_str() {
+            "context_built" => vec!["context_built".to_string()],
+            "draft_produced" => vec!["context_built".to_string(), "draft_produced".to_string()],
+            "quality_report_produced" => vec![
+                "context_built".to_string(),
+                "draft_produced".to_string(),
+                "quality_report_produced".to_string(),
+            ],
+            "save_prepared" => vec![
+                "context_built".to_string(),
+                "draft_produced".to_string(),
+                "quality_report_produced".to_string(),
+                "save_prepared".to_string(),
+            ],
+            _ => vec![],
+        };
+
+        let resume_from_step = match checkpoint.current_step.as_str() {
+            "context_built" => "draft".to_string(),
+            "draft_produced" => "quality_report".to_string(),
+            "quality_report_produced" => "targeted_revision_or_save".to_string(),
+            "save_prepared" => "save".to_string(),
+            _ => "context".to_string(),
+        };
+
+        let can_resume = checkpoint.current_step == "save_prepared"
+            || checkpoint.current_step == "quality_report_produced"
+            || checkpoint.current_step == "draft_produced"
+            || checkpoint.current_step == "context_built";
+
+        let chapter_title = checkpoint
+            .safe_resume_payload
+            .get("chapter_title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let request_id = checkpoint
+            .safe_resume_payload
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        Ok(ChapterGenerationResumePlan {
+            can_resume,
+            checkpoint_id: checkpoint.checkpoint_id,
+            chapter_title,
+            request_id,
+            completed_steps,
+            resume_from_step,
+            budget_spent_micros: checkpoint.budget_spent_micros,
+            warnings: if can_resume {
+                vec![]
+            } else {
+                vec!["Checkpoint step is not recognized as resumable".to_string()]
+            },
+        })
+    }
+
     pub fn project_graph_data(&self) -> Result<HeadlessProjectGraphData, String> {
         let lore_entries = self.load_lorebook()?;
         let outline = self.load_outline()?;
@@ -2941,6 +3045,24 @@ Output ONLY the JSON object, no explanation outside. Example:
             }
             "chapter_generation_resume_candidates" => {
                 to_value(self.chapter_generation_resume_candidates()?)
+            }
+            "query_latest_checkpoint" => {
+                let task_kind = params
+                    .get("taskKind")
+                    .or_else(|| params.get("task_kind"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                to_value(self.query_latest_checkpoint(task_kind)?)
+            }
+            "resume_chapter_generation" => {
+                let checkpoint_id = params
+                    .get("checkpointId")
+                    .or_else(|| params.get("checkpoint_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                to_value(self.resume_chapter_generation(checkpoint_id)?)
             }
             "project_graph_data" => to_value(self.project_graph_data()?),
             "eval_trend_summary" => to_value(self.eval_trend_summary()?),
@@ -5808,11 +5930,149 @@ fn to_value<T: Serialize>(value: T) -> Result<serde_json::Value, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn temp_backend() -> HeadlessBackend {
+        let temp_dir = std::env::temp_dir().join(format!("forge-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = HeadlessConfig {
+            data_dir: temp_dir,
+            project_id: Some(format!("test-proj-{}", std::process::id())),
+            project_name: Some("Test Project".to_string()),
+        };
+        HeadlessBackend::open(config).unwrap()
+    }
+
     #[test]
     fn budget_calibration_returns_default_budget() {
         let budget = crate::chapter_generation::ChapterContextBudget::default();
         assert!(budget.total_chars > 0);
         assert!(budget.instruction_chars > 0);
         assert!(budget.outline_chars > 0);
+    }
+
+    #[test]
+    fn resume_chapter_generation_not_found() {
+        let backend = temp_backend();
+        let result = backend.resume_chapter_generation("nonexistent".to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn resume_chapter_generation_wrong_task_kind() {
+        let backend = temp_backend();
+        let checkpoint = crate::writer_agent::supervised_sprint::LongTaskCheckpoint::new(
+            "cp-1",
+            "task-1",
+            "batch_sprint",
+            "draft_produced",
+            serde_json::json!({}),
+        );
+        let kernel = backend.lock_kernel().unwrap();
+        kernel
+            .memory
+            .insert_long_task_checkpoint(&backend.project.id, &checkpoint)
+            .unwrap();
+        drop(kernel);
+
+        let result = backend.resume_chapter_generation("cp-1".to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("chapter_generation"));
+    }
+
+    #[test]
+    fn resume_chapter_generation_draft_produced_ok() {
+        let backend = temp_backend();
+        let checkpoint = crate::writer_agent::supervised_sprint::LongTaskCheckpoint::new(
+            "cp-draft",
+            "task-draft",
+            "chapter_generation",
+            "draft_produced",
+            serde_json::json!({
+                "chapter_title": "Test Chapter",
+                "request_id": "req-1"
+            }),
+        )
+        .with_budget(1_000_000);
+        let kernel = backend.lock_kernel().unwrap();
+        kernel
+            .memory
+            .insert_long_task_checkpoint(&backend.project.id, &checkpoint)
+            .unwrap();
+        drop(kernel);
+
+        let plan = backend
+            .resume_chapter_generation("cp-draft".to_string())
+            .unwrap();
+        assert!(plan.can_resume);
+        assert_eq!(plan.checkpoint_id, "cp-draft");
+        assert_eq!(plan.chapter_title, "Test Chapter");
+        assert_eq!(plan.request_id, "req-1");
+        assert_eq!(
+            plan.completed_steps,
+            vec!["context_built", "draft_produced"]
+        );
+        assert_eq!(plan.resume_from_step, "quality_report");
+        assert_eq!(plan.budget_spent_micros, 1_000_000);
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn resume_chapter_generation_context_built_ok() {
+        let backend = temp_backend();
+        let checkpoint = crate::writer_agent::supervised_sprint::LongTaskCheckpoint::new(
+            "cp-ctx",
+            "task-ctx",
+            "chapter_generation",
+            "context_built",
+            serde_json::json!({
+                "chapter_title": "First Chapter",
+                "request_id": "req-0"
+            }),
+        );
+        let kernel = backend.lock_kernel().unwrap();
+        kernel
+            .memory
+            .insert_long_task_checkpoint(&backend.project.id, &checkpoint)
+            .unwrap();
+        drop(kernel);
+
+        let plan = backend
+            .resume_chapter_generation("cp-ctx".to_string())
+            .unwrap();
+        assert!(plan.can_resume);
+        assert_eq!(plan.checkpoint_id, "cp-ctx");
+        assert_eq!(plan.chapter_title, "First Chapter");
+        assert_eq!(plan.request_id, "req-0");
+        assert_eq!(plan.completed_steps, vec!["context_built"]);
+        assert_eq!(plan.resume_from_step, "draft");
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn resume_chapter_generation_unknown_step_warns() {
+        let backend = temp_backend();
+        let checkpoint = crate::writer_agent::supervised_sprint::LongTaskCheckpoint::new(
+            "cp-unknown",
+            "task-unknown",
+            "chapter_generation",
+            "something_weird",
+            serde_json::json!({}),
+        );
+        let kernel = backend.lock_kernel().unwrap();
+        kernel
+            .memory
+            .insert_long_task_checkpoint(&backend.project.id, &checkpoint)
+            .unwrap();
+        drop(kernel);
+
+        let plan = backend
+            .resume_chapter_generation("cp-unknown".to_string())
+            .unwrap();
+        assert!(!plan.can_resume);
+        assert_eq!(plan.resume_from_step, "context");
+        assert_eq!(plan.warnings.len(), 1);
+        assert!(plan.warnings[0].contains("not recognized"));
     }
 }

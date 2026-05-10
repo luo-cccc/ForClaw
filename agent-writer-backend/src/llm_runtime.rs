@@ -28,6 +28,18 @@ pub struct LlmUsage {
     pub provider_retries: u64,
     /// Duration of the last provider call in milliseconds.
     pub latency_ms: u64,
+    /// Time-to-first-token in milliseconds (only populated for streaming calls).
+    pub ttft_ms: Option<u64>,
+    /// Cumulative provider wall-clock time across all calls/retries in milliseconds.
+    pub total_provider_duration_ms: u64,
+    /// Which request profile was used (e.g., ChapterDraft, ChapterCompress).
+    pub profile: Option<LlmRequestProfile>,
+    /// Character count of input messages for this call.
+    pub input_chars: usize,
+    /// Character count of the response content.
+    pub output_chars: usize,
+    /// Whether this call was a repair (continuation, compress, or revision).
+    pub repaired: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,6 +284,8 @@ fn endpoint(api_base: &str, path: &str) -> String {
 pub fn client(timeout_secs: u64) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .pool_idle_timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
 }
@@ -433,7 +447,10 @@ pub async fn chat_text_profile_with_usage(
 ) -> Result<(String, LlmUsage), String> {
     let json_mode = profile == LlmRequestProfile::Json;
     let options = request_options(settings, profile);
-    chat_text_with_options_raw(settings, messages, json_mode, timeout_secs, options).await
+    let (text, mut usage) =
+        chat_text_with_options_raw(settings, messages, json_mode, timeout_secs, options).await?;
+    usage.profile = Some(profile);
+    Ok((text, usage))
 }
 
 async fn chat_text_with_options_raw(
@@ -458,9 +475,11 @@ async fn chat_text_with_options_raw(
     }
     apply_provider_options(settings, &mut payload, options);
 
+    let input_chars = payload.to_string().chars().count();
     let mut last_error = String::new();
     let mut provider_calls: u64 = 0;
     let mut provider_retries: u64 = 0;
+    let mut total_provider_duration_ms: u64 = 0;
     for attempt in 0..=CHAT_COMPLETION_TRANSIENT_RETRIES {
         provider_calls += 1;
         if attempt > 0 {
@@ -479,6 +498,7 @@ async fn chat_text_with_options_raw(
             Err(e) => {
                 last_error = format!("Request failed: {}", e);
                 if should_retry_chat_completion(attempt) {
+                    total_provider_duration_ms += call_t0.elapsed().as_millis() as u64;
                     sleep_before_chat_completion_retry(attempt, &last_error).await;
                     continue;
                 }
@@ -495,17 +515,31 @@ async fn chat_text_with_options_raw(
                 redact_api_error_body(&text)
             );
             if is_retryable_chat_status(status) && should_retry_chat_completion(attempt) {
+                total_provider_duration_ms += call_t0.elapsed().as_millis() as u64;
                 sleep_before_chat_completion_retry(attempt, &last_error).await;
                 continue;
             }
             return Err(last_error);
         }
 
-        let body: serde_json::Value = match resp.json().await {
-            Ok(body) => body,
+        let body: serde_json::Value = match resp.text().await {
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(body) => body,
+                Err(e) => {
+                    let preview = text.chars().take(500).collect::<String>();
+                    last_error = format!("JSON parse: {} (raw preview: {})", e, preview);
+                    if should_retry_chat_completion(attempt) {
+                        total_provider_duration_ms += call_t0.elapsed().as_millis() as u64;
+                        sleep_before_chat_completion_retry(attempt, &last_error).await;
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            },
             Err(e) => {
-                last_error = format!("JSON parse: {}", e);
+                last_error = format!("Response body read failed: {}", e);
                 if should_retry_chat_completion(attempt) {
+                    total_provider_duration_ms += call_t0.elapsed().as_millis() as u64;
                     sleep_before_chat_completion_retry(attempt, &last_error).await;
                     continue;
                 }
@@ -513,7 +547,18 @@ async fn chat_text_with_options_raw(
             }
         };
         let latency_ms = call_t0.elapsed().as_millis() as u64;
-        return Ok(chat_completion_text_and_usage(body, provider_calls, provider_retries, latency_ms));
+        total_provider_duration_ms += latency_ms;
+        return Ok(chat_completion_text_and_usage(
+            body,
+            provider_calls,
+            provider_retries,
+            latency_ms,
+            total_provider_duration_ms,
+            None,
+            None,
+            input_chars,
+            false,
+        ));
     }
     Err(last_error)
 }
@@ -542,32 +587,41 @@ fn chat_completion_text_and_usage(
     provider_calls: u64,
     provider_retries: u64,
     latency_ms: u64,
+    total_provider_duration_ms: u64,
+    profile: Option<LlmRequestProfile>,
+    ttft_ms: Option<u64>,
+    input_chars: usize,
+    repaired: bool,
 ) -> (String, LlmUsage) {
     let content = body["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
         .to_string();
-    let usage = body
-        .get("usage")
-        .map_or_else(
-            || LlmUsage {
-                provider_calls,
-                provider_retries,
-                latency_ms,
-                ..LlmUsage::default()
-            },
-            |u| LlmUsage {
-                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-                completion_tokens: u
-                    .get("completion_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
-                total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-                provider_calls,
-                provider_retries,
-                latency_ms,
-            },
-        );
+    let output_chars = content.chars().count();
+    let base = LlmUsage {
+        provider_calls,
+        provider_retries,
+        latency_ms,
+        total_provider_duration_ms,
+        ttft_ms,
+        profile,
+        input_chars,
+        output_chars,
+        repaired,
+        ..LlmUsage::default()
+    };
+    let usage = body.get("usage").map_or_else(
+        || base.clone(),
+        |u| LlmUsage {
+            prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            ..base
+        },
+    );
     (content, usage)
 }
 
@@ -741,6 +795,107 @@ pub async fn stream_chat_profile(
     }
 
     Ok(full)
+}
+
+pub async fn stream_chat_profile_with_usage(
+    settings: &LlmSettings,
+    messages: Vec<serde_json::Value>,
+    profile: LlmRequestProfile,
+    timeout_secs: u64,
+    mut on_delta: impl FnMut(String) -> Result<StreamControl, String>,
+) -> Result<(String, LlmUsage), String> {
+    let options = request_options(settings, profile);
+    guard_chat_request(settings, &messages, u64::from(options.max_tokens))?;
+    let client = client(timeout_secs)?;
+    let mut payload = serde_json::json!({
+        "model": settings.model,
+        "messages": messages,
+        "stream": true,
+        "temperature": options.temperature,
+        "max_tokens": options.max_tokens
+    });
+    apply_provider_options(settings, &mut payload, options);
+
+    let input_chars = payload.to_string().chars().count();
+    let call_t0 = std::time::Instant::now();
+    let resp = client
+        .post(endpoint(&settings.api_base, "chat/completions"))
+        .header("Authorization", format!("Bearer {}", settings.api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "API error {}: {}",
+            status.as_u16(),
+            redact_api_error_body(&text)
+        ));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut sse_buffer = String::new();
+    let mut full = String::new();
+    let mut first_delta_t0: Option<std::time::Instant> = None;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
+        let text = String::from_utf8_lossy(&chunk);
+        sse_buffer.push_str(&text);
+
+        while let Some(line_end) = sse_buffer.find('\n') {
+            let line = sse_buffer[..line_end].trim().to_string();
+            sse_buffer = sse_buffer[line_end + 1..].to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let data = if let Some(d) = line.strip_prefix("data: ") {
+                d
+            } else {
+                continue;
+            };
+            if data == "[DONE]" {
+                continue;
+            }
+            let parsed: serde_json::Value =
+                serde_json::from_str(data).map_err(|e| format!("JSON parse error: {}", e))?;
+            let content = parsed["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            if content.is_empty() {
+                continue;
+            }
+
+            if first_delta_t0.is_none() {
+                first_delta_t0 = Some(std::time::Instant::now());
+            }
+
+            full.push_str(&content);
+            on_delta(content)?;
+        }
+    }
+
+    let latency_ms = call_t0.elapsed().as_millis() as u64;
+    let output_chars = full.chars().count();
+    let usage = LlmUsage {
+        provider_calls: 1,
+        provider_retries: 0,
+        latency_ms,
+        ttft_ms: first_delta_t0.map(|t0| t0.duration_since(call_t0).as_millis() as u64),
+        total_provider_duration_ms: latency_ms,
+        profile: Some(profile),
+        input_chars,
+        output_chars,
+        repaired: false,
+        ..LlmUsage::default()
+    };
+
+    Ok((full, usage))
 }
 
 #[cfg(test)]
@@ -961,6 +1116,11 @@ mod tests {
             1,
             0,
             42,
+            88,
+            None,
+            Some(24),
+            500,
+            false,
         );
 
         assert_eq!(text, "林墨选择拔刀。");
@@ -970,5 +1130,48 @@ mod tests {
         assert_eq!(usage.provider_retries, 0);
         assert_eq!(usage.latency_ms, 42);
         assert_eq!(usage.total_tokens, 18);
+        assert_eq!(usage.input_chars, 500);
+        assert_eq!(usage.output_chars, 7); // "林墨选择拔刀。" is 7 chars
+        assert_eq!(usage.ttft_ms, Some(24));
+        assert_eq!(usage.total_provider_duration_ms, 88);
+        assert_eq!(usage.profile, None);
+        assert!(!usage.repaired);
+    }
+
+    #[test]
+    fn ttft_ms_populated_for_streaming_usage() {
+        // Simulate streaming usage: ttft_ms should be Some, total_provider_duration_ms
+        // should include total call time, and latency_ms should be the last call duration.
+        let (text, usage) = chat_completion_text_and_usage(
+            serde_json::json!({
+                "choices": [
+                    {
+                        "message": {
+                            "content": "流式输出。"
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 3,
+                    "total_tokens": 8
+                }
+            }),
+            1,
+            0,
+            150,
+            150,
+            Some(LlmRequestProfile::ProjectBrainStream),
+            Some(95),
+            200,
+            false,
+        );
+
+        assert_eq!(text, "流式输出。");
+        assert_eq!(usage.ttft_ms, Some(95));
+        assert_eq!(usage.total_provider_duration_ms, 150);
+        assert_eq!(usage.latency_ms, 150);
+        assert_eq!(usage.profile, Some(LlmRequestProfile::ProjectBrainStream));
+        assert!(!usage.repaired);
     }
 }

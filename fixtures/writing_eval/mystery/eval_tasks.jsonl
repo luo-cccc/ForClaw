@@ -19,3 +19,5 @@
 {"task":"targeted_revision","chapter":"第三章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"陈默走进地下室。他看到了钥匙。","after_text":"陈默挪开木板，霉味扑面而来，他在第七排储物柜找到六把钥匙，加上口袋里的07，七把齐了。","requires_excerpt_mapping":true}}
 {"task":"promise_progression","chapter":"第三章","metrics":["promise_progress"],"expected":{"required_promises":["孤儿院火灾真相"],"min_progressed":1}}
 {"task":"canon_conflict","chapter":"第三章","check":"疤痕来源冲突","expected":{"candidate_text":"尸体手腕上的烫伤疤痕是后天伪造的，与孤儿院火灾完全无关。","canon_conflict":true,"must_conflict":["scar-origin"]}}
+{"task":"negative_plot_stalled","chapter":"第二章","metrics":["plot_progression","new_information_density","anchor_carry"],"expected":{"stalled_text":"陈默看着档案袋。档案袋是旧城区的线索。陈默翻开档案袋。档案袋里的纸张已经泛黄。陈默盯着档案袋上的名字。","anchor_carry_min":0.1,"plot_progression_max":0.55,"new_information_density_max":0.55}}
+{"task":"state_delta_trace","chapter":"第三章","metrics":["state_delta_coverage"],"expected":{"required_deltas":[{"delta_type":"knowledge","description":"发现、线索"},{"delta_type":"relationship","description":"信任、背叛、隐瞒"}],"min_covered":1,"max_missing":1}}

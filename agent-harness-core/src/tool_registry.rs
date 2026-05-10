@@ -23,6 +23,7 @@ mod tests {
             include_disabled: false,
             max_side_effect_level: Some(ToolSideEffectLevel::ProviderCall),
             required_tags: Vec::new(),
+            allowed_names: Vec::new(),
         });
 
         assert!(tools
@@ -65,6 +66,7 @@ mod tests {
                 include_disabled: false,
                 max_side_effect_level: Some(ToolSideEffectLevel::Write),
                 required_tags: Vec::new(),
+                allowed_names: Vec::new(),
             },
             &policy,
         );
@@ -127,6 +129,7 @@ mod tests {
                 include_disabled: false,
                 max_side_effect_level: Some(ToolSideEffectLevel::Write),
                 required_tags: Vec::new(),
+                allowed_names: Vec::new(),
             },
             &policy,
         );
@@ -163,6 +166,7 @@ mod tests {
                 include_disabled: false,
                 max_side_effect_level: Some(ToolSideEffectLevel::Read),
                 required_tags: Vec::new(),
+                allowed_names: Vec::new(),
             },
             &policy,
         );
@@ -173,5 +177,67 @@ mod tests {
             .find(|entry| entry.descriptor.name == "query_project_brain")
             .expect("provider-call tool should be blocked by side-effect ceiling");
         assert_eq!(blocked.status, EffectiveToolStatus::SideEffectTooHigh);
+    }
+
+    #[test]
+    fn filter_allowed_names_blocks_tools_not_in_list() {
+        let registry = default_writing_tool_registry();
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
+        let inventory = registry.effective_inventory(
+            &ToolFilter {
+                intent: None,
+                include_requires_approval: true,
+                include_disabled: false,
+                max_side_effect_level: Some(ToolSideEffectLevel::Write),
+                required_tags: Vec::new(),
+                allowed_names: vec![
+                    "load_current_chapter".to_string(),
+                    "search_lorebook".to_string(),
+                ],
+            },
+            &policy,
+        );
+        assert!(inventory
+            .allowed
+            .iter()
+            .any(|t| t.name == "load_current_chapter"));
+        assert!(inventory
+            .allowed
+            .iter()
+            .any(|t| t.name == "search_lorebook"));
+        assert!(!inventory
+            .allowed
+            .iter()
+            .any(|t| t.name == "generate_chapter_draft"));
+        let blocked = inventory
+            .blocked
+            .iter()
+            .find(|e| e.descriptor.name == "generate_chapter_draft")
+            .expect("generate_chapter_draft should be blocked");
+        assert_eq!(blocked.status, EffectiveToolStatus::IntentMismatch);
+    }
+
+    #[test]
+    fn filter_empty_allowed_names_allows_all() {
+        let registry = default_writing_tool_registry();
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
+        let inventory = registry.effective_inventory(
+            &ToolFilter {
+                intent: None,
+                include_requires_approval: true,
+                include_disabled: false,
+                max_side_effect_level: Some(ToolSideEffectLevel::Write),
+                required_tags: Vec::new(),
+                allowed_names: Vec::new(),
+            },
+            &policy,
+        );
+        assert!(
+            inventory
+                .allowed
+                .iter()
+                .any(|t| t.name == "load_current_chapter"),
+            "Empty allowed_names should not block any tool"
+        );
     }
 }

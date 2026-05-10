@@ -157,6 +157,7 @@ pub struct QualityIssue {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct ChapterQualityReport {
     pub chapter_title: String,
     pub overall_score: f32,

@@ -1421,14 +1421,14 @@ P4：
 | --- | ---: | --- |
 | Headless MCP 写作后端底座 | 86% | MCP、存储、章节管理、记忆账本、预算、保存安全链路已经稳定；进程级 smoke 已加固临时目录隔离；仍缺部分长任务恢复策略。 |
 | ForClaw 写作赋能 MVP | 98% | Craft Library、Prompt Compiler、SceneCraftPlan、ChapterQualityReport、Targeted Revision、RevisionReport、Craft Memory、Eval Harness 均已接入主链路；Craft Memory 已能沉淀自动修订和作者手改样本，回流进生成 prompt，并进入 rule 级趋势证据；eval trend 已暴露为 MCP 只读工具；真实三章/三十章写作 gate 已通过。 |
-| 写作质量证据闭环 | 98% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、66-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审、跨章节伏笔推进和第三章负例矩阵；OpenRouter 真实三十章 gate 已产出 `avg_chars=2150`、`min_carry_rate=0.60`、`avg_anchor_hit=0.92` 的长链路证据。 |
-| Context quality / preflight 可操作性 | 85% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告；provider usage 已有 OpenRouter 真实样本回写和真实 API 分拆通过证据。短板是 usage 校准仍需长期样本沉淀，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
-| plan.md 全量路线 | 86% | P4 Required Anchors ✅、P5 Writing Eval Matrix（66 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P0 Provider Calibration 已有真实 OpenRouter usage 回写、真实 API 12 项分拆通过和三十章写作 gate 验证 ✅/⚠️，仍需多模型多任务样本沉淀；P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing 字段和 provider usage smoke 已存在，缺全链路并行检索启用）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
+| 写作质量证据闭环 | 96% | 已有 before/after quality、target changes、句级语义 diff、文本片段映射、craft memory updates、好例/坏模式记忆、作者手动改稿回流、Craft Memory prompt 注入、66-task eval（3 profiles）、跨运行趋势报告和 craft rule 级趋势；fixture 已覆盖 canon 冲突、计划评审、跨章节伏笔推进和第三章负例矩阵；长链路质量报告已输出 `duplicatePreviewGroups`（按 120 字符前缀分组）、`repairRate`（修订未改善比例）、`minChars`/`maxChars`/`avgCarryRate` 及 `qualityWarnings`（fail/warning 分级）；OpenRouter 真实 thirty chapter gate 已产出 `avg_chars=2150`、`min_carry_rate=0.60`、`avg_anchor_hit=0.92` 的长链路证据。 |
+| Context quality / preflight 可操作性 | 85% | `ContextSourceReport` 已具备 taxonomy、role、elapsed_ms、retrieval_status（已从全硬编码 "ok" 升级为基于实际数据判定的 "ok"/"not_found"，覆盖 instruction/outline/target_beat/previous/next/existing/lore/rag/profile 九个来源）；`action_codes_for_missing_sources` 已产出 `fetch_project_brain_anchor`、`refresh_prior_chapter_summary`、`reduce_low_value_lore` 等结构化 action code；preflight 已能按 Critical/Supplement 阻断或警告；provider usage 已有 OpenRouter 真实样本回写和真实 API 分拆通过证据。短板是 usage 校准仍需长期样本沉淀，以及 read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。 |
+| plan.md 全量路线 | 88% | P4 Required Anchors ✅、P5 Writing Eval Matrix（66 tasks / 3 profiles）✅、P6 Sentence-Level Diff ✅、P7 Craft Trend CI ✅ 已完成；P8 Provider Telemetry（`LlmUsage` 已含 latency_ms/profile/input_chars/output_chars/repaired；phase timing 7 字段 + provider call count；retry 分类已落地）✅/⚠️，仍缺 p50/p90/p95 分位计算；P9 Read-Only Parallelism（existing+RAG 并行启用；9 来源 elapsed_ms 填充；retrieval_status 数据驱动判定）✅/⚠️，仍缺 source 失败隔离单测；P10 Long-Chain Dedup（scene_repetition 跨章检测 + 四类场景单测；plot_progression + new_information_density）✅/⚠️，仍缺负例 fixture；P11 Story State Delta（required_state_deltas 构建→prompt 注入→covered/weak/missing 分级→Strict gate revision）✅/⚠️，仍缺 delta 链 eval runner 验证；P12 Long-Chain Quality Report（duplicatePreviewGroups/repairRate/minChars/maxChars/avgCarryRate/qualityWarnings + Markdown 输出）✅/⚠️，仍缺 thirty chapter gate 字段输出确认；P13 Quality Mode Layering（Fast/Balanced/Strict + MCP 暴露 + sprint fallback；Fast 跳过 quality_report）✅/⚠️，仍缺各模式 provider 调用上限单测；P0 Provider Calibration 已有真实 OpenRouter usage 回写、真实 API 12 项分拆通过和三十章写作 gate 验证 ✅/⚠️；P1 Planner-Aware AgentLoop（`ExecutionPlan`/`compile_plan`/step event 已存在，缺真实中断恢复和步骤级工具约束证据）⚠️、P2 Context Quality（taxonomy/action code/timing/retrieval_status 字段和 provider usage smoke 已存在，缺全链路并行检索启用）⚠️、P3 LongTask Checkpoint Recovery（恢复动作结构已存在，缺真实长任务中断后 resume 的端到端证据）⚠️。 |
 
 ### 剩余真实缺口
 
 - `anchor_carry` 和 `style_drift` 已接入真实信号，但锚点抽取仍是保守启发式；下一步应让 Project Brain / Story OS 明确产出“本章必须承载锚点”清单。
-- eval fixture 已扩展到 66 tasks，并覆盖 canon 冲突、计划评审、跨章节伏笔推进和第三章负例矩阵；但仍属于规则回归集，不能完全代表长篇真实生成质量，下一步应增加更大负例矩阵和 LLM judge 辅助验证。
+- eval fixture 已扩展到 66 tasks，并覆盖 canon 冲突、计划评审、跨章节伏笔推进和第三章负例矩阵，以及 scene_repetition 四类场景（完全重复/近义改写/合法呼应/必要 recap）和 state_delta_coverage 三态分级（covered/weak/missing）的单测；但仍属于规则回归集，不能完全代表长篇真实生成质量，下一步应增加更大负例矩阵（含"锚点承接合格但剧情没有推进"）和 LLM judge 辅助验证。
 - Sentence-level semantic diff 已落地（Jaccard 对齐 + confidence 分级），复杂同义替换和语序大调仍可能标为 Low/Unaligned，这是轻量方案的设计权衡。
 - Craft Memory 趋势已接入 headless dispatch 和 MCP 只读工具（`forge_eval_trend_summary`），Companion/CI 可直接消费；下一步应增加趋势可视化而非 API 扩展。
 - Context quality taxonomy、action code、elapsed_ms、retrieval_status 字段和 preflight 绑定已就绪；provider usage 和真实写作 gate 已通过 OpenRouter 分拆验证，但仍缺长期、多任务、多模型样本沉淀；read-only retrieval 并行化只在结构层面就绪、未在所有调用点启用。
@@ -3235,3 +3235,704 @@ Ledger 类型：
 6. 输出 WritingRunReport summary，记录 context sources、quality before/after、revision decision。
 
 这个闭环跑通后，再逐步接入 Draft Planner、Story Ledger、repetition/new information gate 和 strict 模式硬阻断。
+
+## 2026-05-10 通用长篇故事工程能力计划
+
+### 核心判断
+
+最终目标不是让系统适配某一部作品，而是让系统掌握“长篇故事工程”的通用能力：吃下复杂项目资料，提取叙事发动机，拆成卷/篇章/单元，持续生成章节，维护状态账本，控制重复和漂移，并按卷审计推进。
+
+高复杂故事样本只作为压力测试，不进入专属代码路径。系统不应写死任何题材术语、修炼体系、科幻制度、悬疑规则或具体作品名。
+
+目标链路：
+
+```text
+Project Bible
+  -> World / Story Assets
+  -> Narrative Engine
+  -> Series Architecture
+  -> Unit Episode Pool
+  -> SceneContract
+  -> Draft / Validate / Revise
+  -> Story State Ledger
+  -> Volume Audit
+  -> Long-Form Run Report
+```
+
+能力边界：
+
+- 支持百万字级长篇：系统化写作辅助。
+- 支持数百万字级项目：需要卷级审计和人工验收。
+- 支持千万字潜力：系统负责项目管理、状态和生产辅助，不能承诺无人自动成书。
+
+### L1 Project Bible Ingestion
+
+目标：吃下任意项目资料，统一转成通用项目资产，而不是题材专属结构。
+
+输入类型：
+
+- 世界观。
+- 故事核。
+- 主角/反派设定。
+- 势力结构。
+- 升级体系或能力体系。
+- 单元故事模板。
+- 长线悬念。
+- 主题母题。
+- 卷级规划。
+- 写作风格要求。
+
+输出资产：
+
+- `WorldAsset`
+- `CharacterAsset`
+- `FactionAsset`
+- `RuleAsset`
+- `ThemeAsset`
+- `PlotEngineAsset`
+- `SeriesArcAsset`
+- `SuspenseAsset`
+- `StyleAsset`
+
+验收：
+
+- 同一 ingest 流程能处理至少两个不同题材 fixture。
+- 每条资产必须带 source evidence 和 approval status。
+- 未 approved 的资产不能作为 hard canon。
+
+风险与非目标：
+
+- 风险是自动抽取误判；首轮允许半自动/人工批准。
+- 非目标是一次性完美理解全项目。
+
+### L2 Narrative Engine Extractor
+
+目标：从故事核中提取“为什么这个故事可以持续生长”的发动机。
+
+通用发动机类型：
+
+- `unit_formula`：单元故事公式。
+- `conflict_loop`：冲突循环。
+- `reveal_ladder`：真相递进阶梯。
+- `power_progression`：升级/能力递进。
+- `cost_progression`：代价递进。
+- `character_arc_loop`：人物弧光循环。
+- `institutional_pressure`：制度/组织压力。
+- `reader_reward_loop`：爽点/补偿循环。
+- `long_suspense`：长线悬念。
+
+交付物：
+
+- `NarrativeEngine` 数据结构。
+- 从 Project Bible assets 编译 engine。
+- 每个 engine 绑定适用范围：全书、某卷、某角色、某类单元。
+- SceneContract 可引用 engine，确保单章不是孤立生成。
+
+验收：
+
+- 单测证明 unit formula 能生成单元任务骨架。
+- 单测证明 reveal ladder 能约束“本卷只揭示第 N 层真相”。
+- eval fixture 覆盖至少两个题材的 narrative engine。
+
+风险与非目标：
+
+- 风险是 engine 变成模板化套路；每个 engine 只提供结构，不直接生成剧情细节。
+- 非目标是自动替作者决定主题。
+
+### L3 Series Architecture Manager
+
+目标：管理百万字以上长篇结构，避免写到中后期散架。
+
+结构层级：
+
+- series / book。
+- volume。
+- arc。
+- episode / case / mission / dungeon / campaign。
+- chapter。
+
+每层必须记录：
+
+- narrative purpose。
+- theme focus。
+- main conflict。
+- required reveal。
+- character state target。
+- world state target。
+- open promises。
+- closure requirements。
+
+交付物：
+
+- `SeriesArchitecture` 数据结构。
+- 卷级路线和章节任务可互相追溯。
+- 章节生成前能知道自己属于哪个 volume / arc / episode。
+- 卷级审计能检查本卷是否完成 promised reveal 和状态变化。
+
+验收：
+
+- 单测证明 chapter mission 可追溯到 arc 和 volume purpose。
+- 单测证明卷级 promise 未支付会进入 VolumeAudit warning。
+- 长篇 fixture 至少包含 2 卷、4 arc、8 episode 的结构测试。
+
+风险与非目标：
+
+- 风险是结构管理过重；短篇/中篇项目可关闭 series architecture。
+- 非目标是强制所有作品使用同一章法。
+
+### L4 Unit Episode Pool
+
+目标：把“大故事”拆成可生产、可轮换、可回流主线的单元任务库。
+
+通用单元类型：
+
+- case。
+- dungeon。
+- investigation。
+- political crisis。
+- battle campaign。
+- relationship rupture。
+- training breakthrough。
+- discovery / reveal。
+- rescue / escape。
+- negotiation / trial。
+
+每个单元记录：
+
+- surface problem。
+- hidden cause。
+- active rule / system。
+- key character choice。
+- cost / consequence。
+- mainline contribution。
+- reader reward。
+- follow-up hooks。
+
+交付物：
+
+- `EpisodeTemplate`
+- `EpisodeInstance`
+- episode -> chapter mission 编译。
+- episode 完成后回写 Story State Ledger。
+
+验收：
+
+- 单测证明 episode 能拆成多个 chapter missions。
+- 单测证明 episode 必须有 mainline contribution，否则 warning。
+- repetition gate 能比较 episode 结构，识别连续重复单元。
+
+风险与非目标：
+
+- 风险是单元模板化；模板只控制功能，不生成固定情节。
+- 非目标是自动批量生成整卷案件并直接采用。
+
+### L5 Story State Ledger 三层化
+
+目标：千万字潜力的核心不是更长上下文，而是多层状态账本。
+
+三层 ledger：
+
+- chapter ledger：本章改变了什么。
+- arc / episode ledger：本单元解决了什么、欠下什么。
+- volume ledger：本卷主题、真相、势力、人物状态如何变化。
+
+记录类型：
+
+- character knowledge。
+- character loss / gain。
+- relationship state。
+- faction stance。
+- resource ownership。
+- rule triggered。
+- cost paid / unpaid。
+- promise status。
+- reveal level。
+- world situation。
+- reader knowledge。
+
+交付物：
+
+- `StoryLedgerDelta`
+- `EpisodeLedgerSummary`
+- `VolumeLedgerSummary`
+- ledger query API：按角色、势力、promise、rule、volume 查询。
+- generation context 从 ledger 编译 required deltas 和 forbidden regressions。
+
+验收：
+
+- 单测证明同一状态能从 chapter delta 汇总到 volume summary。
+- 单测证明状态回滚需要解释，否则 validator warning。
+- 三十章/长链路 gate 统计 stateDeltaCoverage 和 unresolvedPromiseCount。
+
+风险与非目标：
+
+- 风险是账本过细；只记录影响后续剧情、设定、承诺的状态。
+- 非目标是替代全文阅读，ledger 是导航和约束。
+
+### L6 Repetition And Drift Gate
+
+目标：长篇最怕重复和漂移，必须在结构层面检测，而不是只看文字相似。
+
+检查项：
+
+- opening repetition。
+- conflict repetition。
+- episode formula repetition。
+- character reaction repetition。
+- exposition repetition。
+- reveal stagnation。
+- theme overstatement。
+- power progression stall。
+- relationship arc stall。
+- mainline drift。
+
+交付物：
+
+- `RepetitionDriftReport`
+- chapter-level、episode-level、volume-level 三种视角。
+- gate 按 quality mode 区分：fast 不启用，balanced warning，strict 可阻断。
+
+验收：
+
+- 单测覆盖文字不同但结构重复的单元。
+- 单测覆盖必要呼应不误判为重复。
+- 长链路报告能列出重复单元、重复冲突类型、主线停滞点。
+
+风险与非目标：
+
+- 风险是误伤有意复调；第一阶段只 warning，不自动改。
+- 非目标是判断文学风格好坏。
+
+### L7 Volume Audit
+
+目标：每卷结束必须审计，防止百万字后主线、角色和设定债务失控。
+
+审计内容：
+
+- 本卷主题是否完成。
+- 本卷主线推进了什么。
+- 本卷认知翻转是否成立。
+- 哪些 promise paid / advanced / still open。
+- 角色状态如何改变。
+- 势力格局如何改变。
+- 世界规则是否新增或改写。
+- 是否有重复单元过多。
+- 下一卷驱动力是否明确。
+
+交付物：
+
+- `VolumeAuditReport`
+- unresolved debt list。
+- next volume setup。
+- recommended recap / compression。
+- canon conflict / promise debt / repetition summary。
+
+验收：
+
+- 单测证明未支付卷级 promise 会进入 debt list。
+- 单测证明没有 next volume driver 会 warning。
+- VolumeAuditReport 可被下一卷的 StoryContext Compiler 使用。
+
+风险与非目标：
+
+- 风险是审计结论主观；必须引用 ledger、promises、chapter reports。
+- 非目标是自动重写整卷。
+
+### L8 Long-Form Capacity Modes
+
+目标：按作品规模启用不同治理强度，避免所有项目承担千万字级成本。
+
+模式：
+
+- `short_form`：30 万字以内，轻量 context + chapter quality。
+- `standard_long_form`：30-150 万字，SceneContract + StoryLedger。
+- `epic_long_form`：150-500 万字，SeriesArchitecture + VolumeAudit。
+- `mega_series`：500 万字以上，三层 ledger + 强人工验收 + volume strict。
+
+交付物：
+
+- 项目级 `long_form_mode`。
+- 不同模式默认启用不同 validator / audit / report。
+- MCP/headless 暴露模式，但保留 conservative defaults。
+
+验收：
+
+- 单测覆盖不同 long_form_mode 的默认 gate 配置。
+- fast/balanced/strict 与 long_form_mode 不冲突。
+- mega_series 模式不会默认在普通章节中启用所有重检查，只在卷/单元边界启用强审计。
+
+风险与非目标：
+
+- 风险是模式过多；对用户只暴露清晰档位，内部细节默认。
+- 非目标是承诺无人自动写千万字。
+
+### 执行顺序
+
+1. L1 Project Bible Ingestion：先有项目资产。
+2. L2 Narrative Engine Extractor：明确故事如何持续生长。
+3. L3 Series Architecture Manager：建立卷/篇章/单元层级。
+4. L4 Unit Episode Pool：把长篇拆成可生产单元。
+5. L5 Story State Ledger 三层化：保证长期连续性。
+6. L6 Repetition And Drift Gate：防止重复和主线漂移。
+7. L7 Volume Audit：卷级清账和下一卷驱动。
+8. L8 Long-Form Capacity Modes：按规模控制成本。
+
+### 完成度重估规则
+
+- L1 + L2 完成：复杂项目资料可理解/可发动能力到 7/10。
+- L3 + L4 完成：百万字长篇结构管理能力到 8/10。
+- L5 完成：跨章节连续性到 8.5/10。
+- L6 + L7 完成：数百万字级长篇可控性到 8/10。
+- L8 完成：不同规模项目具备可配置治理强度。
+
+### 规模判断
+
+在该路线完成后，合理能力边界如下：
+
+- 30-50 万字：系统可较稳辅助，balanced 为主。
+- 100-200 万字：系统主战场，关键章和卷尾走 strict。
+- 300-500 万字：可支撑，但必须有卷级审计、ledger 清账和人工验收。
+- 500 万字以上：进入 mega_series 管理模式，系统负责结构、状态、审计和生产辅助。
+- 千万字级：只能承诺具备项目管理与生产辅助潜力，不能承诺无人自动稳定成书。
+
+### 近期最小闭环
+
+首轮不要直接做千万字系统，先做一个通用长篇薄切：
+
+1. 从两个题材 fixture 中抽取 Project Bible assets。
+2. 为每个 fixture 定义 1 个 NarrativeEngine。
+3. 建 1 个 volume、2 个 arc、4 个 episode。
+4. 每个 episode 编译 2-3 个 chapter missions。
+5. 生成 chapter-level ledger delta，并汇总成 volume summary。
+6. VolumeAuditReport 能指出未支付 promise、重复 episode 类型和下一卷驱动力缺口。
+
+## 2026-05-10 能力与性能对齐计划
+
+### 核心风险
+
+如果 P14-P20、Agent 底层强化、写作 Agent 底层强化、通用长篇工程能力全部完成，但性能工程没有同步升级，系统会进入“能力跟上了，性能没跟上”的阶段：能做复杂长篇治理，但每章耗时、调用次数、上下文构建和报告写入成本过高，不适合高频创作。
+
+当前证据已经提示这个风险：真实 API 分拆验证能通过，但单命令串行全量存在 30 分钟超时风险；三十章 gate 能跑通，但不是高吞吐链路。
+
+能力路线会增加：
+
+- Project Bible ingestion。
+- WorldAsset / CanonConstraint 编译。
+- NarrativeEngine / SeriesArchitecture。
+- SceneContract。
+- DraftPlanner。
+- QualityValidator。
+- TargetedRevision。
+- StoryLedger。
+- VolumeAudit。
+- WritingRunReport。
+
+这些能力必须配套 provider 调用预算、增量缓存、后台任务、编译产物存储和性能报告，否则系统会强但慢。
+
+### 非目标
+
+- 不牺牲保存安全、授权、canon 校验来换速度。
+- 不把 strict 质量链路默认套到所有章节。
+- 不把真实长链路测试放进普通 CI。
+- 不做不可解释的黑盒缓存；缓存必须有 input hash / source revision。
+
+### Perf1 Provider Call Budget
+
+目标：每种模式明确最多能调用几次模型，防止能力链路无限膨胀。
+
+默认预算：
+
+- `fast`：最多 1 次 provider call，draft only。
+- `balanced`：最多 2 次 provider calls，draft + optional targeted revision。
+- `strict`：最多 4 次 provider calls，planner + draft + validator/revision + final check。
+- `volume_audit`：batch / async，不阻塞单章生成。
+- `mega_series_audit`：后台任务，必须可暂停/恢复。
+
+交付物：
+
+- `ProviderCallBudget` 数据结构。
+- WritingRunContract 引用 provider call budget。
+- 超预算时进入 `quality_deferred` 或 `requires_approval`，而不是静默继续调用。
+- WritingRunReport 记录 planned_calls / actual_calls / deferred_checks。
+
+涉及模块：
+
+- `agent-writer-backend/src/writer_agent/provider_budget.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/main.in.rs`
+- `agent-writer-backend/src/chapter_generation/types_and_utils.in.rs`
+- `agent-writer-backend/src/headless.rs`
+
+验收：
+
+- 单测覆盖 fast/balanced/strict 的 provider call 上限。
+- balanced 模式 revision 超预算时能降级为 warning/deferred。
+- strict 模式超预算需要 approval 或明确失败。
+
+风险与非目标：
+
+- 风险是预算过紧压低质量；允许项目配置覆盖，但必须显式。
+- 非目标是精确计费系统；目标是控制调用次数和延迟。
+
+### Perf2 Incremental Context Cache
+
+目标：每章只重算变化部分，不重复编译整份世界观、ledger 和项目结构。
+
+缓存对象：
+
+- approved WorldAssets。
+- CanonConstraints。
+- NarrativeEngine。
+- SeriesArchitecture。
+- StoryLedger snapshots。
+- Volume summaries。
+- promise ledger snapshots。
+- author voice snapshot。
+- Craft Memory prompt snippets。
+- retrieval result sets。
+
+缓存键：
+
+- project_id。
+- source_revision。
+- asset_version。
+- chapter_id / volume_id。
+- input_hash。
+- quality_mode。
+
+交付物：
+
+- `CompiledContextCache` 或等价缓存层。
+- context build 先查缓存，miss 时增量重建。
+- source revision 改变时只失效相关资产。
+- report 记录 cache hit/miss 和 saved_ms 估算。
+
+涉及模块：
+
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/chapter_generation/pipeline/context.in.rs`
+- `agent-writer-backend/src/brain_service/*`
+- `agent-writer-backend/src/writer_agent/memory.rs`
+
+验收：
+
+- 单测证明相同 source_revision 二次构建命中缓存。
+- 单测证明修改单个 source 只失效相关 compiled artifacts。
+- context build report 能输出 cache hit/miss。
+
+风险与非目标：
+
+- 风险是脏缓存污染生成；所有缓存必须带 source revision 和 hash。
+- 非目标是跨项目共享复杂缓存。
+
+### Perf3 Async Background Jobs
+
+目标：把重任务后台化，不阻塞每章生成。
+
+后台任务：
+
+- Project Bible ingestion。
+- WorldAsset extraction / approval preparation。
+- VolumeAudit。
+- repetition scan。
+- ledger compression。
+- long-form capacity report。
+- eval trend generation。
+- Project Brain rebuild。
+
+交付物：
+
+- `BackgroundJob` 数据结构：job_id、kind、status、progress、checkpoint、result_ref、error。
+- job 可暂停、恢复、取消。
+- 单章生成只读取已完成的 compiled result；未完成时降级 warning。
+- headless/MCP 能查询 job status。
+
+涉及模块：
+
+- `agent-writer-backend/src/headless.rs`
+- `agent-writer-backend/src/writer_agent/memory.rs`
+- `forge-agent-mcp/src/tools.rs`
+- 可复用 long task checkpoint 存储。
+
+验收：
+
+- 单测证明后台任务 checkpoint roundtrip。
+- 单测证明章节生成不会等待未完成 VolumeAudit。
+- MCP/headless 能列出 pending/running/completed job。
+
+风险与非目标：
+
+- 风险是后台结果与当前 source revision 不一致；读取时必须校验 revision。
+- 非目标是复杂分布式队列；本地持久任务即可。
+
+### Perf4 Compiled Artifact Store
+
+目标：把“每次运行临时编译”改为“编译产物可持久复用”。
+
+编译产物：
+
+- `CompiledWorldBible`
+- `CompiledCanonConstraints`
+- `CompiledNarrativeEngine`
+- `CompiledSeriesArchitecture`
+- `CompiledSceneContract`
+- `CompiledLedgerSummary`
+- `CompiledVolumeAudit`
+
+交付物：
+
+- artifact metadata：artifact_id、kind、input_refs、input_hash、created_at、expires_at、quality_mode。
+- artifact body 存 JSON。
+- artifact 可按 project/source/chapter/volume 查询。
+- stale artifact 不硬用，只能作为 fallback warning。
+
+涉及模块：
+
+- `agent-writer-backend/src/writer_agent/memory.rs`
+- `agent-writer-backend/src/chapter_generation/context.in.rs`
+- `agent-writer-backend/src/headless.rs`
+
+验收：
+
+- 单测证明 artifact 写入/读取/失效。
+- 单测证明 stale artifact 不进入 hard constraints。
+- WritingRunReport 能引用 artifact ids，而不是内联所有大对象。
+
+风险与非目标：
+
+- 风险是存储膨胀；需要 TTL 或按 run/volume 清理策略。
+- 非目标是独立对象存储系统。
+
+### Perf5 Validator Cost Tiering
+
+目标：质量检查分层，避免每章跑所有 validator。
+
+分层：
+
+- Tier 0：纯确定性检查，长度、空文本、保存安全。
+- Tier 1：轻量启发式，anchor carry、state delta keyword、basic repetition。
+- Tier 2：结构化规则，canon constraint、scene contract、ledger regression。
+- Tier 3：LLM-assisted judge / deep critique，只在 strict 或审计任务启用。
+
+模式映射：
+
+- fast：Tier 0。
+- balanced：Tier 0 + Tier 1 + 部分 Tier 2。
+- strict：Tier 0 + Tier 1 + Tier 2，必要时 Tier 3。
+- volume_audit：Tier 2 + Tier 3 batch。
+
+交付物：
+
+- `ValidatorTier` 标记。
+- QualityValidator 根据 quality_mode 和 long_form_mode 选择检查项。
+- report 标记 skipped / deferred validators。
+
+验收：
+
+- 单测证明 fast 不触发 LLM-assisted validator。
+- 单测证明 strict 会启用 canon/state/repetition gate。
+- report 能说明哪些 validator 被跳过以及原因。
+
+风险与非目标：
+
+- 风险是低模式漏检；低模式必须明确输出 deferred risk。
+- 非目标是让 fast 模式保证长篇一致性。
+
+### Perf6 Strict Mode Sampling
+
+目标：长篇不需要每章 strict，但需要周期性抽检和关键点强检。
+
+策略：
+
+- 每 N 章做一次 strict sample。
+- 卷首、卷尾、重大 reveal、状态大变更章节强制 strict。
+- 连续 warning 超阈值时自动升级 strict。
+- 作者可手动标记关键章 strict。
+
+交付物：
+
+- `StrictSamplingPolicy`
+- chapter metadata 支持 critical flag。
+- WritingRunContract 根据 sampling policy 自动选择 mode。
+- VolumeAudit 使用 sampling 结果评估长期风险。
+
+验收：
+
+- 单测证明每 N 章触发 strict。
+- 单测证明关键章强制 strict。
+- 单测证明连续 warnings 会升级下一章 quality mode。
+
+风险与非目标：
+
+- 风险是抽检漏掉局部问题；关键章和 warning escalation 补足。
+- 非目标是完全替代人工审稿。
+
+### Perf7 Performance Report 与 SLO
+
+目标：性能问题可定位，并给出明确 SLO。
+
+报告字段：
+
+- total_run_ms。
+- context_build_ms。
+- provider_calls。
+- provider_latency_ms total / p50 / max。
+- validator_ms。
+- revision_ms。
+- ledger_read_ms / ledger_write_ms。
+- artifact_cache_hit_rate。
+- report_write_ms。
+- deferred_checks。
+
+建议 SLO：
+
+- fast 单章：1 provider call，低额外开销。
+- balanced 单章：1-2 provider calls，context/cache 命中后本地开销低于 provider 时间的 20%。
+- strict 单章：2-4 provider calls，报告完整但允许更慢。
+- volume audit：后台执行，不阻塞普通生成。
+
+交付物：
+
+- `PerformanceReport`
+- WritingRunReport 引用 PerformanceReport。
+- 长链路 gate 输出 per-chapter performance summary。
+- 如果本地开销超过 provider 时间 50%，报告 warning。
+
+验收：
+
+- 单测证明 PerformanceReport 不包含敏感信息。
+- 模拟 run 能输出各 phase ms。
+- 长链路报告能聚合 p50/p90 chapter duration。
+
+风险与非目标：
+
+- 风险是测试耗时不稳定；单测断言字段存在，不断言具体毫秒。
+- 非目标是精确压测平台。
+
+### 执行顺序
+
+1. Perf1 Provider Call Budget：先控制最贵成本。
+2. Perf5 Validator Cost Tiering：防止所有检查默认全开。
+3. Perf7 Performance Report：先看清楚慢在哪里。
+4. Perf2 Incremental Context Cache：降低每章重复编译成本。
+5. Perf4 Compiled Artifact Store：让缓存可持久复用。
+6. Perf3 Async Background Jobs：把卷级/长链路重任务后台化。
+7. Perf6 Strict Mode Sampling：长篇按风险抽检和升级。
+
+### 完成度重估规则
+
+- Perf1 + Perf5 完成：单章成本可控性从 5/10 提升到 7/10。
+- Perf7 完成：性能可观测性从 6/10 提升到 8/10。
+- Perf2 + Perf4 完成：复杂项目 context 构建成本显著下降。
+- Perf3 完成：卷级审计和长链路分析不再阻塞普通章节生成。
+- Perf6 完成：长篇 strict 质量保障与吞吐之间形成可调平衡。
+
+### 近期最小闭环
+
+首轮只做能立刻防止“能力强但慢”的薄切：
+
+1. WritingRunContract 增加 provider call budget。
+2. QualityValidator 增加 tier，并按 fast/balanced/strict 选择。
+3. WritingRunReport 增加 provider_calls、context_build_ms、validator_ms、revision_ms。
+4. balanced 模式最多一次 draft + 一次必要 revision。
+5. strict 模式允许 planner/checker，但必须记录 deferred/actual calls。
+6. 长链路报告输出每章 provider call count 和本地 phase timing。

@@ -112,6 +112,7 @@ pub fn tool_filter_for_subtask(kind: WriterSubtaskKind) -> ToolFilter {
         include_disabled: false,
         max_side_effect_level: Some(policy.max_side_effect_level),
         required_tags: policy.required_tool_tags,
+        allowed_names: Vec::new(),
     }
 }
 

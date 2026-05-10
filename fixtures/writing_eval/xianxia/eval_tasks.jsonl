@@ -22,3 +22,5 @@
 {"task":"targeted_revision","chapter":"第三章","metrics":["anchor_carry","scene_causality"],"expected":{"before_text":"林墨回到青云宗。周长老看着他。","after_text":"周长老捏住林墨下巴，白发暴露在日光下，寒影剑在布包里震动，感知到杀意。","requires_excerpt_mapping":true}}
 {"task":"promise_progression","chapter":"第三章","metrics":["promise_progress"],"expected":{"required_promises":["寒影剑代价"],"min_progressed":1}}
 {"task":"canon_conflict","chapter":"第三章","check":"门规冲突","expected":{"candidate_text":"青云宗允许私藏仙器，执事堂不管仙器，门规只是摆设。","canon_conflict":true,"must_conflict":["sect-artifact-law"]}}
+{"task":"negative_plot_stalled","chapter":"第二章","metrics":["plot_progression","new_information_density","anchor_carry"],"expected":{"stalled_text":"寒影剑在林墨手中散发寒气。寒影剑是青云宗的古剑。林墨握着寒影剑。寒影剑的寒气在空气中弥漫。林墨看着寒影剑。寒影剑在林墨手中沉重异常。","anchor_carry_min":0.1,"plot_progression_max":0.55,"new_information_density_max":0.55}}
+{"task":"state_delta_trace","chapter":"第三章","metrics":["state_delta_coverage"],"expected":{"required_deltas":[{"delta_type":"knowledge","description":"发现、代价"},{"delta_type":"relationship","description":"信任、背叛、结盟"}],"min_covered":1,"max_missing":1}}

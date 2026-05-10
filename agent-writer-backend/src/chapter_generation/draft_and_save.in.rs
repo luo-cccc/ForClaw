@@ -232,7 +232,7 @@ The finished chapter should move toward {} Chinese characters and must never exc
     ensure_provider_budget_allowed(context, &budget_report)?;
     record_model_started(context, &budget_report);
 
-    let (content, usage) = llm_runtime::chat_text_profile_with_usage(
+    let (content, mut usage) = llm_runtime::chat_text_profile_with_usage(
         settings,
         messages.clone(),
         llm_runtime::LlmRequestProfile::ChapterContinuation,
@@ -240,6 +240,7 @@ The finished chapter should move toward {} Chinese characters and must never exc
     )
     .await
     .map_err(map_provider_error)?;
+    usage.repaired = true;
 
     let input_chars: usize = messages
         .iter()
@@ -409,7 +410,7 @@ Write only the full revised chapter prose. Keep the chapter within {}-{} Chinese
     ensure_provider_budget_allowed(context, &budget_report)?;
     record_model_started(context, &budget_report);
 
-    let (content, usage) = llm_runtime::chat_text_profile_with_usage(
+    let (content, mut usage) = llm_runtime::chat_text_profile_with_usage(
         settings,
         messages.clone(),
         llm_runtime::LlmRequestProfile::ChapterCompress,
@@ -417,6 +418,7 @@ Write only the full revised chapter prose. Keep the chapter within {}-{} Chinese
     )
     .await
     .map_err(map_provider_error)?;
+    usage.repaired = true;
 
     let input_chars: usize = messages
         .iter()

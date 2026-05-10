@@ -88,6 +88,7 @@ const BACKEND_ACTIONS: &[&str] = &[
     "set_sprint_quality_gate",
     "latest_chapter_generation_checkpoint",
     "chapter_generation_resume_candidates",
+    "resume_chapter_generation",
     "craft_library",
     "craft_memory_stats",
     "eval_trend_summary",

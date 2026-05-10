@@ -71,6 +71,12 @@ struct EvalRunTrend {
     max_chars: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     avg_carry_rate: Option<f32>,
+    #[serde(default)]
+    p50_latency_ms: u64,
+    #[serde(default)]
+    p90_latency_ms: u64,
+    #[serde(default)]
+    p95_latency_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     quality_warnings: Vec<QualityWarning>,
 }
@@ -157,6 +163,12 @@ struct ProfileSummary {
     max_chars: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     avg_carry_rate: Option<f32>,
+    #[serde(default)]
+    p50_latency_ms: u64,
+    #[serde(default)]
+    p90_latency_ms: u64,
+    #[serde(default)]
+    p95_latency_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     quality_warnings: Vec<QualityWarning>,
 }
@@ -177,6 +189,12 @@ struct QualityWarning {
 fn fixture_dir() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest.join("..").join("fixtures").join("writing_eval")
+}
+
+fn reports_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("reports")
 }
 
 fn load_fixture(profile: &str) -> serde_json::Value {
@@ -1487,6 +1505,174 @@ fn run_negative_craft_memory_injection_eval(
     }
 }
 
+fn run_negative_plot_stalled_eval(
+    profile: &str,
+    task: &EvalTask,
+    fixture: &serde_json::Value,
+) -> EvalResult {
+    let stalled_text = task
+        .expected
+        .get("stalled_text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let plan = SceneCraftPlan::default();
+    let quality_signals = quality_signals_from_fixture(fixture);
+    let report = evaluate_chapter_quality_with_signals(
+        stalled_text,
+        &task.chapter,
+        &plan,
+        &[],
+        0,
+        2000,
+        &quality_signals,
+    );
+    let plot_result = report
+        .metric_results
+        .iter()
+        .find(|m| m.metric == "plot_progression")
+        .map(|m| m.score)
+        .unwrap_or(1.0);
+    let new_info_result = report
+        .metric_results
+        .iter()
+        .find(|m| m.metric == "new_information_density")
+        .map(|m| m.score)
+        .unwrap_or(1.0);
+    let anchor_result = report
+        .metric_results
+        .iter()
+        .find(|m| m.metric == "anchor_carry")
+        .map(|m| m.score)
+        .unwrap_or(0.0);
+
+    let anchor_min = task.expected["anchor_carry_min"].as_f64().unwrap_or(0.4) as f32;
+    let plot_max = task.expected["plot_progression_max"]
+        .as_f64()
+        .unwrap_or(0.55) as f32;
+    let info_max = task.expected["new_information_density_max"]
+        .as_f64()
+        .unwrap_or(0.55) as f32;
+
+    // anchor_carry should be OK but plot_progression and new_information should be low
+    let status =
+        if anchor_result >= anchor_min && plot_result <= plot_max && new_info_result <= info_max {
+            "pass"
+        } else {
+            "fail"
+        };
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: None,
+        after: Some(serde_json::json!({
+            "anchor_carry": anchor_result,
+            "plot_progression": plot_result,
+            "new_information_density": new_info_result,
+            "anchor_min": anchor_min,
+            "plot_max": plot_max,
+            "info_max": info_max,
+        })),
+        delta: None,
+        message: format!(
+            "negative_plot_stalled anchor_carry={:.2} plot_progression={:.2} new_information_density={:.2}",
+            anchor_result, plot_result, new_info_result
+        ),
+    }
+}
+
+fn run_state_delta_trace_eval(
+    profile: &str,
+    task: &EvalTask,
+    fixture: &serde_json::Value,
+) -> EvalResult {
+    let plan = SceneCraftPlan::default();
+    let mut signals = quality_signals_from_fixture(fixture);
+    let required_deltas: Vec<agent_writer_lib::chapter_generation::StateDelta> = task
+        .expected
+        .get("required_deltas")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| agent_writer_lib::chapter_generation::StateDelta {
+                    delta_type: item["delta_type"].as_str().unwrap_or("").to_string(),
+                    description: item["description"].as_str().unwrap_or("").to_string(),
+                    source: "eval:state_delta_trace".to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    signals.required_state_deltas = required_deltas.clone();
+
+    let chapter_text = fixture["chapters"][&task.chapter].as_str().unwrap_or("");
+    let report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        &task.chapter,
+        &plan,
+        &[],
+        500,
+        3500,
+        &signals,
+    );
+    let delta_result = report
+        .metric_results
+        .iter()
+        .find(|m| m.metric == "state_delta_coverage")
+        .map(|m| (m.score, m.evidence_excerpt.clone()))
+        .unwrap_or((0.0, String::new()));
+
+    let min_covered = task.expected["min_covered"].as_u64().unwrap_or(1) as usize;
+    // Parse "X covered / Y weak / Z missing of N required deltas" from evidence
+    // When score >= 0.8, evidence_excerpt is empty (gated_metric suppresses it).
+    // In that case, infer all deltas are covered.
+    let (covered_count, missing_from_evidence) =
+        if delta_result.1.is_empty() && delta_result.0 >= 0.8 {
+            (required_deltas.len(), 0usize)
+        } else {
+            let covered = delta_result
+                .1
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            let missing = delta_result
+                .1
+                .split("missing")
+                .next()
+                .and_then(|s| s.split_whitespace().last())
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            (covered, missing)
+        };
+    let max_missing = task.expected["max_missing"].as_u64().unwrap_or(1) as usize;
+
+    let status = if covered_count >= min_covered && missing_from_evidence <= max_missing {
+        "pass"
+    } else {
+        "fail"
+    };
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: None,
+        after: Some(serde_json::json!({
+            "state_delta_coverage": delta_result.0,
+            "evidence": delta_result.1,
+            "required_deltas_count": required_deltas.len(),
+            "covered_in_evidence": covered_count,
+            "missing_in_evidence": missing_from_evidence,
+        })),
+        delta: None,
+        message: format!(
+            "state_delta_trace score={:.2} evidence={}",
+            delta_result.0, delta_result.1
+        ),
+    }
+}
+
 fn run_continuity_diagnostic_eval(
     profile: &str,
     task: &EvalTask,
@@ -1828,6 +2014,36 @@ fn compute_duplicate_preview_groups(fixture: &serde_json::Value) -> Vec<Duplicat
         .collect()
 }
 
+fn percentile_u64(values: &[u64], p: f64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted: Vec<u64> = values.to_vec();
+    sorted.sort_unstable();
+    let idx = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+fn compute_latency_percentiles_from_report(gate_report_path: &std::path::Path) -> (u64, u64, u64) {
+    let Ok(data) = std::fs::read_to_string(gate_report_path) else {
+        return (0, 0, 0);
+    };
+    let Ok(report) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return (0, 0, 0);
+    };
+    let latencies: Vec<u64> = report["chapters"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|ch| ch["latencyMs"].as_u64())
+        .collect();
+    (
+        percentile_u64(&latencies, 0.50),
+        percentile_u64(&latencies, 0.90),
+        percentile_u64(&latencies, 0.95),
+    )
+}
+
 fn compute_min_max_chars(fixture: &serde_json::Value) -> (usize, usize) {
     let chapters = fixture["chapters"].as_object();
     let lengths: Vec<usize> = chapters
@@ -1838,7 +2054,10 @@ fn compute_min_max_chars(fixture: &serde_json::Value) -> (usize, usize) {
     if lengths.is_empty() {
         (0, 0)
     } else {
-        (*lengths.iter().min().unwrap_or(&0), *lengths.iter().max().unwrap_or(&0))
+        (
+            *lengths.iter().min().unwrap_or(&0),
+            *lengths.iter().max().unwrap_or(&0),
+        )
     }
 }
 
@@ -1861,9 +2080,7 @@ fn compute_avg_carry_rate(results: &[EvalResult]) -> Option<f32> {
 fn compute_repair_rate(results: &[EvalResult]) -> f32 {
     let revision_tasks: Vec<_> = results
         .iter()
-        .filter(|result| {
-            result.task == "targeted_revision" || result.task == "manual_craft_edit"
-        })
+        .filter(|result| result.task == "targeted_revision" || result.task == "manual_craft_edit")
         .collect();
     if revision_tasks.is_empty() {
         return 0.0;
@@ -2078,6 +2295,9 @@ fn build_eval_run_trend(profile: &str, timestamp: String, results: &[EvalResult]
         min_chars: 0,
         max_chars: 0,
         avg_carry_rate: None,
+        p50_latency_ms: 0,
+        p90_latency_ms: 0,
+        p95_latency_ms: 0,
         quality_warnings: Vec::new(),
     }
 }
@@ -2313,6 +2533,8 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
             "negative_craft_memory_injection" => {
                 run_negative_craft_memory_injection_eval(profile, task, &fixture)
             }
+            "negative_plot_stalled" => run_negative_plot_stalled_eval(profile, task, &fixture),
+            "state_delta_trace" => run_state_delta_trace_eval(profile, task, &fixture),
             other => EvalResult {
                 profile: profile.to_string(),
                 task: task.task.clone(),
@@ -2372,6 +2594,11 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
         current_trend.max_chars,
         current_trend.avg_carry_rate,
     );
+    let gate_path = reports_dir().join("real_author_session_thirty_chapter_gate.json");
+    let (p50_ms, p90_ms, p95_ms) = compute_latency_percentiles_from_report(&gate_path);
+    current_trend.p50_latency_ms = p50_ms;
+    current_trend.p90_latency_ms = p90_ms;
+    current_trend.p95_latency_ms = p95_ms;
     let previous_trend =
         previous_run.map(|run| build_eval_run_trend(profile, run.timestamp, &run.results));
     let trend_report = build_eval_trend_report(profile, current_trend, previous_trend);
@@ -2427,6 +2654,9 @@ fn main() {
                 min_chars: trend_report.current.min_chars,
                 max_chars: trend_report.current.max_chars,
                 avg_carry_rate: trend_report.current.avg_carry_rate,
+                p50_latency_ms: trend_report.current.p50_latency_ms,
+                p90_latency_ms: trend_report.current.p90_latency_ms,
+                p95_latency_ms: trend_report.current.p95_latency_ms,
                 quality_warnings: trend_report.current.quality_warnings.clone(),
             },
         );
@@ -2601,8 +2831,8 @@ fn build_markdown_summary(
     md.push('\n');
 
     md.push_str("## Long-Chain Quality\n\n");
-    md.push_str("| Profile | Min Chars | Max Chars | Avg Carry | Repair Rate | Duplicate Groups | Warnings |\n");
-    md.push_str("|---------|-----------|-----------|-----------|-------------|------------------|----------|\n");
+    md.push_str("| Profile | Min Chars | Max Chars | Avg Carry | Repair Rate | Dup Groups | Warnings | P50 (ms) | P90 (ms) | P95 (ms) |\n");
+    md.push_str("|---------|-----------|-----------|-----------|-------------|------------|----------|----------|----------|----------|\n");
     for (profile, ps) in &summary.profiles {
         let avg_carry = ps
             .avg_carry_rate
@@ -2611,8 +2841,17 @@ fn build_markdown_summary(
         let dup_count = ps.duplicate_preview_groups.len();
         let warn_count = ps.quality_warnings.len();
         md.push_str(&format!(
-            "| {} | {} | {} | {} | {:.0}% | {} | {} |\n",
-            profile, ps.min_chars, ps.max_chars, avg_carry, ps.repair_rate * 100.0, dup_count, warn_count
+            "| {} | {} | {} | {} | {:.0}% | {} | {} | {} | {} | {} |\n",
+            profile,
+            ps.min_chars,
+            ps.max_chars,
+            avg_carry,
+            ps.repair_rate * 100.0,
+            dup_count,
+            warn_count,
+            ps.p50_latency_ms,
+            ps.p90_latency_ms,
+            ps.p95_latency_ms,
         ));
     }
     md.push('\n');
@@ -2963,7 +3202,8 @@ mod tests {
 
     #[test]
     fn compute_avg_carry_rate_ignores_missing_scores() {
-        let mut result_no_metric = eval_result_with_score("mystery", "quality_evaluation", "ch1", "pass", 0.5);
+        let mut result_no_metric =
+            eval_result_with_score("mystery", "quality_evaluation", "ch1", "pass", 0.5);
         result_no_metric.after = Some(serde_json::json!({ "overall_score": 0.5 }));
         let results = vec![result_no_metric];
         let avg = compute_avg_carry_rate(&results);
@@ -2972,7 +3212,13 @@ mod tests {
 
     #[test]
     fn compute_repair_rate_zero_when_no_revision_tasks() {
-        let results = vec![eval_result_with_score("mystery", "quality_evaluation", "ch1", "pass", 0.8)];
+        let results = vec![eval_result_with_score(
+            "mystery",
+            "quality_evaluation",
+            "ch1",
+            "pass",
+            0.8,
+        )];
         assert_eq!(compute_repair_rate(&results), 0.0);
     }
 
@@ -3028,5 +3274,25 @@ mod tests {
             },
         ];
         assert_eq!(compute_repair_rate(&results), 0.5);
+    }
+
+    #[test]
+    fn percentile_u64_returns_correct_values() {
+        let values = vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+        let p50 = percentile_u64(&values, 0.50);
+        let p90 = percentile_u64(&values, 0.90);
+        let p95 = percentile_u64(&values, 0.95);
+        // 10 values: p50 at index 4 (0-indexed rounded from 4.5) → 500 or 600
+        // p90 at index 8 (8.1 → 8) → 900
+        // p95 at index 8 (8.55 → 9) → 1000
+        assert!(p50 >= 500, "p50={p50} should be ~median");
+        assert!(p90 >= 800, "p90={p90} should be near 90th percentile");
+        assert!(p95 >= 900, "p95={p95} should be near 95th percentile");
+    }
+
+    #[test]
+    fn percentile_u64_empty_returns_zero() {
+        assert_eq!(percentile_u64(&[], 0.50), 0);
+        assert_eq!(percentile_u64(&[], 0.90), 0);
     }
 }

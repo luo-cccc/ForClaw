@@ -138,7 +138,7 @@ pub async fn build_chapter_context(
         futures_util::try_join!(rev_future, lore_future).map_err(|e| {
             ChapterGenerationError::with_details(
                 "JOIN_ERROR",
-                &format!("Parallel read failed: {}", e),
+                format!("Parallel read failed: {}", e),
                 true,
                 e.to_string(),
             )
@@ -267,6 +267,11 @@ pub async fn build_chapter_context(
         }
         let prev_elapsed_ms = prev_t0.elapsed().as_millis() as u64;
 
+        let prev_status = if previous_text.trim().is_empty() {
+            "not_found"
+        } else {
+            "ok"
+        };
         composer.add_source(
             "previous_chapters",
             "previous",
@@ -275,13 +280,18 @@ pub async fn build_chapter_context(
             input.budget.previous_chapters_chars,
             None,
             prev_elapsed_ms,
-            "ok",
+            prev_status,
         );
 
         let next_t0 = std::time::Instant::now();
         let next_nodes = select_next_nodes(&outline, target_index, input.budget.next_chapter_count);
         let next_text = build_next_chapter_context(next_nodes);
         let next_elapsed_ms = next_t0.elapsed().as_millis() as u64;
+        let next_status = if next_text.trim().is_empty() {
+            "not_found"
+        } else {
+            "ok"
+        };
         composer.add_source(
             "next_chapter",
             "next",
@@ -290,7 +300,7 @@ pub async fn build_chapter_context(
             input.budget.next_chapter_chars,
             None,
             next_elapsed_ms,
-            "ok",
+            next_status,
         );
     }
 
@@ -318,6 +328,7 @@ pub async fn build_chapter_context(
         0
     };
     if let Ok(Some(existing)) = existing_opt {
+        let existing_status = if existing.trim().is_empty() { "not_found" } else { "ok" };
         composer.add_source(
             "target_existing_text",
             &target.title,
@@ -326,7 +337,7 @@ pub async fn build_chapter_context(
             input.budget.target_existing_chars,
             None,
             existing_elapsed_ms,
-            "ok",
+            existing_status,
         );
     }
 
@@ -346,6 +357,11 @@ pub async fn build_chapter_context(
             .join("\n\n")
     };
     let lore_elapsed_ms = lore_t0.elapsed().as_millis() as u64;
+    let lore_status = if lore_text.contains("No directly relevant lorebook entries") {
+        "not_found"
+    } else {
+        "ok"
+    };
     composer.add_source(
         "lorebook",
         "lorebook.json",
@@ -354,7 +370,7 @@ pub async fn build_chapter_context(
         input.budget.lorebook_chars,
         None,
         lore_elapsed_ms,
-        "ok",
+        lore_status,
     );
 
     let rag_elapsed_ms = rag_t0.elapsed().as_millis() as u64;
@@ -387,6 +403,18 @@ pub async fn build_chapter_context(
             ),
             rag_elapsed_ms,
             "ok",
+        );
+    } else {
+        // RAG returned no chunks; source is absent from composer but retrieval was attempted
+        composer.add_source(
+            "project_brain",
+            "project_brain.json",
+            "Project Brain relevant chunks",
+            "",
+            input.budget.rag_chars,
+            None,
+            rag_elapsed_ms,
+            "not_found",
         );
     }
 
@@ -468,7 +496,7 @@ pub async fn build_chapter_context(
     // Writing quality enrichment: enrich the chapter prompt with checklist and context.
     {
         if let Some(ref memory) = memory {
-            let checklist = build_writing_checklist(&memory, &target.title);
+            let checklist = build_writing_checklist(memory, &target.title);
             let checklist_str = checklist
                 .iter()
                 .map(|s| format!("- {}", s))
@@ -478,19 +506,19 @@ pub async fn build_chapter_context(
                 "## 本章写作清单\n{}\n\n{}",
                 checklist_str, prompt_context
             );
-            let curated = curated_context_summary(&memory);
+            let curated = curated_context_summary(memory);
             if !curated.is_empty() {
                 prompt_context = format!("{}{}\n\n", prompt_context, curated);
             }
-            let voice_cards = character_voice_cards(&memory);
+            let voice_cards = character_voice_cards(memory);
             if !voice_cards.is_empty() {
                 prompt_context = format!("{}{}\n\n", prompt_context, voice_cards);
             }
-            let voice = author_voice_sample(&memory, project.project_id());
+            let voice = author_voice_sample(memory, project.project_id());
             if !voice.is_empty() {
                 prompt_context = format!("{}{}\n\n", prompt_context, voice);
             }
-            let arc_guidance = emotional_arc_guidance(&memory, project.project_id());
+            let arc_guidance = emotional_arc_guidance(memory, project.project_id());
             if !arc_guidance.is_empty() {
                 prompt_context = format!("{}{}\n\n", prompt_context, arc_guidance);
             }
@@ -962,7 +990,7 @@ fn build_quality_author_voice_snapshot(
         .filter(|title| !title.trim().is_empty())
         .collect::<Vec<_>>();
     let voice = crate::writer_agent::author_voice::build_author_voice_snapshot(
-        &memory,
+        memory,
         &sample_titles,
         crate::agent_runtime::now_ms(),
     );

@@ -64,6 +64,16 @@ fn elapsed_ms(started: std::time::Instant) -> u128 {
     started.elapsed().as_millis()
 }
 
+fn percentile(values: &[u64], p: f64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted: Vec<u64> = values.to_vec();
+    sorted.sort_unstable();
+    let idx = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
 async fn run_text_profile_smoke(
     settings: &llm_runtime::LlmSettings,
     test_name: &str,
@@ -621,9 +631,11 @@ async fn real_author_session_thirty_chapter_gate() {
     let mut carry_rates = Vec::new();
     let mut anchor_hit_rates = Vec::new();
     let mut chapter_reports = Vec::new();
+    let mut chapter_latency_ms = Vec::new();
     let mut errors = Vec::new();
 
     for index in 1..=30 {
+        let chapter_start = std::time::Instant::now();
         let plan = base_plans[(index - 1) % base_plans.len()];
         let context = [
             "项目: 镜中墟".to_string(),
@@ -640,42 +652,63 @@ async fn real_author_session_thirty_chapter_gate() {
         ]
         .join("\n");
 
-        let draft = run_text_profile_smoke(
+        let draft = match llm_runtime::chat_text_profile(
             &settings,
-            "real_author_session_thirty_chapter_gate.chapter",
-            llm_runtime::LlmRequestProfile::ChapterDraft,
             vec![
                 serde_json::json!({"role": "system", "content": "你是中文长篇小说作者。只输出正文。重视人物关系、伏笔、情绪债务、兑现节奏和章节钩子。不得静默丢失当前上下文中的命名锚点和未偿债务。"}),
                 serde_json::json!({"role": "user", "content": context}),
             ],
-            90,
+            llm_runtime::LlmRequestProfile::ChapterDraft,
+            120,
         )
-        .await;
+        .await
+        {
+            Ok(text) if !text.trim().is_empty() => text,
+            Ok(_) => {
+                errors.push(format!("chapter {} returned empty draft", index));
+                String::new()
+            }
+            Err(e) => {
+                errors.push(format!("chapter {} generation failed: {}", index, e));
+                String::new()
+            }
+        };
 
-        let gate = repair_anchor_carry_if_needed(
-            &settings,
-            "real_author_session_thirty_chapter_gate",
-            "real_author_session_thirty_chapter_gate.repair",
-            &format!("第{}章", index),
-            &format!("第{}章：{}", index, plan),
-            &rolling_summary,
-            &anchors,
-            draft,
-        )
-        .await;
+        let gate = if draft.is_empty() {
+            AnchorCarryGateResult {
+                draft: String::new(),
+                hit_count: 0,
+                carry: anchor_carry::score_anchor_carry("", &[]),
+                repaired: false,
+            }
+        } else {
+            let g = repair_anchor_carry_if_needed(
+                &settings,
+                "real_author_session_thirty_chapter_gate",
+                "real_author_session_thirty_chapter_gate.repair",
+                &format!("第{}章", index),
+                &format!("第{}章：{}", index, plan),
+                &rolling_summary,
+                &anchors,
+                draft,
+            )
+            .await;
+            if g.hit_count < 3 {
+                errors.push(format!(
+                    "chapter {} dropped too many anchors: hit_count={}",
+                    index, g.hit_count
+                ));
+            }
+            if g.carry.carry_rate < 0.6 {
+                errors.push(format!(
+                    "chapter {} anchor carry too weak: {:.2}",
+                    index, g.carry.carry_rate
+                ));
+            }
+            g
+        };
 
-        if gate.hit_count < 3 {
-            errors.push(format!(
-                "chapter {} dropped too many anchors: hit_count={}",
-                index, gate.hit_count
-            ));
-        }
-        if gate.carry.carry_rate < 0.6 {
-            errors.push(format!(
-                "chapter {} anchor carry too weak: {:.2}",
-                index, gate.carry.carry_rate
-            ));
-        }
+        chapter_latency_ms.push(chapter_start.elapsed().as_millis() as u64);
 
         drafts.push(gate.draft.clone());
         carry_rates.push(gate.carry.carry_rate);
@@ -683,6 +716,7 @@ async fn real_author_session_thirty_chapter_gate() {
         chapter_reports.push(serde_json::json!({
             "chapter": index,
             "chars": gate.draft.chars().count(),
+            "latencyMs": chapter_latency_ms.last().copied().unwrap_or(0),
             "anchorHitCount": gate.hit_count,
             "anchorMentionRate": gate.carry.mention_rate,
             "anchorCarryRate": gate.carry.carry_rate,
@@ -703,21 +737,111 @@ async fn real_author_session_thirty_chapter_gate() {
     } else {
         anchor_hit_rates.iter().sum::<f64>() / anchor_hit_rates.len() as f64
     };
+    let avg_carry = if carry_rates.is_empty() {
+        0.0
+    } else {
+        carry_rates.iter().sum::<f64>() / carry_rates.len() as f64
+    };
+    let char_counts: Vec<usize> = drafts.iter().map(|d| d.chars().count()).collect();
+    let min_chars = char_counts.iter().copied().min().unwrap_or(0);
+    let max_chars = char_counts.iter().copied().max().unwrap_or(0);
+    let repaired_count = chapter_reports
+        .iter()
+        .filter(|r| r["repaired"].as_bool().unwrap_or(false))
+        .count();
+    let repair_rate = if chapter_reports.is_empty() {
+        0.0
+    } else {
+        repaired_count as f64 / chapter_reports.len() as f64
+    };
+
+    // Compute duplicate preview groups (120-char prefix)
+    let mut preview_groups: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, report) in chapter_reports.iter().enumerate() {
+        let preview = report["preview"].as_str().unwrap_or("");
+        let prefix: String = preview.chars().take(120).collect();
+        preview_groups.entry(prefix).or_default().push(idx + 1);
+    }
+    let duplicate_preview_groups: Vec<serde_json::Value> = preview_groups
+        .into_iter()
+        .filter(|(_, chapters)| chapters.len() > 1)
+        .map(|(preview, chapters)| {
+            serde_json::json!({
+                "preview": preview,
+                "chapters": chapters,
+            })
+        })
+        .collect();
+
+    // Build quality warnings
+    let mut quality_warnings = Vec::new();
+    for group in &duplicate_preview_groups {
+        let chapters = group["chapters"].as_array().cloned().unwrap_or_default();
+        quality_warnings.push(serde_json::json!({
+            "kind": "duplicate_preview",
+            "severity": if chapters.len() >= 3 { "fail" } else { "warning" },
+            "message": format!("{} chapters share similar opening preview", chapters.len()),
+        }));
+    }
+    if repair_rate > 0.3 {
+        quality_warnings.push(serde_json::json!({
+            "kind": "high_repair_rate",
+            "severity": "fail",
+            "message": format!("repair rate {:.0}% exceeds threshold", repair_rate * 100.0),
+        }));
+    } else if repair_rate > 0.15 {
+        quality_warnings.push(serde_json::json!({
+            "kind": "elevated_repair_rate",
+            "severity": "warning",
+            "message": format!("repair rate {:.0}% is elevated", repair_rate * 100.0),
+        }));
+    }
+    if min_carry < 0.4 {
+        quality_warnings.push(serde_json::json!({
+            "kind": "low_carry_rate",
+            "severity": "fail",
+            "message": format!("min carry rate {:.2} below threshold 0.4", min_carry),
+        }));
+    } else if min_carry < 0.6 {
+        quality_warnings.push(serde_json::json!({
+            "kind": "low_carry_rate",
+            "severity": "warning",
+            "message": format!("min carry rate {:.2} below recommended 0.6", min_carry),
+        }));
+    }
+
+    // Compute latency percentiles
+    let p50_latency = percentile(&chapter_latency_ms, 0.50);
+    let p90_latency = percentile(&chapter_latency_ms, 0.90);
+    let p95_latency = percentile(&chapter_latency_ms, 0.95);
 
     eprintln!(
-        "real_author_session_thirty_chapter_gate ok chapters={} avg_chars={} min_carry_rate={:.2} avg_anchor_hit={:.2}",
+        "real_author_session_thirty_chapter_gate ok chapters={} avg_chars={} min_carry_rate={:.2} avg_anchor_hit={:.2} p50_ms={} p90_ms={} p95_ms={}",
         drafts.len(),
         avg_chars,
         min_carry,
-        avg_hit
+        avg_hit,
+        p50_latency,
+        p90_latency,
+        p95_latency,
     );
     let report = serde_json::json!({
         "gate": "real_author_session_thirty_chapter_gate",
         "passed": errors.is_empty(),
         "chapterCount": drafts.len(),
         "avgChars": avg_chars,
+        "minChars": min_chars,
+        "maxChars": max_chars,
         "minCarryRate": min_carry,
+        "avgCarryRate": avg_carry,
         "avgAnchorHit": avg_hit,
+        "p50LatencyMs": p50_latency,
+        "p90LatencyMs": p90_latency,
+        "p95LatencyMs": p95_latency,
+        "repairRate": repair_rate,
+        "duplicatePreviewGroups": duplicate_preview_groups,
+        "qualityWarnings": quality_warnings,
         "errors": errors,
         "chapters": chapter_reports,
     });

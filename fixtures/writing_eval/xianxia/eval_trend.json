@@ -2,11 +2,11 @@
   "profile": "xianxia",
   "current": {
     "profile": "xianxia",
-    "timestamp": "2026-05-09T13:42:18.843125+00:00",
-    "task_count": 24,
-    "pass": 24,
+    "timestamp": "2026-05-10T02:57:53.744409700+00:00",
+    "task_count": 26,
+    "pass": 26,
     "fail": 0,
-    "average_after_score": 0.6531492,
+    "average_after_score": 0.7163374,
     "average_score_delta": 0.0,
     "metric_after_average": {
       "anchor_carry": 0.59523815,
@@ -14,8 +14,12 @@
       "ending_hook": 0.5714286,
       "exposition_ratio": 0.90000004,
       "length_compliance": 0.7560286,
+      "new_information_density": 0.5,
+      "plot_progression": 0.7285714,
       "promise_progress": 0.5,
       "scene_causality": 0.67142856,
+      "scene_repetition": 0.9285714,
+      "state_delta_coverage": 0.5,
       "style_drift": 0.7942857
     },
     "craft_rule_trends": {
@@ -58,6 +62,7 @@
       "manual_craft_edit:第二章": "pass",
       "negative_craft_memory_injection:第二章": "pass",
       "negative_missing_anchor:第一章": "pass",
+      "negative_plot_stalled:第二章": "pass",
       "negative_promise_stalled:第二章": "pass",
       "negative_revision_no_change:第二章": "pass",
       "negative_style_drift:第一章": "pass",
@@ -69,31 +74,46 @@
       "quality_evaluation:第二章": "pass",
       "quality_signals:第三章": "pass",
       "quality_signals:第二章": "pass",
+      "state_delta_trace:第三章": "pass",
       "targeted_revision:第三章": "pass",
       "targeted_revision:第二章": "pass"
     },
     "task_after_score": {
-      "chapter_generation:第一章": 0.53862005,
-      "chapter_generation:第三章": 0.61700004,
-      "chapter_generation:第二章": 0.7368001,
-      "manual_craft_edit:第二章": 0.642,
-      "quality_evaluation:第一章": 0.53862005,
-      "quality_evaluation:第三章": 0.61700004,
-      "quality_evaluation:第二章": 0.7368001,
-      "quality_signals:第三章": 0.61700004,
-      "quality_signals:第二章": 0.7368001,
-      "targeted_revision:第三章": 0.647,
-      "targeted_revision:第二章": 0.75699997
+      "chapter_generation:第一章": 0.602896,
+      "chapter_generation:第三章": 0.69759995,
+      "chapter_generation:第二章": 0.7934399,
+      "manual_craft_edit:第二章": 0.71760005,
+      "quality_evaluation:第一章": 0.602896,
+      "quality_evaluation:第三章": 0.69759995,
+      "quality_evaluation:第二章": 0.7934399,
+      "quality_signals:第三章": 0.69759995,
+      "quality_signals:第二章": 0.7934399,
+      "targeted_revision:第三章": 0.69759995,
+      "targeted_revision:第二章": 0.78559995
     },
-    "failing_tasks": []
+    "failing_tasks": [],
+    "repair_rate": 0.0,
+    "min_chars": 283,
+    "max_chars": 540,
+    "avg_carry_rate": 0.59523815,
+    "p50_latency_ms": 0,
+    "p90_latency_ms": 0,
+    "p95_latency_ms": 0,
+    "quality_warnings": [
+      {
+        "kind": "low_carry_rate",
+        "severity": "warning",
+        "message": "avg anchor_carry 0.60 below recommended"
+      }
+    ]
   },
   "previous": {
     "profile": "xianxia",
-    "timestamp": "2026-05-09T12:24:31.936078900+00:00",
-    "task_count": 24,
-    "pass": 24,
+    "timestamp": "2026-05-10T02:55:31.534416900+00:00",
+    "task_count": 26,
+    "pass": 26,
     "fail": 0,
-    "average_after_score": 0.6531492,
+    "average_after_score": 0.7163374,
     "average_score_delta": 0.0,
     "metric_after_average": {
       "anchor_carry": 0.59523815,
@@ -101,8 +121,12 @@
       "ending_hook": 0.5714286,
       "exposition_ratio": 0.90000004,
       "length_compliance": 0.7560286,
+      "new_information_density": 0.5,
+      "plot_progression": 0.7285714,
       "promise_progress": 0.5,
       "scene_causality": 0.67142856,
+      "scene_repetition": 0.9285714,
+      "state_delta_coverage": 0.5,
       "style_drift": 0.7942857
     },
     "craft_rule_trends": {
@@ -145,6 +169,7 @@
       "manual_craft_edit:第二章": "pass",
       "negative_craft_memory_injection:第二章": "pass",
       "negative_missing_anchor:第一章": "pass",
+      "negative_plot_stalled:第二章": "pass",
       "negative_promise_stalled:第二章": "pass",
       "negative_revision_no_change:第二章": "pass",
       "negative_style_drift:第一章": "pass",
@@ -156,23 +181,30 @@
       "quality_evaluation:第二章": "pass",
       "quality_signals:第三章": "pass",
       "quality_signals:第二章": "pass",
+      "state_delta_trace:第三章": "pass",
       "targeted_revision:第三章": "pass",
       "targeted_revision:第二章": "pass"
     },
     "task_after_score": {
-      "chapter_generation:第一章": 0.53862005,
-      "chapter_generation:第三章": 0.61700004,
-      "chapter_generation:第二章": 0.7368001,
-      "manual_craft_edit:第二章": 0.642,
-      "quality_evaluation:第一章": 0.53862005,
-      "quality_evaluation:第三章": 0.61700004,
-      "quality_evaluation:第二章": 0.7368001,
-      "quality_signals:第三章": 0.61700004,
-      "quality_signals:第二章": 0.7368001,
-      "targeted_revision:第三章": 0.647,
-      "targeted_revision:第二章": 0.75699997
+      "chapter_generation:第一章": 0.602896,
+      "chapter_generation:第三章": 0.69759995,
+      "chapter_generation:第二章": 0.7934399,
+      "manual_craft_edit:第二章": 0.71760005,
+      "quality_evaluation:第一章": 0.602896,
+      "quality_evaluation:第三章": 0.69759995,
+      "quality_evaluation:第二章": 0.7934399,
+      "quality_signals:第三章": 0.69759995,
+      "quality_signals:第二章": 0.7934399,
+      "targeted_revision:第三章": 0.69759995,
+      "targeted_revision:第二章": 0.78559995
     },
-    "failing_tasks": []
+    "failing_tasks": [],
+    "repair_rate": 0.0,
+    "min_chars": 0,
+    "max_chars": 0,
+    "p50_latency_ms": 0,
+    "p90_latency_ms": 0,
+    "p95_latency_ms": 0
   },
   "delta": {
     "pass_delta": 0,
@@ -185,8 +217,12 @@
       "ending_hook": 0.0,
       "exposition_ratio": 0.0,
       "length_compliance": 0.0,
+      "new_information_density": 0.0,
+      "plot_progression": 0.0,
       "promise_progress": 0.0,
       "scene_causality": 0.0,
+      "scene_repetition": 0.0,
+      "state_delta_coverage": 0.0,
       "style_drift": 0.0
     },
     "craft_rule_trend_delta": {

@@ -1,28 +1,87 @@
 {
-  "timestamp": "2026-05-09T13:42:18.840629100+00:00",
+  "timestamp": "2026-05-10T02:57:53.740805100+00:00",
   "mode": "full",
   "profiles": {
     "mystery": {
-      "task_count": 21,
-      "pass": 21,
+      "task_count": 23,
+      "pass": 23,
       "fail": 0,
-      "failing_tasks": []
+      "failing_tasks": [],
+      "repair_rate": 0.0,
+      "min_chars": 299,
+      "max_chars": 434,
+      "avg_carry_rate": 0.20000002,
+      "p50_latency_ms": 0,
+      "p90_latency_ms": 0,
+      "p95_latency_ms": 0,
+      "quality_warnings": [
+        {
+          "kind": "low_carry_rate",
+          "severity": "fail",
+          "message": "avg anchor_carry 0.20 below threshold"
+        }
+      ]
     },
     "scifi": {
-      "task_count": 21,
-      "pass": 21,
+      "task_count": 23,
+      "pass": 23,
       "fail": 0,
-      "failing_tasks": []
+      "failing_tasks": [],
+      "repair_rate": 0.0,
+      "min_chars": 294,
+      "max_chars": 379,
+      "avg_carry_rate": 0.28571433,
+      "p50_latency_ms": 0,
+      "p90_latency_ms": 0,
+      "p95_latency_ms": 0,
+      "quality_warnings": [
+        {
+          "kind": "low_carry_rate",
+          "severity": "fail",
+          "message": "avg anchor_carry 0.29 below threshold"
+        }
+      ]
     },
     "xianxia": {
-      "task_count": 24,
-      "pass": 24,
+      "task_count": 26,
+      "pass": 26,
       "fail": 0,
-      "failing_tasks": []
+      "failing_tasks": [],
+      "repair_rate": 0.0,
+      "min_chars": 283,
+      "max_chars": 540,
+      "avg_carry_rate": 0.59523815,
+      "p50_latency_ms": 0,
+      "p90_latency_ms": 0,
+      "p95_latency_ms": 0,
+      "quality_warnings": [
+        {
+          "kind": "low_carry_rate",
+          "severity": "warning",
+          "message": "avg anchor_carry 0.60 below recommended"
+        }
+      ]
     }
   },
-  "total_tasks": 66,
-  "total_pass": 66,
+  "total_tasks": 72,
+  "total_pass": 72,
   "total_fail": 0,
-  "regressions": []
+  "regressions": [],
+  "quality_warnings": [
+    {
+      "kind": "low_carry_rate",
+      "severity": "fail",
+      "message": "avg anchor_carry 0.20 below threshold"
+    },
+    {
+      "kind": "low_carry_rate",
+      "severity": "fail",
+      "message": "avg anchor_carry 0.29 below threshold"
+    },
+    {
+      "kind": "low_carry_rate",
+      "severity": "warning",
+      "message": "avg anchor_carry 0.60 below recommended"
+    }
+  ]
 }

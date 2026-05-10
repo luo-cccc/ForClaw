@@ -2,6 +2,16 @@ fn filter_block_reason(
     tool: &ToolDescriptor,
     filter: &ToolFilter,
 ) -> Option<(EffectiveToolStatus, String)> {
+    if !filter.allowed_names.is_empty() && !filter.allowed_names.iter().any(|name| name == &tool.name) {
+        return Some((
+            EffectiveToolStatus::IntentMismatch,
+            format!(
+                "Tool '{}' is not in the step's allowed_tools list",
+                tool.name
+            ),
+        ));
+    }
+
     if !filter.include_disabled && !tool.enabled_by_default {
         return Some((
             EffectiveToolStatus::Disabled,

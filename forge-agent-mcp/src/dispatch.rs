@@ -241,6 +241,9 @@ pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Resul
         "forge_chapter_generation_resume_candidates" => {
             backend.dispatch("chapter_generation_resume_candidates", json!({}))
         }
+        "forge_resume_chapter_generation" => {
+            backend.dispatch("resume_chapter_generation", arguments)
+        }
         "forge_project_graph_data" => backend.dispatch("project_graph_data", json!({})),
         "forge_project_storage_diagnostics" => {
             backend.dispatch("project_storage_diagnostics", json!({}))

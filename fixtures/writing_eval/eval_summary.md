@@ -1,6 +1,6 @@
 # Writing Eval Report
 
-**Run:** 2026-05-09T13:42:18.840629100+00:00
+**Run:** 2026-05-10T02:57:53.740805100+00:00
 **Mode:** full
 **Profiles:** mystery, scifi, xianxia
 
@@ -8,10 +8,10 @@
 
 | Profile | Tasks | Pass | Fail | Failing Tasks |
 |---------|-------|------|------|---------------|
-| mystery | 21 | 21 | 0 | - |
-| scifi | 21 | 21 | 0 | - |
-| xianxia | 24 | 24 | 0 | - |
-| **Total** | **66** | **66** | **0** | |
+| mystery | 23 | 23 | 0 | - |
+| scifi | 23 | 23 | 0 | - |
+| xianxia | 26 | 26 | 0 | - |
+| **Total** | **72** | **72** | **0** | |
 
 ## Regressions
 
@@ -20,6 +20,20 @@ No regressions detected.
 ## Risk Assessment
 
 - No quality regressions detected. Safe to proceed.
+
+## Long-Chain Quality
+
+| Profile | Min Chars | Max Chars | Avg Carry | Repair Rate | Dup Groups | Warnings | P50 (ms) | P90 (ms) | P95 (ms) |
+|---------|-----------|-----------|-----------|-------------|------------|----------|----------|----------|----------|
+| mystery | 299 | 434 | 0.20 | 0% | 0 | 1 | 0 | 0 | 0 |
+| scifi | 294 | 379 | 0.29 | 0% | 0 | 1 | 0 | 0 | 0 |
+| xianxia | 283 | 540 | 0.60 | 0% | 0 | 1 | 0 | 0 | 0 |
+
+## Quality Warnings
+
+- **[fail]** low_carry_rate: avg anchor_carry 0.20 below threshold
+- **[fail]** low_carry_rate: avg anchor_carry 0.29 below threshold
+- **[warning]** low_carry_rate: avg anchor_carry 0.60 below recommended
 
 ## Craft Rule Trends
 

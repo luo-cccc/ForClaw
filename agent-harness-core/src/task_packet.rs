@@ -159,6 +159,7 @@ impl TaskPacket {
             include_disabled: false,
             max_side_effect_level: Some(self.tool_policy.max_side_effect_level),
             required_tags: self.tool_policy.required_tool_tags.clone(),
+            allowed_names: Vec::new(),
         }
     }
 

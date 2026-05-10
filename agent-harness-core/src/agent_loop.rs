@@ -246,6 +246,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             include_requires_approval: true,
             include_disabled: false,
             required_tags: Vec::new(),
+            allowed_names: Vec::new(),
         });
         let registry = self.executor.registry.blocking_lock();
         registry.to_effective_openai_tools(&filter, &self.executor.permission_policy)
@@ -258,6 +259,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             include_requires_approval: true,
             include_disabled: false,
             required_tags: Vec::new(),
+            allowed_names: Vec::new(),
         });
         let registry = self.executor.registry.lock().await;
         registry.to_effective_openai_tools(&filter, &self.executor.permission_policy)
@@ -649,7 +651,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 goal: step.goal.clone(),
             });
 
-            // Constrain tool filter to this step's max_side_effect
+            // Constrain tool filter to this step's max_side_effect and allowed_tools
             let saved_filter = self.config.tool_filter.clone();
             self.config.tool_filter = Some(crate::tool_registry::ToolFilter {
                 intent: saved_filter.as_ref().and_then(|f| f.intent.clone()),
@@ -657,6 +659,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 include_disabled: false,
                 max_side_effect_level: Some(step.max_side_effect),
                 required_tags: Vec::new(),
+                allowed_names: step.allowed_tools.clone(),
             });
 
             let step_result = self.run(user_message, true, true).await;
@@ -1034,6 +1037,7 @@ mod tests {
             include_disabled: false,
             max_side_effect_level: Some(ToolSideEffectLevel::ProviderCall),
             required_tags: vec!["project".to_string()],
+            allowed_names: Vec::new(),
         });
 
         let tools = agent.build_tools(&Intent::GenerateContent);

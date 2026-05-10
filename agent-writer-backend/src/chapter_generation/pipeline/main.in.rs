@@ -20,13 +20,7 @@ where
 
     let quality_mode = config.payload.quality_mode.unwrap_or_default();
     let pipeline_t0 = std::time::Instant::now();
-    let context_built_ms: u64;
-    let draft_produced_ms: u64;
-    let length_repair_ms: u64;
-    let quality_report_ms: u64;
-    let targeted_revision_ms: u64;
-    let save_prepared_ms: u64;
-    let settlement_ms: u64;
+    // Timing variables declared at point of assignment
     let mut provider_calls: usize = 0;
     let mut provider_retries: usize = 0;
 
@@ -38,7 +32,7 @@ where
         "生成管道已启动",
         0,
         None,
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     emit(ChapterGenerationEvent::progress(
@@ -48,7 +42,7 @@ where
         "正在理解任务并读取工程结构...",
         5,
         None,
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     let memory = crate::writer_agent::memory::WriterMemory::open(&config.memory_path).ok();
@@ -101,7 +95,7 @@ where
             emit(ChapterGenerationEvent::failed(
                 &request_id,
                 error.clone(),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
             return PipelineTerminal::Failed(error);
         }
@@ -110,7 +104,7 @@ where
     // Preflight: select generation strategy based on context size and risk.
     let strategy = select_generation_strategy(&context, 0);
     context.generation_strategy = strategy.clone();
-    context_built_ms = context_t0.elapsed().as_millis() as u64;
+    let context_built_ms = context_t0.elapsed().as_millis() as u64;
 
     record_task_packet(&context);
 
@@ -161,7 +155,7 @@ where
             generation_strategy: Some(strategy),
             quality_report: None,
             timing: None,
-            quality_mode: Some(quality_mode.clone()),
+            quality_mode: Some(quality_mode),
             warnings: context.warnings.clone(),
         });
 
@@ -173,7 +167,7 @@ where
         "正在规划本章场景与长度目标...",
         35,
         Some(context.target.title.clone()),
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     emit(ChapterGenerationEvent::progress_with_detail(
@@ -184,7 +178,7 @@ where
         "正在撰写章节初稿...",
         45,
         Some(context.target.title.clone()),
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     let draft_t0 = std::time::Instant::now();
@@ -210,12 +204,12 @@ where
             emit(ChapterGenerationEvent::failed(
                 &request_id,
                 error.clone(),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
             return PipelineTerminal::Failed(error);
         }
     };
-    draft_produced_ms = draft_t0.elapsed().as_millis() as u64;
+    let draft_produced_ms = draft_t0.elapsed().as_millis() as u64;
     provider_calls += draft.provider_budget.provider_calls as usize;
     provider_retries += draft.provider_budget.provider_retries as usize;
 
@@ -242,7 +236,7 @@ where
                 "初稿字数不足，正在续写以满足章节长度约束...",
                 55,
                 Some(context.target.title.clone()),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
             let continuation_t0 = std::time::Instant::now();
             let continuation = match continue_chapter_draft(
@@ -266,7 +260,7 @@ where
                     emit(ChapterGenerationEvent::failed(
                 &request_id,
                 error.clone(),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
                     return PipelineTerminal::Failed(error);
                 }
@@ -292,7 +286,7 @@ where
                 "初稿字数超出目标区间，正在压缩正文...",
                 55,
                 Some(context.target.title.clone()),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
             let compress_t0 = std::time::Instant::now();
             let compressed = match compress_chapter_draft(
@@ -316,7 +310,7 @@ where
                     emit(ChapterGenerationEvent::failed(
                 &request_id,
                 error.clone(),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
                     return PipelineTerminal::Failed(error);
                 }
@@ -348,7 +342,7 @@ where
             "修复后字数仍超出目标区间，正在进行强压缩...",
             60,
             Some(context.target.title.clone()),
-            Some(quality_mode.clone()),
+            Some(quality_mode),
         ));
         let hard_compress_t0 = std::time::Instant::now();
         let compressed = match compress_chapter_draft_hard(
@@ -372,7 +366,7 @@ where
                 emit(ChapterGenerationEvent::failed(
                 &request_id,
                 error.clone(),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
                 return PipelineTerminal::Failed(error);
             }
@@ -395,7 +389,7 @@ where
         "正在校验章节长度约束...",
         63,
         Some(context.target.title.clone()),
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     if let Err(error) = validate_generated_content(
@@ -406,11 +400,11 @@ where
         emit(ChapterGenerationEvent::failed(
             &request_id,
             error.clone(),
-            Some(quality_mode.clone()),
+            Some(quality_mode),
         ));
         return PipelineTerminal::Failed(error);
     }
-    length_repair_ms = length_repair_t0.elapsed().as_millis() as u64;
+    let length_repair_ms = length_repair_t0.elapsed().as_millis() as u64;
 
     // Checkpoint 2: draft produced (after length repairs)
     write_chapter_generation_checkpoint(
@@ -438,16 +432,20 @@ where
         prior_chapter_summaries,
     };
     let quality_report_t0 = std::time::Instant::now();
-    let quality_report_before = evaluate_chapter_quality_with_signals(
-        &draft.content,
-        &context.target.title,
-        &scene_craft_plan,
-        &[],
-        context.chapter_contract.min_chars,
-        context.chapter_contract.max_chars,
-        &quality_signals,
-    );
-    quality_report_ms = quality_report_t0.elapsed().as_millis() as u64;
+    let quality_report_before = if quality_mode == GenerationQualityMode::Fast {
+        ChapterQualityReport::default()
+    } else {
+        evaluate_chapter_quality_with_signals(
+            &draft.content,
+            &context.target.title,
+            &scene_craft_plan,
+            &[],
+            context.chapter_contract.min_chars,
+            context.chapter_contract.max_chars,
+            &quality_signals,
+        )
+    };
+    let quality_report_ms = quality_report_t0.elapsed().as_millis() as u64;
 
     // Targeted revision: if quality report has major/fatal issues, attempt
     // a single revision pass with the ChapterTargetedRevision profile.
@@ -495,7 +493,7 @@ where
                 "正在定向修订低分项...",
                 65,
                 Some(context.target.title.clone()),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
             let revision_messages =
                 vec![serde_json::json!({"role": "user", "content": revision_prompt})];
@@ -527,7 +525,8 @@ where
                     300,
                 )
                 .await;
-                if let Ok((revised, revision_usage)) = revision_result {
+                if let Ok((revised, mut revision_usage)) = revision_result {
+                    revision_usage.repaired = true;
                     provider_calls += revision_usage.provider_calls as usize;
                     provider_retries += revision_usage.provider_retries as usize;
                     // Strict length validation per plan.md: re-run ModelOutput contract
@@ -561,7 +560,7 @@ where
             }
         }
     }
-    targeted_revision_ms = revision_t0.elapsed().as_millis() as u64;
+    let targeted_revision_ms = revision_t0.elapsed().as_millis() as u64;
     let revision_improved = quality_report_after_revision.is_some();
     let had_issues = !quality_report_before.fatal_issues.is_empty()
         || !quality_report_before.major_issues.is_empty();
@@ -635,7 +634,7 @@ where
         "正在保存章节并检查编辑器冲突...",
         70,
         Some(context.target.title.clone()),
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     let save_input = SaveGeneratedChapterInput {
@@ -656,19 +655,19 @@ where
                 emit(ChapterGenerationEvent::conflict(
                     &request_id,
                     conflict.clone(),
-                    Some(quality_mode.clone()),
+                    Some(quality_mode),
                 ));
                 return PipelineTerminal::Conflict(conflict);
             }
             emit(ChapterGenerationEvent::failed(
                 &request_id,
                 error.clone(),
-                Some(quality_mode.clone()),
+                Some(quality_mode),
             ));
             return PipelineTerminal::Failed(error);
         }
     };
-    save_prepared_ms = save_t0.elapsed().as_millis() as u64;
+    let save_prepared_ms = save_t0.elapsed().as_millis() as u64;
 
     // Checkpoint 4: save prepared
     let save_artifact_ref = format!("saved:{}/{}", saved.chapter_title, saved.new_revision);
@@ -691,7 +690,7 @@ where
         "正在更新大纲状态...",
         85,
         Some(saved.chapter_title.clone()),
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     let settlement_t0 = std::time::Instant::now();
@@ -740,7 +739,7 @@ where
                 None
             }
         };
-    settlement_ms = settlement_t0.elapsed().as_millis() as u64;
+    let settlement_ms = settlement_t0.elapsed().as_millis() as u64;
 
     let timing = ChapterGenerationTiming {
         context_built_ms,
@@ -893,7 +892,7 @@ where
         "生成管道已结束",
         100,
         Some(saved.chapter_title.clone()),
-        Some(quality_mode.clone()),
+        Some(quality_mode),
     ));
 
     PipelineTerminal::Completed {
