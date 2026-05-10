@@ -57,7 +57,7 @@ pub use recovery::{
 pub use router::{
     classify_intent, classify_intent_simple, ClassificationSource, Intent, IntentClassification,
 };
-pub use run_trace::{AgentRunEvent, AgentRunEventKind, AgentRunStatus, AgentRunTrace};
+pub use run_trace::{AgentRunEvent, AgentRunEventKind, AgentRunReport, AgentRunStatus, AgentRunTrace, build_agent_run_report, PlanSummary, StepSummary, ProviderTimeline, ContextQualitySummary, BudgetSummary, FailureRecoverySummary};
 pub use task_packet::{
     FeedbackContract, FoundationCoverage, RequiredContext, TaskBelief, TaskPacket,
     TaskPacketValidationError, TaskScope, ToolPolicyContract,

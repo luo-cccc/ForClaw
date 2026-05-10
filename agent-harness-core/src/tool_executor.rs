@@ -632,4 +632,84 @@ mod tests {
         let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
         assert!(result.error.is_none());
     }
+
+    // ── A7: Agent Runtime Eval Harness tests ──
+
+    #[tokio::test]
+    async fn step_allowed_tools_blocks_unauthorized_write() {
+        // Create a StepContract with allowed_tools containing only read_tool
+        let contract = crate::execution_plan::StepContract {
+            step_id: "step-0".to_string(),
+            input_summary: "read-only context gathering".to_string(),
+            required_context: vec![],
+            allowed_tools: vec!["read_tool".to_string()],
+            max_side_effect: ToolSideEffectLevel::Read,
+            provider_allowed: false,
+            success_evidence_required: vec![],
+            failure_policy: crate::execution_plan::StepFailureAction::Stop,
+        };
+
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        executor.set_allowed_tools(Some(contract.allowed_tools.clone()));
+
+        // Attempt to call write_tool (not in allowed list) -> blocked
+        let result = executor.execute("write_tool", serde_json::json!({"path": "/tmp/out.txt"})).await;
+        assert!(
+            result.error.as_ref().is_some_and(|e| e.contains("not in the step's allowed_tools list")),
+            "expected blocked by allowed_tools, got: {:?}",
+            result.error
+        );
+        assert!(
+            result.remediation.iter().any(|r| r.code == "tool_not_in_allowed_list"),
+            "expected remediation code tool_not_in_allowed_list"
+        );
+        let kind = result.failure_kind();
+        assert_eq!(kind, Some(crate::recovery::FailureKind::ToolPermission));
+    }
+
+    #[tokio::test]
+    async fn doom_loop_detected_triggers_abort() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        let args = serde_json::json!({"q": "same query"});
+
+        // First two calls with same args should NOT trigger doom loop
+        let r1 = executor.execute("read_tool", args.clone()).await;
+        assert!(r1.error.is_none());
+        let r2 = executor.execute("read_tool", args.clone()).await;
+        assert!(r2.error.is_none());
+
+        // Third call with identical args triggers doom loop
+        let r3 = executor.execute("read_tool", args.clone()).await;
+        assert!(
+            r3.error.as_ref().is_some_and(|e| e.contains("DOOM LOOP")),
+            "expected doom loop error, got: {:?}",
+            r3.error
+        );
+        assert!(
+            r3.remediation.iter().any(|r| r.code == "tool_doom_loop"),
+            "expected remediation code tool_doom_loop"
+        );
+        let kind = r3.failure_kind();
+        assert_eq!(kind, Some(crate::recovery::FailureKind::DoomLoop));
+    }
+
+    #[tokio::test]
+    async fn approval_required_tool_without_approval_is_denied() {
+        // write_tool is registered with requires_approval=true
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+
+        // Call write_tool without any approval context -> denied
+        let result = executor.execute("write_tool", serde_json::json!({"path": "/workspace/chapter.md"})).await;
+        assert!(
+            result.error.as_ref().is_some_and(|e| e.contains("requires explicit approval")),
+            "expected approval required error, got: {:?}",
+            result.error
+        );
+        assert!(
+            result.remediation.iter().any(|r| r.code == "request_approval"),
+            "expected remediation code request_approval"
+        );
+        let kind = result.failure_kind();
+        assert_eq!(kind, Some(crate::recovery::FailureKind::ToolPermission));
+    }
 }

@@ -389,6 +389,8 @@ pub struct AskAgentResponse {
     pub provider_budget: Option<WriterProviderBudgetReport>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub recovery_bundle: Option<agent_harness_core::RecoveryBundle>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_report: Option<agent_harness_core::AgentRunReport>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1738,6 +1740,7 @@ Output ONLY the JSON object, no explanation outside. Example:
                 events: Vec::new(),
                 provider_budget: Some(budget_report),
                 recovery_bundle: None,
+                run_report: None,
             });
         }
 
@@ -1813,6 +1816,14 @@ Output ONLY the JSON object, no explanation outside. Example:
                 None
             }
         });
+        // Extract run report from events if present
+        let run_report = collected_events.iter().find_map(|event| {
+            if let AgentLoopEvent::RunReport { report } = event {
+                Some(report.clone())
+            } else {
+                None
+            }
+        });
         Ok(AskAgentResponse {
             request_id,
             mode: "chat".to_string(),
@@ -1823,6 +1834,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             events: collected_events,
             provider_budget: Some(budget_report),
             recovery_bundle,
+            run_report,
         })
     }
 
@@ -1879,6 +1891,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             events: Vec::new(),
             provider_budget: None,
             recovery_bundle: None,
+                run_report: None,
         })
     }
 

@@ -472,6 +472,44 @@ impl WriterAgentKernel {
         );
     }
 
+    pub fn record_run_report(
+        &mut self,
+        task_id: impl Into<String>,
+        report: &agent_harness_core::AgentRunReport,
+        source_refs: Vec<String>,
+        created_at_ms: u64,
+    ) {
+        let task_id = task_id.into();
+        self.record_run_event(
+            "run_report",
+            created_at_ms,
+            Some(task_id.clone()),
+            source_refs,
+            serde_json::json!({
+                "taskId": task_id,
+                "runId": report.run_id,
+                "planId": report.plan_summary.plan_id,
+                "totalSteps": report.plan_summary.total_steps,
+                "completedSteps": report.plan_summary.completed_steps,
+                "failedSteps": report.plan_summary.failed_steps,
+                "skippedSteps": report.plan_summary.skipped_steps,
+                "totalDurationMs": report.plan_summary.total_duration_ms,
+                "providerCalls": report.provider_timeline.total_calls,
+                "providerTotalDurationMs": report.provider_timeline.total_duration_ms,
+                "providerP50Ms": report.provider_timeline.latency_p50_ms,
+                "providerP90Ms": report.provider_timeline.latency_p90_ms,
+                "providerP95Ms": report.provider_timeline.latency_p95_ms,
+                "avgTtftMs": report.provider_timeline.avg_ttft_ms,
+                "totalPromptTokens": report.budget_summary.total_prompt_tokens,
+                "totalCompletionTokens": report.budget_summary.total_completion_tokens,
+                "totalTokens": report.budget_summary.total_tokens,
+                "estimatedCostUsd": report.budget_summary.estimated_cost_usd,
+                "failureRecovery": report.failure_recovery,
+                "generatedAtMs": report.generated_at_ms,
+            }),
+        );
+    }
+
     pub(in crate::writer_agent::kernel) fn record_story_impact_radius_run_event(
         &mut self,
         observation_id: &str,

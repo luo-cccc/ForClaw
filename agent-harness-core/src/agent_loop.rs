@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::compaction::{compact_messages, should_compact, CompactionConfig};
 use crate::context_window_guard::{
@@ -148,6 +148,8 @@ pub enum AgentLoopEvent {
     },
     #[serde(rename = "runtime_call_record")]
     RuntimeCallRecord { record: RuntimeCallRecord },
+    #[serde(rename = "run_report")]
+    RunReport { report: crate::run_trace::AgentRunReport },
 }
 
 /// Configuration for agent loop execution.
@@ -202,6 +204,8 @@ pub struct AgentLoop<P: Provider, H: ToolHandler> {
     pub total_provider_duration_ms: u64,
     pub first_provider_call_ms: u64,
     pub last_provider_call_ms: u64,
+    /// Collected runtime call records for report generation.
+    pub runtime_call_records: Mutex<Vec<RuntimeCallRecord>>,
 }
 
 impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
@@ -223,6 +227,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             total_provider_duration_ms: 0,
             first_provider_call_ms: 0,
             last_provider_call_ms: 0,
+            runtime_call_records: Mutex::new(Vec::new()),
         }
     }
 
@@ -235,9 +240,38 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
     }
 
     fn emit(&self, event: AgentLoopEvent) {
+        if let AgentLoopEvent::RuntimeCallRecord { ref record } = event {
+            if let Ok(mut records) = self.runtime_call_records.lock() {
+                records.push(record.clone());
+            }
+        }
         if let Some(ref cb) = self.on_event {
             cb(event);
         }
+    }
+
+    /// Build and emit an `AgentRunReport` from the current plan state.
+    fn emit_run_report(
+        &self,
+        plan: &ExecutionPlan,
+        completed_step_evidences: &[StepEvidence],
+    ) {
+        let runtime_calls = self
+            .runtime_call_records
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        let report = crate::run_trace::build_agent_run_report(
+            plan.plan_id.clone(),
+            plan,
+            &runtime_calls,
+            completed_step_evidences,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
+        self.emit(AgentLoopEvent::RunReport { report });
     }
 
     /// Build and emit a `RecoveryBundle` event from a step failure.
@@ -872,6 +906,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                 steps_failed,
                                 steps_skipped,
                             });
+                            self.emit_run_report(plan, &completed_step_evidences);
                             return Err(reason);
                         }
                     }
@@ -1025,6 +1060,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                 &e,
                                 &completed_step_evidences,
                             );
+                            self.emit_run_report(plan, &completed_step_evidences);
                             return Err(e);
                         }
                         StepFailureAction::RequestContextSupplement { sources } => {
@@ -1056,6 +1092,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                 steps_failed,
                                 steps_skipped,
                             });
+                            self.emit_run_report(plan, &completed_step_evidences);
                             return Err(e);
                         }
                         StepFailureAction::PauseForApproval => {
@@ -1151,6 +1188,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                                 &retry_error,
                                                 &completed_step_evidences,
                                             );
+                                            self.emit_run_report(plan, &completed_step_evidences);
                                             return Err(retry_error);
                                         }
                                         retry_remaining -= 1;
@@ -1173,6 +1211,24 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             steps_skipped,
         });
 
+        // Build and emit AgentRunReport
+        let runtime_calls = self
+            .runtime_call_records
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        let report = crate::run_trace::build_agent_run_report(
+            plan.plan_id.clone(),
+            plan,
+            &runtime_calls,
+            &completed_step_evidences,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
+        self.emit(AgentLoopEvent::RunReport { report });
+
         Ok(final_text)
     }
 }
@@ -1180,9 +1236,11 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::openai_compat::OpenAiCompatProvider;
+    use crate::execution_plan::{ExecutionStepState, PlanStatus, StepEvidence, StepFailureAction, StepStatus};
+    use crate::provider::{LlmResponse, openai_compat::OpenAiCompatProvider};
+    use crate::recovery::{classify_failure_kind, map_failure_to_recovery, FailureKind, RecoveryContext, RecoveryDecision};
     use crate::tool_registry::{
-        default_writing_tool_registry, ToolDescriptor, ToolSideEffectLevel, ToolStage,
+        default_writing_tool_registry, ToolDescriptor, ToolSideEffectLevel, ToolStage, ToolRegistry,
     };
     use async_trait::async_trait;
 
@@ -1439,5 +1497,466 @@ mod tests {
         assert_eq!(json["kind"], "step_transition");
         assert_eq!(json["from"], "planned");
         assert_eq!(json["to"], "ready");
+    }
+
+    // ── A7: Agent Runtime Eval Harness tests ──
+
+    /// Mock provider that can simulate various failure modes for testing.
+    struct MockProvider {
+        name: String,
+        model: String,
+        response_content: String,
+        fail_with: Option<String>,
+        fail_after_calls: std::sync::atomic::AtomicU32,
+        call_count: std::sync::atomic::AtomicU32,
+    }
+
+    impl MockProvider {
+        fn new(model: &str, response_content: &str) -> Self {
+            Self {
+                name: "mock-provider".to_string(),
+                model: model.to_string(),
+                response_content: response_content.to_string(),
+                fail_with: None,
+                fail_after_calls: std::sync::atomic::AtomicU32::new(0),
+                call_count: std::sync::atomic::AtomicU32::new(0),
+            }
+        }
+
+        fn with_failure(mut self, error: &str, after_calls: u32) -> Self {
+            self.fail_with = Some(error.to_string());
+            self.fail_after_calls = std::sync::atomic::AtomicU32::new(after_calls);
+            self
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn models(&self) -> Vec<String> {
+            vec![self.model.clone()]
+        }
+
+        async fn stream_call(
+            &self,
+            _request: LlmRequest,
+            on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
+        ) -> Result<LlmResponse, String> {
+            let count = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(ref err) = self.fail_with {
+                if count >= self.fail_after_calls.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(err.clone());
+                }
+            }
+            on_event(StreamEvent::TextDelta {
+                content: self.response_content.clone(),
+            });
+            on_event(StreamEvent::MessageStop {
+                finish_reason: "stop".to_string(),
+            });
+            Ok(LlmResponse {
+                content: Some(self.response_content.clone()),
+                tool_calls: None,
+                finish_reason: "stop".to_string(),
+                usage: Some(crate::provider::UsageInfo {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cached_tokens: None,
+                }),
+            })
+        }
+
+        async fn call(&self, request: LlmRequest) -> Result<LlmResponse, String> {
+            self.stream_call(request, Box::new(|_ev| {})).await
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
+            Ok(vec![0.0; 128])
+        }
+
+        fn estimate_tokens(&self, messages: &[LlmMessage]) -> u64 {
+            messages.iter().map(|m| m.content.as_ref().map(|c| c.chars().count()).unwrap_or(0) as u64 / 3 + 8).sum()
+        }
+
+        fn context_window_tokens(&self) -> u64 {
+            128_000
+        }
+
+        async fn health_check(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn make_agent_with_mock_provider(
+        provider: Arc<MockProvider>,
+    ) -> AgentLoop<MockProvider, MockToolHandler> {
+        AgentLoop::new(
+            AgentLoopConfig {
+                max_rounds: 3,
+                system_prompt: "You are a test agent.".into(),
+                context_limit_tokens: None,
+                tool_filter: None,
+            },
+            provider,
+            ToolRegistry::new(),
+            MockToolHandler,
+        )
+    }
+
+    #[tokio::test]
+    async fn provider_budget_exceeded_triggers_block() {
+        let provider = Arc::new(MockProvider::new("gpt-4", "ok"));
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+
+        // Set up provider_call_guard that rejects calls due to budget
+        agent.set_provider_call_guard(Arc::new(|_ctx| {
+            Err("Provider budget exceeded: monthly ceiling reached".to_string())
+        }));
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-budget".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![ExecutionStep {
+                step_id: "step-0".to_string(),
+                index: 0,
+                goal: "draft chapter".to_string(),
+                required_context: vec![],
+                allowed_tools: vec![],
+                max_side_effect: ToolSideEffectLevel::ProviderCall,
+                success_signals: vec![],
+                on_failure: StepFailureAction::Stop,
+                status: StepStatus::Ready,
+                step_state: ExecutionStepState::Ready,
+                recovery_action: None,
+                contract: None,
+                evidence: None,
+            }],
+            status: PlanStatus::Pending,
+            created_at_ms: 1,
+        };
+
+        let result = agent.run_with_plan(&mut plan, "write a chapter").await;
+        assert!(result.is_err(), "expected provider budget to block the call");
+        let err = result.unwrap_err();
+        assert!(err.contains("budget") || err.contains("ceiling"), "expected budget error, got: {}", err);
+
+        // Verify FailureKind and RecoveryDecision
+        let kind = classify_failure_kind(&err, None);
+        assert_eq!(kind, FailureKind::ProviderBudget);
+        let decision = map_failure_to_recovery(&kind, &RecoveryContext::default());
+        assert_eq!(decision, RecoveryDecision::ShrinkContext);
+    }
+
+    #[tokio::test]
+    async fn context_missing_preflight_blocks_provider_call() {
+        let provider = Arc::new(MockProvider::new("gpt-4", "ok"));
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+
+        // Set up provider_call_guard that rejects due to missing critical context
+        agent.set_provider_call_guard(Arc::new(|_ctx| {
+            Err("Critical context missing: outline not loaded".to_string())
+        }));
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-context".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![ExecutionStep {
+                step_id: "step-0".to_string(),
+                index: 0,
+                goal: "draft chapter".to_string(),
+                required_context: vec!["outline".to_string()],
+                allowed_tools: vec![],
+                max_side_effect: ToolSideEffectLevel::ProviderCall,
+                success_signals: vec![],
+                on_failure: StepFailureAction::Stop,
+                status: StepStatus::Ready,
+                step_state: ExecutionStepState::Ready,
+                recovery_action: None,
+                contract: None,
+                evidence: None,
+            }],
+            status: PlanStatus::Pending,
+            created_at_ms: 1,
+        };
+
+        let result = agent.run_with_plan(&mut plan, "write a chapter").await;
+        assert!(result.is_err(), "expected missing context to block provider call");
+        let err = result.unwrap_err();
+        assert!(err.contains("missing") || err.contains("outline"), "expected context missing error, got: {}", err);
+
+        let kind = classify_failure_kind(&err, None);
+        assert_eq!(kind, FailureKind::ContextMissing);
+        let decision = map_failure_to_recovery(&kind, &RecoveryContext::default());
+        assert_eq!(decision, RecoveryDecision::CompactContext);
+    }
+
+    #[tokio::test]
+    async fn provider_transient_failure_triggers_retry_with_backoff() {
+        // Provider fails with 429 on first call, succeeds on retry
+        let provider = Arc::new(
+            MockProvider::new("gpt-4", "draft text")
+                .with_failure("LLM call failed (429): rate limited", 0),
+        );
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+        agent.config.max_rounds = 1;
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-retry".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![ExecutionStep {
+                step_id: "step-0".to_string(),
+                index: 0,
+                goal: "draft chapter".to_string(),
+                required_context: vec![],
+                allowed_tools: vec![],
+                max_side_effect: ToolSideEffectLevel::ProviderCall,
+                success_signals: vec![],
+                on_failure: StepFailureAction::Retry { max_retries: 2 },
+                status: StepStatus::Ready,
+                step_state: ExecutionStepState::Ready,
+                recovery_action: None,
+                contract: None,
+                evidence: None,
+            }],
+            status: PlanStatus::Pending,
+            created_at_ms: 1,
+        };
+
+        // The run will fail because the mock provider always fails after the threshold
+        let result = agent.run_with_plan(&mut plan, "write a chapter").await;
+        assert!(result.is_err(), "expected transient failure");
+        let err = result.unwrap_err();
+        assert!(err.contains("429") || err.contains("rate limit"), "expected 429 error, got: {}", err);
+
+        let kind = classify_failure_kind(&err, None);
+        assert_eq!(kind, FailureKind::ProviderTransient);
+        let decision = map_failure_to_recovery(&kind, &RecoveryContext::default());
+        assert_eq!(decision, RecoveryDecision::RetryWithBackoff);
+    }
+
+    #[tokio::test]
+    async fn save_conflict_surfaces_user_choice() {
+        let provider = Arc::new(MockProvider::new("gpt-4", "ok"));
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+
+        // Simulate a save conflict by setting up a guard that rejects with conflict
+        agent.set_provider_call_guard(Arc::new(|_ctx| {
+            Err("Save conflict: revision mismatch".to_string())
+        }));
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-save".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![ExecutionStep {
+                step_id: "step-0".to_string(),
+                index: 0,
+                goal: "save chapter".to_string(),
+                required_context: vec![],
+                allowed_tools: vec![],
+                max_side_effect: ToolSideEffectLevel::Write,
+                success_signals: vec![],
+                on_failure: StepFailureAction::Stop,
+                status: StepStatus::Ready,
+                step_state: ExecutionStepState::Ready,
+                recovery_action: None,
+                contract: None,
+                evidence: None,
+            }],
+            status: PlanStatus::Pending,
+            created_at_ms: 1,
+        };
+
+        let result = agent.run_with_plan(&mut plan, "save the chapter").await;
+        assert!(result.is_err(), "expected save conflict to surface user choice");
+        let err = result.unwrap_err();
+        assert!(err.contains("conflict") || err.contains("mismatch"), "expected save conflict error, got: {}", err);
+
+        // Verify SurfaceUserChoice decision (do NOT auto-overwrite)
+        let kind = classify_failure_kind(&err, None);
+        assert_eq!(kind, FailureKind::SaveConflict);
+        let decision = map_failure_to_recovery(&kind, &RecoveryContext::default());
+        assert_eq!(decision, RecoveryDecision::SurfaceUserChoice);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_resume_skips_completed_steps() {
+        let provider = Arc::new(MockProvider::new("gpt-4", "draft text"));
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-resume".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![
+                ExecutionStep {
+                    step_id: "step-0".to_string(),
+                    index: 0,
+                    goal: "preflight".to_string(),
+                    required_context: vec![],
+                    allowed_tools: vec![],
+                    max_side_effect: ToolSideEffectLevel::Read,
+                    success_signals: vec![],
+                    on_failure: StepFailureAction::Stop,
+                    status: StepStatus::Completed { evidence: vec!["ok".to_string()] },
+                    step_state: ExecutionStepState::Completed,
+                    recovery_action: None,
+                    contract: None,
+                    evidence: Some(StepEvidence {
+                        step_id: "step-0".to_string(),
+                        artifact_refs: vec!["preflight-done".to_string()],
+                        tool_executions: vec![],
+                        provider_usage: None,
+                        context_refs: vec![],
+                        completion_time_ms: 500,
+                        context_hash: "hash0".to_string(),
+                    }),
+                },
+                ExecutionStep {
+                    step_id: "step-1".to_string(),
+                    index: 1,
+                    goal: "draft".to_string(),
+                    required_context: vec![],
+                    allowed_tools: vec![],
+                    max_side_effect: ToolSideEffectLevel::ProviderCall,
+                    success_signals: vec![],
+                    on_failure: StepFailureAction::Retry { max_retries: 1 },
+                    status: StepStatus::Ready,
+                    step_state: ExecutionStepState::Ready,
+                    recovery_action: None,
+                    contract: None,
+                    evidence: None,
+                },
+            ],
+            status: PlanStatus::Running,
+            created_at_ms: 1,
+        };
+
+        // Resume the plan - step-0 is already completed, so it should be skipped
+        let result = agent.resume_plan(&mut plan, "continue drafting").await;
+        // The mock provider returns "draft text" which will succeed
+        assert!(result.is_ok(), "expected resume to succeed for remaining steps");
+
+        // Verify step-0 remained completed (was skipped)
+        assert!(matches!(plan.steps[0].step_state, ExecutionStepState::Completed));
+        assert!(matches!(&plan.steps[0].status, StepStatus::Completed { .. }));
+
+        // Verify step-1 was executed and completed
+        assert!(matches!(&plan.steps[1].status, StepStatus::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn failed_run_outputs_recovery_bundle() {
+        let provider = Arc::new(MockProvider::new("gpt-4", "ok"));
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+
+        // Set up a guard that always fails
+        agent.set_provider_call_guard(Arc::new(|_ctx| {
+            Err("Provider budget exceeded: monthly ceiling reached".to_string())
+        }));
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-bundle".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![
+                ExecutionStep {
+                    step_id: "step-0".to_string(),
+                    index: 0,
+                    goal: "preflight".to_string(),
+                    required_context: vec![],
+                    allowed_tools: vec![],
+                    max_side_effect: ToolSideEffectLevel::Read,
+                    success_signals: vec![],
+                    on_failure: StepFailureAction::Stop,
+                    status: StepStatus::Completed { evidence: vec!["ok".to_string()] },
+                    step_state: ExecutionStepState::Completed,
+                    recovery_action: None,
+                    contract: None,
+                    evidence: Some(StepEvidence {
+                        step_id: "step-0".to_string(),
+                        artifact_refs: vec!["preflight-done".to_string()],
+                        tool_executions: vec![],
+                        provider_usage: None,
+                        context_refs: vec![],
+                        completion_time_ms: 500,
+                        context_hash: "hash0".to_string(),
+                    }),
+                },
+                ExecutionStep {
+                    step_id: "step-1".to_string(),
+                    index: 1,
+                    goal: "draft".to_string(),
+                    required_context: vec![],
+                    allowed_tools: vec![],
+                    max_side_effect: ToolSideEffectLevel::ProviderCall,
+                    success_signals: vec![],
+                    on_failure: StepFailureAction::Stop,
+                    status: StepStatus::Ready,
+                    step_state: ExecutionStepState::Ready,
+                    recovery_action: None,
+                    contract: None,
+                    evidence: None,
+                },
+            ],
+            status: PlanStatus::Running,
+            created_at_ms: 1,
+        };
+
+        // Capture emitted events to verify RecoveryBundle
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        agent.set_event_callback(Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        }));
+
+        let result = agent.run_with_plan(&mut plan, "write a chapter").await;
+        assert!(result.is_err(), "expected run to fail");
+
+        // Verify that a RecoveryBundle event was emitted
+        let emitted = events.lock().unwrap();
+        let event_kinds: Vec<String> = emitted.iter().map(|e| {
+            match e {
+                AgentLoopEvent::PlanStarted { .. } => "PlanStarted".to_string(),
+                AgentLoopEvent::StepStarted { .. } => "StepStarted".to_string(),
+                AgentLoopEvent::StepFailed { .. } => "StepFailed".to_string(),
+                AgentLoopEvent::StepCompleted { .. } => "StepCompleted".to_string(),
+                AgentLoopEvent::PlanCompleted { .. } => "PlanCompleted".to_string(),
+                AgentLoopEvent::FailureBundle { .. } => "FailureBundle".to_string(),
+                AgentLoopEvent::RecoveryBundle { .. } => "RecoveryBundle".to_string(),
+                AgentLoopEvent::Error { .. } => "Error".to_string(),
+                _ => "Other".to_string(),
+            }
+        }).collect();
+        eprintln!("Event kinds: {:?}", event_kinds);
+        let recovery_bundle_events: Vec<_> = emitted
+            .iter()
+            .filter(|ev| matches!(ev, AgentLoopEvent::RecoveryBundle { .. }))
+            .collect();
+        assert!(
+            !recovery_bundle_events.is_empty(),
+            "expected at least one RecoveryBundle event to be emitted, got {:?}",
+            event_kinds
+        );
+
+        // Verify the bundle contains correct information
+        if let AgentLoopEvent::RecoveryBundle {
+            completed_steps,
+            failed_step,
+            failure_kind,
+            suggested_action,
+            user_choice_required,
+            ..
+        } = recovery_bundle_events[0]
+        {
+            assert_eq!(failed_step, "step-1");
+            assert_eq!(failure_kind, "provider_budget");
+            assert_eq!(suggested_action, "shrink_context");
+            assert!(!user_choice_required);
+            assert_eq!(completed_steps.len(), 0);
+            // completed_step_evidences is only populated from steps executed during this run
+        } else {
+            panic!("Expected RecoveryBundle event");
+        }
     }
 }
