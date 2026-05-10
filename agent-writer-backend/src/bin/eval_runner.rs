@@ -2518,7 +2518,7 @@ fn run_world_asset_contract_eval(profile: &str, task: &EvalTask, _fixture: &serd
     let contract_non_empty = expected["contract_non_empty"].as_bool().unwrap_or(true);
 
     let mission = expected["mission"].as_str().unwrap_or("test mission");
-    let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[]);
+    let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[], None);
 
     let mut messages = Vec::new();
     if constraints.len() < min_constraints {
@@ -2570,7 +2570,7 @@ fn run_canon_forbidden_claim_eval(profile: &str, task: &EvalTask, _fixture: &ser
     let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
     let expected_constraint_id = expected["expected_constraint_id"].as_str();
 
-    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[]);
+    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[], None);
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
     let detected = violations.iter().any(|v| {
@@ -2644,7 +2644,7 @@ fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde
         constraints.push(required_cost);
     }
 
-    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[]);
+    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[], None);
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
     let detected = violations.iter().any(|v| {
@@ -2705,7 +2705,7 @@ fn run_canon_proposed_not_hard_eval(profile: &str, task: &EvalTask, _fixture: &s
     let max_severity = expected["max_severity"].as_str().unwrap_or("warning");
 
     let constraints = compile_canon_constraints(&assets);
-    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[]);
+    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[], None);
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
     let detected = violations.iter().any(|v| {
@@ -2763,7 +2763,7 @@ fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &ser
     let assets = load_world_assets(profile_name);
     let constraints = compile_canon_constraints(&assets);
     let mission = expected["mission"].as_str().unwrap_or("test mission");
-    let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[]);
+    let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[], None);
 
     let mut messages = Vec::new();
     if expected["contract_non_empty"].as_bool().unwrap_or(false) && contract.active_constraints.is_empty() {
