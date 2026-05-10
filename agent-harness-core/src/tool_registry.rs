@@ -240,4 +240,29 @@ mod tests {
             "Empty allowed_names should not block any tool"
         );
     }
+
+    #[test]
+    fn filter_tools_by_allowed_list_returns_only_whitelisted() {
+        let registry = default_writing_tool_registry();
+        let tools = registry.list();
+        let filtered = filter_tools_by_allowed_list(
+            &tools,
+            &vec![
+                "load_current_chapter".to_string(),
+                "search_lorebook".to_string(),
+            ],
+        );
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|t| t.name == "load_current_chapter"));
+        assert!(filtered.iter().any(|t| t.name == "search_lorebook"));
+        assert!(!filtered.iter().any(|t| t.name == "generate_chapter_draft"));
+    }
+
+    #[test]
+    fn filter_tools_by_allowed_list_empty_passes_all() {
+        let registry = default_writing_tool_registry();
+        let tools = registry.list();
+        let filtered = filter_tools_by_allowed_list(&tools, &vec![]);
+        assert_eq!(filtered.len(), tools.len());
+    }
 }

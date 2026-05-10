@@ -321,3 +321,18 @@ impl ToolRegistry {
             .collect()
     }
 }
+
+/// Filter a list of tools by an allowed-names whitelist.
+/// If `allowed` is non-empty, only tools whose names appear in the list are returned.
+/// If `allowed` is empty, all tools pass through unchanged.
+pub fn filter_tools_by_allowed_list(tools: &[ToolDescriptor], allowed: &[String]) -> Vec<ToolDescriptor> {
+    if allowed.is_empty() {
+        tools.to_vec()
+    } else {
+        tools
+            .iter()
+            .filter(|tool| allowed.iter().any(|name| name == &tool.name))
+            .cloned()
+            .collect()
+    }
+}

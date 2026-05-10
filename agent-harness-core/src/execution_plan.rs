@@ -13,6 +13,95 @@ pub struct ExecutionPlan {
     pub created_at_ms: u64,
 }
 
+/// Contract that defines the expected inputs, allowed tools, and success criteria
+/// for a single execution step. Enforced at runtime by the agent loop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepContract {
+    pub step_id: String,
+    pub input_summary: String,
+    pub required_context: Vec<String>,
+    pub allowed_tools: Vec<String>,
+    pub max_side_effect: ToolSideEffectLevel,
+    pub provider_allowed: bool,
+    pub success_evidence_required: Vec<String>,
+    pub failure_policy: StepFailureAction,
+}
+
+/// Evidence collected when a step completes, proving the step fulfilled its contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepEvidence {
+    pub step_id: String,
+    pub artifact_refs: Vec<String>,
+    pub tool_executions: Vec<String>,
+    pub provider_usage: Option<ProviderUsageSummary>,
+    pub context_refs: Vec<String>,
+    pub completion_time_ms: u64,
+    /// Deterministic hash of the context pack used for this step.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub context_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageSummary {
+    pub model: String,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    pub duration_ms: u64,
+}
+
+/// Unified durable checkpoint for agent execution.
+/// Written at step boundaries and key operation points to enable
+/// resume after interruption.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCheckpoint {
+    pub checkpoint_id: String,
+    pub task_id: String,
+    pub plan_id: String,
+    pub step_id: String,
+    pub phase: CheckpointPhase,
+    pub input_hash: String,
+    pub context_hash: String,
+    pub artifact_refs: Vec<String>,
+    pub tool_effects: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub provider_usage: Option<ProviderUsageSummary>,
+    pub budget_spent: u64,
+    pub approval_refs: Vec<String>,
+    pub resume_policy: ResumePolicy,
+}
+
+/// Phase of execution at which a checkpoint was captured.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointPhase {
+    StepStarted,
+    StepCompleted,
+    ProviderCallBefore,
+    ProviderCallAfter,
+    SavePrepared,
+    WriteBefore,
+    WriteAfter,
+}
+
+/// Policy dictating how to resume from a checkpoint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumePolicy {
+    /// Step was completed; resume should skip it.
+    Skip,
+    /// Step needs to be re-executed.
+    Rerun,
+    /// Resume requires explicit approval before proceeding.
+    RequireApproval,
+    /// Checkpoint is not recoverable.
+    Abort,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionStep {
@@ -29,6 +118,10 @@ pub struct ExecutionStep {
     pub step_state: ExecutionStepState,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub recovery_action: Option<StepRecoveryAction>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub contract: Option<StepContract>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub evidence: Option<StepEvidence>,
 }
 
 impl ExecutionStep {
@@ -71,6 +164,8 @@ impl Default for ExecutionStep {
             status: StepStatus::default(),
             step_state: ExecutionStepState::default(),
             recovery_action: None,
+            contract: None,
+            evidence: None,
         }
     }
 }
@@ -501,6 +596,95 @@ mod execution_plan_tests {
         }
     }
 }
+
+#[test]
+fn agent_checkpoint_serialization_roundtrip() {
+    let cp = AgentCheckpoint {
+        checkpoint_id: "cp-1".to_string(),
+        task_id: "task-1".to_string(),
+        plan_id: "plan-1".to_string(),
+        step_id: "step-0".to_string(),
+        phase: CheckpointPhase::StepCompleted,
+        input_hash: "hash-a".to_string(),
+        context_hash: "hash-b".to_string(),
+        artifact_refs: vec!["draft.txt".to_string()],
+        tool_effects: vec!["tool:read".to_string()],
+        provider_usage: Some(ProviderUsageSummary {
+            model: "gpt-4".to_string(),
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            duration_ms: 1200,
+        }),
+        budget_spent: 2500,
+        approval_refs: vec![],
+        resume_policy: ResumePolicy::Skip,
+    };
+    let json = serde_json::to_string(&cp).unwrap();
+    let decoded: AgentCheckpoint = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.checkpoint_id, cp.checkpoint_id);
+    assert_eq!(decoded.phase, CheckpointPhase::StepCompleted);
+    assert_eq!(decoded.resume_policy, ResumePolicy::Skip);
+    assert_eq!(decoded.budget_spent, 2500);
+    assert_eq!(decoded.artifact_refs, vec!["draft.txt"]);
+}
+
+#[test]
+fn checkpoint_phase_serialization_roundtrip() {
+    let phases = vec![
+        CheckpointPhase::StepStarted,
+        CheckpointPhase::StepCompleted,
+        CheckpointPhase::ProviderCallBefore,
+        CheckpointPhase::ProviderCallAfter,
+        CheckpointPhase::SavePrepared,
+        CheckpointPhase::WriteBefore,
+        CheckpointPhase::WriteAfter,
+    ];
+    for phase in phases {
+        let json = serde_json::to_string(&phase).unwrap();
+        let decoded: CheckpointPhase = serde_json::from_str(&json).unwrap();
+        assert_eq!(phase, decoded);
+    }
+}
+
+#[test]
+fn resume_policy_serialization_roundtrip() {
+    let policies = vec![
+        ResumePolicy::Skip,
+        ResumePolicy::Rerun,
+        ResumePolicy::RequireApproval,
+        ResumePolicy::Abort,
+    ];
+    for policy in policies {
+        let json = serde_json::to_string(&policy).unwrap();
+        let decoded: ResumePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, decoded);
+    }
+}
+
+#[test]
+fn agent_checkpoint_deserialize_old_format_uses_defaults() {
+    let old_json = r#"{
+        "checkpointId": "cp-old",
+        "taskId": "task-old",
+        "planId": "plan-old",
+        "stepId": "step-0",
+        "phase": "step_started",
+        "inputHash": "",
+        "contextHash": "",
+        "artifactRefs": [],
+        "toolEffects": [],
+        "budgetSpent": 0,
+        "approvalRefs": [],
+        "resumePolicy": "rerun"
+    }"#;
+    let decoded: AgentCheckpoint = serde_json::from_str(old_json).unwrap();
+    assert_eq!(decoded.checkpoint_id, "cp-old");
+    assert_eq!(decoded.phase, CheckpointPhase::StepStarted);
+    assert_eq!(decoded.resume_policy, ResumePolicy::Rerun);
+    assert!(decoded.provider_usage.is_none());
+}
+
 #[test]
 fn deserialize_old_format_without_new_fields_uses_defaults() {
     let old_json = r#"{
@@ -829,4 +1013,166 @@ fn lifecycle_planned_to_ready_to_running_to_failed_with_retry() {
     assert!(step.is_terminal());
     assert!(!step.is_runnable());
     assert_eq!(step.recovery_action, Some(StepRecoveryAction::Retry));
+}
+
+// --- Tests for StepContract and StepEvidence ---
+
+#[test]
+fn step_contract_defaults_to_none() {
+    let step = ExecutionStep::default();
+    assert!(step.contract.is_none());
+    assert!(step.evidence.is_none());
+}
+
+#[test]
+fn step_contract_serialization_roundtrip() {
+    let contract = StepContract {
+        step_id: "step-1".to_string(),
+        input_summary: "load context".to_string(),
+        required_context: vec!["outline".to_string()],
+        allowed_tools: vec!["load_current_chapter".to_string(), "search_lorebook".to_string()],
+        max_side_effect: ToolSideEffectLevel::Read,
+        provider_allowed: false,
+        success_evidence_required: vec!["chapter_text".to_string()],
+        failure_policy: StepFailureAction::Stop,
+    };
+    let json = serde_json::to_string(&contract).unwrap();
+    let decoded: StepContract = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.step_id, "step-1");
+    assert_eq!(decoded.allowed_tools, vec!["load_current_chapter", "search_lorebook"]);
+    assert_eq!(decoded.success_evidence_required, vec!["chapter_text"]);
+}
+
+#[test]
+fn step_evidence_serialization_roundtrip() {
+    let evidence = StepEvidence {
+        step_id: "step-1".to_string(),
+        artifact_refs: vec!["draft.txt".to_string()],
+        tool_executions: vec!["load_current_chapter".to_string()],
+        provider_usage: Some(ProviderUsageSummary {
+            model: "gpt-4".to_string(),
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            duration_ms: 1200,
+        }),
+        context_refs: vec!["outline".to_string()],
+        completion_time_ms: 1200,
+        context_hash: String::new(),
+    };
+    let json = serde_json::to_string(&evidence).unwrap();
+    let decoded: StepEvidence = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.artifact_refs, vec!["draft.txt"]);
+    assert_eq!(decoded.provider_usage.as_ref().unwrap().model, "gpt-4");
+    assert_eq!(decoded.provider_usage.as_ref().unwrap().total_tokens, 150);
+}
+
+#[test]
+fn execution_step_with_contract_and_evidence() {
+    let mut step = ExecutionStep {
+        step_id: "step-0".to_string(),
+        index: 0,
+        goal: "test".to_string(),
+        contract: Some(StepContract {
+            step_id: "step-0".to_string(),
+            input_summary: "context".to_string(),
+            required_context: vec![],
+            allowed_tools: vec!["read_tool".to_string()],
+            max_side_effect: ToolSideEffectLevel::Read,
+            provider_allowed: false,
+            success_evidence_required: vec!["output".to_string()],
+            failure_policy: StepFailureAction::Stop,
+        }),
+        ..Default::default()
+    };
+    assert!(step.contract.is_some());
+    assert_eq!(step.contract.as_ref().unwrap().allowed_tools, vec!["read_tool"]);
+
+    step.evidence = Some(StepEvidence {
+        step_id: "step-0".to_string(),
+        artifact_refs: vec!["result".to_string()],
+        tool_executions: vec![],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    });
+    assert!(step.evidence.is_some());
+}
+
+#[test]
+fn plan_resume_skips_terminal_steps_with_contract() {
+    let task = TaskPacket::new("t-resume-contract", "test", TaskScope::Chapter, 1);
+    let mut plan = compile_plan(&task, "p-resume-contract", 1);
+
+    // Step 0: completed with contract
+    plan.steps[0].status = StepStatus::Completed { evidence: vec!["ok".to_string()] };
+    plan.steps[0].step_state = ExecutionStepState::Completed;
+    plan.steps[0].contract = Some(StepContract {
+        step_id: "step-0".to_string(),
+        input_summary: "preflight".to_string(),
+        required_context: vec![],
+        allowed_tools: vec!["read_tool".to_string()],
+        max_side_effect: ToolSideEffectLevel::Read,
+        provider_allowed: false,
+        success_evidence_required: vec![],
+        failure_policy: StepFailureAction::Stop,
+    });
+
+    // Step 1: blocked with contract
+    plan.steps[1].status = StepStatus::Blocked {
+        reason: "waiting".to_string(),
+        context_summary: vec![],
+        recovery_suggestion: "wait".to_string(),
+    };
+    plan.steps[1].step_state = ExecutionStepState::Blocked;
+    plan.steps[1].contract = Some(StepContract {
+        step_id: "step-1".to_string(),
+        input_summary: "draft".to_string(),
+        required_context: vec![],
+        allowed_tools: vec!["generate_bounded_continuation".to_string()],
+        max_side_effect: ToolSideEffectLevel::ProviderCall,
+        provider_allowed: true,
+        success_evidence_required: vec!["draft".to_string()],
+        failure_policy: StepFailureAction::Retry { max_retries: 1 },
+    });
+
+    // Resume from step 1
+    plan.resume_from_step(1);
+
+    // Step 0 stays completed (terminal, not reopened)
+    assert_eq!(plan.steps[0].step_state, ExecutionStepState::Completed);
+    // Step 1 is readied (was blocked, now resumed)
+    assert_eq!(plan.steps[1].step_state, ExecutionStepState::Ready);
+    assert_eq!(plan.steps[1].status, StepStatus::Ready);
+    // Contract is preserved
+    assert!(plan.steps[1].contract.is_some());
+    assert_eq!(plan.steps[1].contract.as_ref().unwrap().allowed_tools, vec!["generate_bounded_continuation"]);
+}
+
+#[test]
+fn deserialize_old_format_without_contract_and_evidence() {
+    let old_json = r#"{
+        "planId": "old-plan",
+        "taskId": "old-task",
+        "status": "pending",
+        "createdAtMs": 1,
+        "steps": [
+            {
+                "stepId": "step-0",
+                "index": 0,
+                "goal": "old goal",
+                "requiredContext": [],
+                "allowedTools": [],
+                "maxSideEffect": "read",
+                "successSignals": [],
+                "onFailure": "stop",
+                "status": "planned"
+            }
+        ]
+    }"#;
+    let decoded: ExecutionPlan = serde_json::from_str(old_json).unwrap();
+    assert_eq!(decoded.steps[0].step_state, ExecutionStepState::Planned);
+    assert!(decoded.steps[0].contract.is_none());
+    assert!(decoded.steps[0].evidence.is_none());
 }

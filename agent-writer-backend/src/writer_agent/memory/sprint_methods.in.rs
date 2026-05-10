@@ -1,3 +1,4 @@
+use agent_harness_core::execution_plan::AgentCheckpoint;
 use crate::writer_agent::supervised_sprint::{LongTaskCheckpoint, SprintCheckpoint, SupervisedSprintPlan};
 use rusqlite::types::Type;
 
@@ -278,6 +279,84 @@ impl WriterMemory {
              WHERE project_id=?1 AND task_id=?2",
             rusqlite::params![project_id, task_id],
         )
+    }
+
+    /// Insert a unified AgentCheckpoint into `long_task_checkpoints`.
+    pub fn insert_agent_checkpoint(
+        &self,
+        project_id: &str,
+        checkpoint: &AgentCheckpoint,
+    ) -> rusqlite::Result<()> {
+        let now = crate::agent_runtime::now_ms() as i64;
+        let checkpoint_json = serde_json::to_string(checkpoint)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO long_task_checkpoints
+             (project_id, checkpoint_id, task_id, task_kind, current_step, checkpoint_json, source, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                project_id,
+                checkpoint.checkpoint_id,
+                checkpoint.task_id,
+                "agent_checkpoint",
+                format!("{:?}", checkpoint.phase),
+                checkpoint_json,
+                "agent_loop",
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get the latest unified AgentCheckpoint for a task.
+    pub fn get_latest_agent_checkpoint(
+        &self,
+        project_id: &str,
+        task_id: &str,
+    ) -> rusqlite::Result<Option<AgentCheckpoint>> {
+        self.conn
+            .query_row(
+                "SELECT checkpoint_json
+                 FROM long_task_checkpoints
+                 WHERE project_id=?1 AND task_id=?2 AND task_kind='agent_checkpoint'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                rusqlite::params![project_id, task_id],
+                |row| {
+                    let raw: String = row.get(0)?;
+                    serde_json::from_str::<AgentCheckpoint>(&raw).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Get resume candidate checkpoints for a task.
+    /// Returns recent checkpoints ordered newest first, limited to `limit`.
+    pub fn get_resume_candidate_checkpoints(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<AgentCheckpoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT checkpoint_json
+             FROM long_task_checkpoints
+             WHERE project_id=?1 AND task_id=?2 AND task_kind='agent_checkpoint'
+             ORDER BY created_at DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![project_id, task_id, limit],
+            |row| {
+                let raw: String = row.get(0)?;
+                serde_json::from_str::<AgentCheckpoint>(&raw).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
     }
 
 }
@@ -660,5 +739,144 @@ mod sprint_persistence_tests {
             .list_long_task_checkpoints("proj-1", Some("batch_sprint"), 10)
             .unwrap();
         assert_eq!(b_checkpoints.len(), 3);
+    }
+
+    #[test]
+    fn agent_checkpoint_roundtrip() {
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ProviderUsageSummary, ResumePolicy,
+        };
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-1".to_string(),
+            task_id: "task-1".to_string(),
+            plan_id: "plan-1".to_string(),
+            step_id: "step-0".to_string(),
+            phase: CheckpointPhase::StepCompleted,
+            input_hash: "hash-in".to_string(),
+            context_hash: "hash-ctx".to_string(),
+            artifact_refs: vec!["draft.txt".to_string()],
+            tool_effects: vec!["tool:read".to_string()],
+            provider_usage: Some(ProviderUsageSummary {
+                model: "gpt-4".to_string(),
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+                duration_ms: 1200,
+            }),
+            budget_spent: 2500,
+            approval_refs: vec!["approval-1".to_string()],
+            resume_policy: ResumePolicy::Skip,
+        };
+
+        memory.insert_agent_checkpoint("proj-1", &cp).unwrap();
+
+        let restored = memory
+            .get_latest_agent_checkpoint("proj-1", "task-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.checkpoint_id, cp.checkpoint_id);
+        assert_eq!(restored.phase, CheckpointPhase::StepCompleted);
+        assert_eq!(restored.resume_policy, ResumePolicy::Skip);
+        assert_eq!(restored.budget_spent, 2500);
+        assert_eq!(restored.artifact_refs, vec!["draft.txt"]);
+        assert_eq!(
+            restored.provider_usage.as_ref().unwrap().total_tokens,
+            150
+        );
+    }
+
+    #[test]
+    fn agent_checkpoint_completed_step_skips_on_resume() {
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+        // Simulate a completed step checkpoint
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-done".to_string(),
+            task_id: "task-2".to_string(),
+            plan_id: "plan-2".to_string(),
+            step_id: "step-0".to_string(),
+            phase: CheckpointPhase::StepCompleted,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec!["artifact-1".to_string()],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 1000,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::Skip,
+        };
+        memory.insert_agent_checkpoint("proj-2", &cp).unwrap();
+
+        let candidates = memory
+            .get_resume_candidate_checkpoints("proj-2", "task-2", 10)
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].resume_policy, ResumePolicy::Skip);
+    }
+
+    #[test]
+    fn agent_checkpoint_save_prepared_requires_approval() {
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-save".to_string(),
+            task_id: "task-3".to_string(),
+            plan_id: "plan-3".to_string(),
+            step_id: "save".to_string(),
+            phase: CheckpointPhase::SavePrepared,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec!["saved:ch1/rev-1".to_string()],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 3000,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::RequireApproval,
+        };
+        memory.insert_agent_checkpoint("proj-3", &cp).unwrap();
+
+        let latest = memory
+            .get_latest_agent_checkpoint("proj-3", "task-3")
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.phase, CheckpointPhase::SavePrepared);
+        assert_eq!(latest.resume_policy, ResumePolicy::RequireApproval);
+    }
+
+    #[test]
+    fn agent_checkpoint_provider_interrupt_rerun_policy() {
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+        // Simulate provider call before checkpoint (interrupted during provider call)
+        let cp_before = AgentCheckpoint {
+            checkpoint_id: "acp-provider-before".to_string(),
+            task_id: "task-4".to_string(),
+            plan_id: "plan-4".to_string(),
+            step_id: "step-1".to_string(),
+            phase: CheckpointPhase::ProviderCallBefore,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec![],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 500,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::Rerun,
+        };
+        memory.insert_agent_checkpoint("proj-4", &cp_before).unwrap();
+
+        let candidates = memory
+            .get_resume_candidate_checkpoints("proj-4", "task-4", 10)
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].resume_policy, ResumePolicy::Rerun);
+        assert_eq!(candidates[0].phase, CheckpointPhase::ProviderCallBefore);
     }
 }

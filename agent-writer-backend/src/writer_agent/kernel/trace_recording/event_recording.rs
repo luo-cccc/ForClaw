@@ -444,6 +444,34 @@ impl WriterAgentKernel {
             .ok();
     }
 
+    pub fn record_runtime_call(
+        &mut self,
+        task_id: impl Into<String>,
+        record: &agent_harness_core::RuntimeCallRecord,
+        source_refs: Vec<String>,
+        created_at_ms: u64,
+    ) {
+        let task_id = task_id.into();
+        self.record_run_event(
+            "runtime_call",
+            created_at_ms,
+            Some(task_id.clone()),
+            source_refs,
+            serde_json::json!({
+                "taskId": task_id,
+                "callId": record.call_id,
+                "callType": format!("{:?}", record.call_type),
+                "stepId": record.step_id,
+                "timestampMs": record.timestamp_ms,
+                "inputRedactedSummary": record.input_redacted_summary,
+                "outputSummary": record.output_summary,
+                "durationMs": record.duration_ms,
+                "status": format!("{:?}", record.status),
+                "remediationCode": record.remediation_code,
+            }),
+        );
+    }
+
     pub(in crate::writer_agent::kernel) fn record_story_impact_radius_run_event(
         &mut self,
         observation_id: &str,

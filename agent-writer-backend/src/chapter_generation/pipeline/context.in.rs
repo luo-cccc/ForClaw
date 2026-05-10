@@ -30,6 +30,25 @@ impl ContextComposer {
         elapsed_ms: u64,
         retrieval_status: &str,
     ) {
+        self.add_source_with_meta(
+            source_type, id, label, content, source_cap, score,
+            elapsed_ms, retrieval_status, "", "",
+        );
+    }
+
+    fn add_source_with_meta(
+        &mut self,
+        source_type: &str,
+        id: &str,
+        label: &str,
+        content: &str,
+        source_cap: usize,
+        score: Option<f32>,
+        elapsed_ms: u64,
+        retrieval_status: &str,
+        taxonomy: &str,
+        role: &str,
+    ) {
         if content.trim().is_empty() || self.remaining_chars() == 0 {
             return;
         }
@@ -67,15 +86,15 @@ impl ContextComposer {
             included_chars,
             truncated,
             score,
-            taxonomy: String::new(),
-            role: String::new(),
+            taxonomy: taxonomy.to_string(),
+            role: role.to_string(),
             elapsed_ms,
             retrieval_status: retrieval_status.to_string(),
         });
     }
 
     fn finish(
-        self,
+        mut self,
     ) -> (
         String,
         Vec<ChapterContextSource>,
@@ -87,6 +106,14 @@ impl ContextComposer {
             .iter()
             .filter(|source| source.truncated)
             .count();
+
+        // Deterministic ordering by source priority, then by id for stability.
+        self.sources.sort_by(|a, b| {
+            let pa = agent_harness_core::source_priority(&a.source_type);
+            let pb = agent_harness_core::source_priority(&b.source_type);
+            pa.cmp(&pb).then_with(|| a.id.cmp(&b.id))
+        });
+
         let report = ChapterContextBudgetReport {
             max_chars: self.max_chars,
             included_chars,

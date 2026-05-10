@@ -61,6 +61,8 @@ pub fn assemble_context_pack(
             truncated: draft.raw.chars().count() > draft.consumed,
             priority: draft.priority,
             evidence_ref: None,
+            elapsed_ms: 0,
+            retrieval_status: String::new(),
         });
     }
 
@@ -95,6 +97,8 @@ pub fn assemble_context_pack(
                 truncated: draft.raw.chars().count() > draft.consumed,
                 priority: draft.priority,
                 evidence_ref: None,
+                elapsed_ms: 0,
+                retrieval_status: String::new(),
             });
         }
     }
@@ -186,6 +190,8 @@ pub fn append_context_source_with_budget(
         truncated,
         priority,
         evidence_ref,
+        elapsed_ms: 0,
+        retrieval_status: String::new(),
     });
     pack.sources
         .sort_by_key(|right| std::cmp::Reverse(right.priority));

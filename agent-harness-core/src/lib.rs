@@ -30,10 +30,10 @@ pub use compaction::{
     CompactionResult, CompactionTrigger, ContextSpineCompactionReport,
 };
 pub use context_pack::{
-    char_count, truncate_text_report, ContextBudgetReport, ContextPacker, ContextSourceReport,
-    PackedContext, TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON, TAXONOMY_INSTRUCTION, TAXONOMY_LORE,
-    TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER, TAXONOMY_PROJECT_BRAIN,
-    TAXONOMY_PROMISE, TAXONOMY_SCENE_PLAN, TAXONOMY_UNKNOWN,
+    char_count, source_priority, truncate_text_report, ContextBudgetReport, ContextPacker,
+    ContextSourceReport, PackedContext, TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON, TAXONOMY_INSTRUCTION,
+    TAXONOMY_LORE, TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER,
+    TAXONOMY_PROJECT_BRAIN, TAXONOMY_PROMISE, TAXONOMY_SCENE_PLAN, TAXONOMY_UNKNOWN,
 };
 pub use context_quality::{
     evaluate_context_quality, ContextQualityRecommendation, ContextQualityReport,
@@ -49,7 +49,11 @@ pub use execution_plan::{
 };
 pub use permission::{PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule};
 pub use prompt_cache::{PromptCache, PromptCacheConfig, PromptCacheStats};
-pub use recovery::{classify_failure, FailureBundle, RecoveryAction, RetryParams};
+pub use recovery::{
+    classify_failure, classify_failure_kind, map_failure_to_recovery, redact_sensitive,
+    FailureBundle, FailureKind, RecoveryAction, RecoveryBundle, RecoveryContext, RecoveryDecision,
+    RetryParams, RuntimeCallRecord, RuntimeCallStatus, RuntimeCallType,
+};
 pub use router::{
     classify_intent, classify_intent_simple, ClassificationSource, Intent, IntentClassification,
 };

@@ -702,17 +702,18 @@ where
     };
     let save_prepared_ms = save_t0.elapsed().as_millis() as u64;
 
-    // Checkpoint 4: save prepared
+    // Checkpoint 4: save prepared (AgentCheckpoint with SavePrepared phase)
     let save_artifact_ref = format!("saved:{}/{}", saved.chapter_title, saved.new_revision);
-    write_chapter_generation_checkpoint(
+    write_agent_checkpoint(
         &config.memory_path,
         &config.project_id,
         &request_id,
         &mut checkpoint_counter,
-        "save_prepared",
+        agent_harness_core::execution_plan::CheckpointPhase::SavePrepared,
         &saved.chapter_title,
         budget_spent_micros,
         &[save_artifact_ref.as_str()],
+        agent_harness_core::execution_plan::ResumePolicy::RequireApproval,
     );
 
     emit(ChapterGenerationEvent::progress_with_detail(
@@ -773,6 +774,19 @@ where
             }
         };
     let settlement_ms = settlement_t0.elapsed().as_millis() as u64;
+
+    // Checkpoint 5: write-after settlement (WriteAfter phase)
+    write_agent_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        agent_harness_core::execution_plan::CheckpointPhase::WriteAfter,
+        &saved.chapter_title,
+        budget_spent_micros,
+        &[],
+        agent_harness_core::execution_plan::ResumePolicy::Skip,
+    );
 
     let timing = ChapterGenerationTiming {
         context_built_ms,
@@ -1855,6 +1869,40 @@ fn write_chapter_generation_checkpoint(
 
     if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(memory_path) {
         let _ = memory.insert_long_task_checkpoint(project_id, &checkpoint);
+    }
+}
+
+fn write_agent_checkpoint(
+    memory_path: &std::path::Path,
+    project_id: &str,
+    request_id: &str,
+    counter: &mut usize,
+    phase: agent_harness_core::execution_plan::CheckpointPhase,
+    chapter_title: &str,
+    budget_spent_micros: u64,
+    artifact_refs: &[&str],
+    resume_policy: agent_harness_core::execution_plan::ResumePolicy,
+) {
+    *counter = counter.saturating_add(1);
+    let checkpoint_id = format!("{}-agent-cp-{}", request_id, counter);
+    let checkpoint = agent_harness_core::execution_plan::AgentCheckpoint {
+        checkpoint_id,
+        task_id: request_id.to_string(),
+        plan_id: format!("chapter-generation-{}", request_id),
+        step_id: format!("{:?}", phase),
+        phase,
+        input_hash: String::new(),
+        context_hash: String::new(),
+        artifact_refs: artifact_refs.iter().map(|s| s.to_string()).collect(),
+        tool_effects: vec![],
+        provider_usage: None,
+        budget_spent: budget_spent_micros,
+        approval_refs: vec![],
+        resume_policy,
+    };
+
+    if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(memory_path) {
+        let _ = memory.insert_agent_checkpoint(project_id, &checkpoint);
     }
 }
 

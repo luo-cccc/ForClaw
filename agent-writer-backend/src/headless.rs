@@ -387,6 +387,8 @@ pub struct AskAgentResponse {
     pub run: Option<WriterAgentRunResult>,
     pub events: Vec<AgentLoopEvent>,
     pub provider_budget: Option<WriterProviderBudgetReport>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub recovery_bundle: Option<agent_harness_core::RecoveryBundle>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1735,6 +1737,7 @@ Output ONLY the JSON object, no explanation outside. Example:
                 run: None,
                 events: Vec::new(),
                 provider_budget: Some(budget_report),
+                recovery_bundle: None,
             });
         }
 
@@ -1781,6 +1784,35 @@ Output ONLY the JSON object, no explanation outside. Example:
             .map_err(|_| "Agent event log lock poisoned".to_string())?
             .clone();
         run_result.proposals = proposals.clone();
+        // Extract recovery bundle from events if present
+        let recovery_bundle = collected_events.iter().find_map(|event| {
+            if let AgentLoopEvent::RecoveryBundle {
+                completed_steps,
+                failed_step,
+                failure_kind,
+                input_context_summary,
+                runtime_calls,
+                suggested_action,
+                user_choice_required,
+            } = event
+            {
+                Some(agent_harness_core::RecoveryBundle {
+                    completed_steps: completed_steps.clone(),
+                    failed_step: failed_step.clone(),
+                    failure_kind: serde_json::from_str(&format!("\"{}\"", failure_kind),
+                    )
+                    .unwrap_or(agent_harness_core::FailureKind::Unknown),
+                    input_context_summary: input_context_summary.clone(),
+                    runtime_calls: runtime_calls.clone(),
+                    suggested_action: serde_json::from_str(&format!("\"{}\"", suggested_action),
+                    )
+                    .unwrap_or(agent_harness_core::RecoveryDecision::SurfaceUserChoice),
+                    user_choice_required: *user_choice_required,
+                })
+            } else {
+                None
+            }
+        });
         Ok(AskAgentResponse {
             request_id,
             mode: "chat".to_string(),
@@ -1790,6 +1822,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             run: Some(run_result),
             events: collected_events,
             provider_budget: Some(budget_report),
+            recovery_bundle,
         })
     }
 
@@ -1845,6 +1878,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             run: None,
             events: Vec::new(),
             provider_budget: None,
+            recovery_bundle: None,
         })
     }
 
@@ -2228,6 +2262,7 @@ Output ONLY the JSON object, no explanation outside. Example:
     }
 
     /// Attempt to resume a chapter generation from its latest checkpoint.
+    /// Supports both legacy LongTaskCheckpoint and unified AgentCheckpoint.
     /// Returns a structured resume plan with completed steps, recommended
     /// recovery step, and any missing context that must be re-supplied.
     pub fn resume_chapter_generation(
@@ -2235,6 +2270,16 @@ Output ONLY the JSON object, no explanation outside. Example:
         checkpoint_id: String,
     ) -> Result<ChapterGenerationResumePlan, String> {
         let kernel = self.lock_kernel()?;
+
+        // Try unified AgentCheckpoint first
+        if let Ok(Some(agent_cp)) = kernel
+            .memory
+            .get_latest_agent_checkpoint(&self.project.id, &checkpoint_id)
+        {
+            return Self::build_resume_plan_from_agent_checkpoint(&agent_cp);
+        }
+
+        // Fallback to legacy LongTaskCheckpoint
         let checkpoint = kernel
             .memory
             .get_long_task_checkpoint_by_id(&self.project.id, &checkpoint_id)
@@ -2304,6 +2349,77 @@ Output ONLY the JSON object, no explanation outside. Example:
             } else {
                 vec!["Checkpoint step is not recognized as resumable".to_string()]
             },
+        })
+    }
+
+    fn build_resume_plan_from_agent_checkpoint(
+        checkpoint: &agent_harness_core::execution_plan::AgentCheckpoint,
+    ) -> Result<ChapterGenerationResumePlan, String> {
+        use agent_harness_core::execution_plan::{CheckpointPhase, ResumePolicy};
+
+        let (completed_steps, resume_from_step, can_resume) = match checkpoint.phase {
+            CheckpointPhase::StepStarted => (vec![], "draft".to_string(), true),
+            CheckpointPhase::StepCompleted => (
+                vec!["context_built".to_string(), "draft_produced".to_string()],
+                "quality_report".to_string(),
+                true,
+            ),
+            CheckpointPhase::ProviderCallBefore | CheckpointPhase::ProviderCallAfter => (
+                vec!["context_built".to_string()],
+                "draft".to_string(),
+                true,
+            ),
+            CheckpointPhase::SavePrepared => (
+                vec![
+                    "context_built".to_string(),
+                    "draft_produced".to_string(),
+                    "quality_report_produced".to_string(),
+                    "save_prepared".to_string(),
+                ],
+                "save".to_string(),
+                true,
+            ),
+            CheckpointPhase::WriteBefore => (
+                vec![
+                    "context_built".to_string(),
+                    "draft_produced".to_string(),
+                    "quality_report_produced".to_string(),
+                    "save_prepared".to_string(),
+                ],
+                "settlement".to_string(),
+                true,
+            ),
+            CheckpointPhase::WriteAfter => (
+                vec![
+                    "context_built".to_string(),
+                    "draft_produced".to_string(),
+                    "quality_report_produced".to_string(),
+                    "save_prepared".to_string(),
+                    "settlement".to_string(),
+                ],
+                "done".to_string(),
+                false,
+            ),
+        };
+
+        let warnings = match checkpoint.resume_policy {
+            ResumePolicy::Skip => vec![],
+            ResumePolicy::Rerun => vec!["Resume will rerun the current step".to_string()],
+            ResumePolicy::RequireApproval => {
+                vec!["Resume requires approval before proceeding".to_string()]
+            }
+            ResumePolicy::Abort => vec!["Checkpoint is not recoverable".to_string()],
+        };
+
+        Ok(ChapterGenerationResumePlan {
+            can_resume: can_resume && checkpoint.resume_policy != ResumePolicy::Abort,
+            checkpoint_id: checkpoint.checkpoint_id.clone(),
+            chapter_title: checkpoint.task_id.clone(),
+            request_id: checkpoint.task_id.clone(),
+            completed_steps,
+            resume_from_step,
+            budget_spent_micros: checkpoint.budget_spent,
+            warnings,
         })
     }
 
@@ -5977,11 +6093,11 @@ mod tests {
     use super::*;
 
     fn temp_backend() -> HeadlessBackend {
-        let temp_dir = std::env::temp_dir().join(format!("forge-test-{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!("forge-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
         let _ = std::fs::remove_dir_all(&temp_dir);
         let config = HeadlessConfig {
             data_dir: temp_dir,
-            project_id: Some(format!("test-proj-{}", std::process::id())),
+            project_id: Some(format!("test-proj-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis())),
             project_name: Some("Test Project".to_string()),
         };
         HeadlessBackend::open(config).unwrap()

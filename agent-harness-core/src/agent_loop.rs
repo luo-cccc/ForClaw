@@ -4,9 +4,16 @@ use crate::compaction::{compact_messages, should_compact, CompactionConfig};
 use crate::context_window_guard::{
     evaluate_context_window, ContextWindowInfo, ContextWindowSource,
 };
-use crate::execution_plan::{ExecutionPlan, PlanStatus, StepFailureAction, StepStatus};
+use crate::execution_plan::{
+    AgentCheckpoint, CheckpointPhase, ExecutionPlan, ExecutionStep, PlanStatus, ProviderUsageSummary,
+    ResumePolicy, StepEvidence, StepFailureAction, StepStatus,
+};
 use crate::provider::{LlmMessage, LlmRequest, Provider, StreamEvent};
-use crate::recovery::classify_failure;
+use crate::recovery::{
+    classify_failure, classify_failure_kind, map_failure_to_recovery, redact_sensitive,
+    RecoveryContext, RecoveryDecision, RuntimeCallRecord,
+    RuntimeCallStatus, RuntimeCallType,
+};
 use crate::router::{classify_intent, Intent};
 use crate::tool_executor::{ToolExecution, ToolExecutor, ToolHandler};
 use crate::tool_registry::{ToolFilter, ToolRegistry, ToolSideEffectLevel};
@@ -114,6 +121,16 @@ pub enum AgentLoopEvent {
         completed_steps: Vec<String>,
         suggested_action: String,
     },
+    #[serde(rename = "recovery_bundle")]
+    RecoveryBundle {
+        completed_steps: Vec<StepEvidence>,
+        failed_step: String,
+        failure_kind: String,
+        input_context_summary: String,
+        runtime_calls: Vec<RuntimeCallRecord>,
+        suggested_action: String,
+        user_choice_required: bool,
+    },
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "complete")]
@@ -129,6 +146,8 @@ pub enum AgentLoopEvent {
         first_provider_call_ms: u64,
         last_provider_call_ms: u64,
     },
+    #[serde(rename = "runtime_call_record")]
+    RuntimeCallRecord { record: RuntimeCallRecord },
 }
 
 /// Configuration for agent loop execution.
@@ -219,6 +238,40 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         if let Some(ref cb) = self.on_event {
             cb(event);
         }
+    }
+
+    /// Build and emit a `RecoveryBundle` event from a step failure.
+    fn emit_recovery_bundle(
+        &self,
+        _plan_id: &str,
+        step: &ExecutionStep,
+        error: &str,
+        completed_steps: &[StepEvidence],
+    ) {
+        let failure_kind = classify_failure_kind(error, None);
+        let recovery_decision =
+            map_failure_to_recovery(&failure_kind, &RecoveryContext::default());
+        let user_choice_required = matches!(
+            recovery_decision,
+            RecoveryDecision::SurfaceUserChoice | RecoveryDecision::RequestApproval
+        );
+        let failure_kind_str = serde_json::to_string(&failure_kind)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        let suggested_action_str = serde_json::to_string(&recovery_decision)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        self.emit(AgentLoopEvent::RecoveryBundle {
+            completed_steps: completed_steps.to_vec(),
+            failed_step: step.step_id.clone(),
+            failure_kind: failure_kind_str,
+            input_context_summary: step.goal.clone(),
+            runtime_calls: vec![],
+            suggested_action: suggested_action_str,
+            user_choice_required,
+        });
     }
 
     /// Add a user message to the conversation.
@@ -443,6 +496,37 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 
             let response_tool_calls = response.tool_calls.unwrap_or_default();
 
+            // Emit RuntimeCallRecord for provider call
+            let provider_record = RuntimeCallRecord {
+                call_id: format!("provider-call-{}-{}", rounds, rounds),
+                call_type: RuntimeCallType::ProviderCall,
+                step_id: format!("round-{}", rounds),
+                timestamp_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                input_redacted_summary: serde_json::to_string(&redact_sensitive(
+                    &serde_json::json!({
+                        "model": self.provider.models().into_iter().next().unwrap_or_else(|| "unknown".to_string()),
+                        "message_count": self.messages.len(),
+                        "tool_count": response_tool_calls.len(),
+                    }),
+                ))
+                .unwrap_or_default(),
+                output_summary: format!(
+                    "tokens_in={:?} tokens_out={:?} ttft={:?}ms",
+                    response.usage.as_ref().map(|u| u.input_tokens),
+                    response.usage.as_ref().map(|u| u.output_tokens),
+                    ttft_ms
+                ),
+                duration_ms: call_duration_ms,
+                status: RuntimeCallStatus::Success,
+                remediation_code: None,
+            };
+            self.emit(AgentLoopEvent::RuntimeCallRecord {
+                record: provider_record,
+            });
+
             // No tool calls → done
             if response_tool_calls.is_empty() {
                 final_text = response.content.unwrap_or_default();
@@ -486,6 +570,43 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 self.emit(AgentLoopEvent::ToolCallEnd {
                     tool: tc.function.name.clone(),
                     result: execution.clone(),
+                });
+
+                // Emit RuntimeCallRecord for tool call
+                let tool_status = if let Some(ref err) = execution.error {
+                    if execution
+                        .remediation
+                        .iter()
+                        .any(|r| r.code == "approval_required")
+                    {
+                        RuntimeCallStatus::Blocked {
+                            reason: err.clone(),
+                        }
+                    } else {
+                        RuntimeCallStatus::Failed {
+                            reason: err.clone(),
+                        }
+                    }
+                } else {
+                    RuntimeCallStatus::Success
+                };
+                let tool_record = RuntimeCallRecord {
+                    call_id: format!("tool-call-{}-{}", total_tool_calls, total_tool_calls),
+                    call_type: RuntimeCallType::ToolCall,
+                    step_id: format!("round-{}", rounds),
+                    timestamp_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    input_redacted_summary: serde_json::to_string(&redact_sensitive(&execution.input))
+                        .unwrap_or_default(),
+                    output_summary: serde_json::to_string(&execution.output).unwrap_or_default(),
+                    duration_ms: execution.duration_ms,
+                    status: tool_status.clone(),
+                    remediation_code: execution.remediation.first().map(|r| r.code.clone()),
+                };
+                self.emit(AgentLoopEvent::RuntimeCallRecord {
+                    record: tool_record,
                 });
 
                 // Add tool result to conversation
@@ -622,6 +743,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         let mut steps_failed = 0usize;
         let mut steps_skipped = 0usize;
         let mut completed_step_ids: Vec<String> = Vec::new();
+        let mut completed_step_evidences: Vec<StepEvidence> = Vec::new();
 
         for step in &mut plan.steps {
             // Skip terminal steps on resume
@@ -651,34 +773,202 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 goal: step.goal.clone(),
             });
 
+            // Checkpoint: step started
+            let _step_started_checkpoint = AgentCheckpoint {
+                checkpoint_id: format!("{}-{}-started", plan.plan_id, step.step_id),
+                task_id: plan.task_id.clone(),
+                plan_id: plan.plan_id.clone(),
+                step_id: step.step_id.clone(),
+                phase: CheckpointPhase::StepStarted,
+                input_hash: String::new(),
+                context_hash: String::new(),
+                artifact_refs: vec![],
+                tool_effects: vec![],
+                provider_usage: None,
+                budget_spent: 0,
+                approval_refs: vec![],
+                resume_policy: ResumePolicy::Rerun,
+            };
+
+            // If a StepContract exists, validate it and set up the executor whitelist.
+            if let Some(ref contract) = step.contract {
+                self.executor
+                    .set_allowed_tools(Some(contract.allowed_tools.clone()));
+            } else {
+                self.executor.set_allowed_tools(Some(step.allowed_tools.clone()));
+            }
+
             // Constrain tool filter to this step's max_side_effect and allowed_tools
             let saved_filter = self.config.tool_filter.clone();
+            let allowed_names = step
+                .contract
+                .as_ref()
+                .map(|c| c.allowed_tools.clone())
+                .unwrap_or_else(|| step.allowed_tools.clone());
             self.config.tool_filter = Some(crate::tool_registry::ToolFilter {
                 intent: saved_filter.as_ref().and_then(|f| f.intent.clone()),
                 include_requires_approval: false,
                 include_disabled: false,
-                max_side_effect_level: Some(step.max_side_effect),
+                max_side_effect_level: Some(
+                    step.contract
+                        .as_ref()
+                        .map(|c| c.max_side_effect)
+                        .unwrap_or(step.max_side_effect),
+                ),
                 required_tags: Vec::new(),
-                allowed_names: step.allowed_tools.clone(),
+                allowed_names,
             });
 
             let step_result = self.run(user_message, true, true).await;
             self.config.tool_filter = saved_filter;
+            self.executor.set_allowed_tools(None);
 
             match step_result {
                 Ok(text) => {
+                    // Check required evidence from contract
+                    if let Some(ref contract) = step.contract {
+                        let mut missing_evidence: Vec<String> = Vec::new();
+                        for required in &contract.success_evidence_required {
+                            let has_evidence = step.evidence.as_ref().map_or(false, |e| {
+                                e.artifact_refs.iter().any(|a| a.contains(required))
+                                    || e.tool_executions.iter().any(|t| t.contains(required))
+                                    || e.context_refs.iter().any(|c| c.contains(required))
+                            });
+                            if !has_evidence {
+                                missing_evidence.push(required.clone());
+                            }
+                        }
+                        if !missing_evidence.is_empty() {
+                            let reason = format!(
+                                "Step completed but missing required evidence types: {:?}",
+                                missing_evidence
+                            );
+                            steps_failed += 1;
+                            step.status = StepStatus::Failed {
+                                reason: reason.clone(),
+                                input_context_summary: vec![step.goal.clone()],
+                                recovery_suggestion: format!(
+                                    "Ensure the step produces artifacts matching: {:?}",
+                                    contract.success_evidence_required
+                                ),
+                            };
+                            self.emit(AgentLoopEvent::StepFailed {
+                                step_id: step.step_id.clone(),
+                                reason: reason.clone(),
+                                action: "abort".into(),
+                                input_context_summary: vec![step.goal.clone()],
+                                recovery_suggestion: format!(
+                                    "Ensure the step produces artifacts matching: {:?}",
+                                    contract.success_evidence_required
+                                ),
+                            });
+                            plan.status = PlanStatus::Failed {
+                                failed_step: step.step_id.clone(),
+                                reason: reason.clone(),
+                            };
+                            self.emit(AgentLoopEvent::PlanCompleted {
+                                plan_id: plan.plan_id.clone(),
+                                steps_completed,
+                                steps_failed,
+                                steps_skipped,
+                            });
+                            return Err(reason);
+                        }
+                    }
+
+                    // Generate StepEvidence from usage info
+                    let evidence = StepEvidence {
+                        step_id: step.step_id.clone(),
+                        artifact_refs: vec![text.clone()],
+                        tool_executions: vec![],
+                        provider_usage: self.last_usage.as_ref().map(|usage| ProviderUsageSummary {
+                            model: self
+                                .provider
+                                .models()
+                                .into_iter()
+                                .next()
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            prompt_tokens: usage.input_tokens as u32,
+                            completion_tokens: usage.output_tokens as u32,
+                            total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
+                            duration_ms: self.last_provider_call_ms,
+                        }),
+                        context_refs: step.required_context.clone(),
+                        completion_time_ms: self.total_provider_duration_ms,
+                        context_hash: String::new(),
+                    };
+                    step.evidence = Some(evidence);
+
                     steps_completed += 1;
                     completed_step_ids.push(step.step_id.clone());
-                    final_text = text;
-                    step.status = StepStatus::Completed { evidence: vec![] };
+                    if let Some(ref ev) = step.evidence {
+                        completed_step_evidences.push(ev.clone());
+                    }
+                    final_text = text.clone();
+                    step.status = StepStatus::Completed {
+                        evidence: vec!["step completed with evidence".to_string()],
+                    };
+                    // Checkpoint: step completed
+                    let _step_completed_checkpoint = AgentCheckpoint {
+                        checkpoint_id: format!("{}-{}-completed", plan.plan_id, step.step_id),
+                        task_id: plan.task_id.clone(),
+                        plan_id: plan.plan_id.clone(),
+                        step_id: step.step_id.clone(),
+                        phase: CheckpointPhase::StepCompleted,
+                        input_hash: String::new(),
+                        context_hash: String::new(),
+                        artifact_refs: vec![final_text.clone()],
+                        tool_effects: vec![],
+                        provider_usage: self.last_usage.as_ref().map(|usage| ProviderUsageSummary {
+                            model: self
+                                .provider
+                                .models()
+                                .into_iter()
+                                .next()
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            prompt_tokens: usage.input_tokens as u32,
+                            completion_tokens: usage.output_tokens as u32,
+                            total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
+                            duration_ms: self.last_provider_call_ms,
+                        }),
+                        budget_spent: 0,
+                        approval_refs: vec![],
+                        resume_policy: ResumePolicy::Skip,
+                    };
+
                     self.emit(AgentLoopEvent::StepCompleted {
                         step_id: step.step_id.clone(),
-                        evidence: vec![],
+                        evidence: vec!["step completed with evidence".to_string()],
                     });
                 }
                 Err(e) => {
                     let input_summary = vec![format!("step: {}", step.goal)];
                     let recovery = format!("{:?}", step.on_failure);
+
+                    // Checkpoint: step failed
+                    let failure_policy = match &step.on_failure {
+                        StepFailureAction::Skip => ResumePolicy::Skip,
+                        StepFailureAction::Retry { .. } => ResumePolicy::Rerun,
+                        StepFailureAction::PauseForApproval => ResumePolicy::RequireApproval,
+                        StepFailureAction::Abort => ResumePolicy::Abort,
+                        _ => ResumePolicy::Abort,
+                    };
+                    let _step_failed_checkpoint = AgentCheckpoint {
+                        checkpoint_id: format!("{}-{}-failed", plan.plan_id, step.step_id),
+                        task_id: plan.task_id.clone(),
+                        plan_id: plan.plan_id.clone(),
+                        step_id: step.step_id.clone(),
+                        phase: CheckpointPhase::StepStarted,
+                        input_hash: String::new(),
+                        context_hash: String::new(),
+                        artifact_refs: vec![],
+                        tool_effects: vec![],
+                        provider_usage: None,
+                        budget_spent: 0,
+                        approval_refs: vec![],
+                        resume_policy: failure_policy,
+                    };
+
                     match &step.on_failure {
                         StepFailureAction::Skip => {
                             steps_skipped += 1;
@@ -729,6 +1019,12 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                 completed_steps: bundle.completed_steps,
                                 suggested_action: format!("{:?}", bundle.suggested_action),
                             });
+                            self.emit_recovery_bundle(
+                                &plan.plan_id,
+                                step,
+                                &e,
+                                &completed_step_evidences,
+                            );
                             return Err(e);
                         }
                         StepFailureAction::RequestContextSupplement { sources } => {
@@ -849,6 +1145,12 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                                                     bundle.suggested_action
                                                 ),
                                             });
+                                            self.emit_recovery_bundle(
+                                                &plan.plan_id,
+                                                step,
+                                                &retry_error,
+                                                &completed_step_evidences,
+                                            );
                                             return Err(retry_error);
                                         }
                                         retry_remaining -= 1;

@@ -149,7 +149,7 @@ pub async fn build_chapter_context(
     let chapter_contract = input.chapter_contract.validate()?;
     let query = format!("{}\n{}\n{}", instruction, target.title, target.summary);
     let mut composer = ContextComposer::new(input.budget.total_chars);
-    composer.add_source(
+    composer.add_source_with_meta(
         "instruction",
         "user-instruction",
         "User instruction",
@@ -158,6 +158,8 @@ pub async fn build_chapter_context(
         None,
         0,
         "ok",
+        agent_harness_core::TAXONOMY_INSTRUCTION,
+        "directive",
     );
 
     let outline_text = if outline.is_empty() {
@@ -178,7 +180,7 @@ pub async fn build_chapter_context(
             .collect::<Vec<_>>()
             .join("\n\n")
     };
-    composer.add_source(
+    composer.add_source_with_meta(
         "outline",
         "outline.json",
         "Outline / beat sheet",
@@ -187,9 +189,11 @@ pub async fn build_chapter_context(
         None,
         0,
         "ok",
+        agent_harness_core::TAXONOMY_OUTLINE,
+        "grounding",
     );
 
-    composer.add_source(
+    composer.add_source_with_meta(
         "target_beat",
         &target.title,
         "Current chapter beat",
@@ -198,6 +202,8 @@ pub async fn build_chapter_context(
         None,
         0,
         "ok",
+        agent_harness_core::TAXONOMY_SCENE_PLAN,
+        "grounding",
     );
 
     let mut previous_fulltext_upgrade_count: usize = 0;
@@ -272,7 +278,7 @@ pub async fn build_chapter_context(
         } else {
             "ok"
         };
-        composer.add_source(
+        composer.add_source_with_meta(
             "previous_chapters",
             "previous",
             "Previous chapter continuity",
@@ -281,6 +287,8 @@ pub async fn build_chapter_context(
             None,
             prev_elapsed_ms,
             prev_status,
+            agent_harness_core::TAXONOMY_PRIOR_CHAPTER,
+            "continuity",
         );
 
         let next_t0 = std::time::Instant::now();
@@ -292,7 +300,7 @@ pub async fn build_chapter_context(
         } else {
             "ok"
         };
-        composer.add_source(
+        composer.add_source_with_meta(
             "next_chapter",
             "next",
             "Next chapter direction",
@@ -301,6 +309,8 @@ pub async fn build_chapter_context(
             None,
             next_elapsed_ms,
             next_status,
+            agent_harness_core::TAXONOMY_SCENE_PLAN,
+            "foreshadowing",
         );
     }
 
@@ -329,7 +339,7 @@ pub async fn build_chapter_context(
     };
     if let Ok(Some(existing)) = existing_opt {
         let existing_status = if existing.trim().is_empty() { "not_found" } else { "ok" };
-        composer.add_source(
+        composer.add_source_with_meta(
             "target_existing_text",
             &target.title,
             "Existing target chapter text",
@@ -338,6 +348,8 @@ pub async fn build_chapter_context(
             None,
             existing_elapsed_ms,
             existing_status,
+            agent_harness_core::TAXONOMY_PRIOR_CHAPTER,
+            "continuity",
         );
     }
 
@@ -362,7 +374,7 @@ pub async fn build_chapter_context(
     } else {
         "ok"
     };
-    composer.add_source(
+    composer.add_source_with_meta(
         "lorebook",
         "lorebook.json",
         "Relevant lorebook entries",
@@ -371,6 +383,8 @@ pub async fn build_chapter_context(
         None,
         lore_elapsed_ms,
         lore_status,
+        agent_harness_core::TAXONOMY_LORE,
+        "grounding",
     );
 
     let rag_elapsed_ms = rag_t0.elapsed().as_millis() as u64;
@@ -389,7 +403,7 @@ pub async fn build_chapter_context(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        composer.add_source(
+        composer.add_source_with_meta(
             "project_brain",
             "project_brain.json",
             "Project Brain relevant chunks",
@@ -403,10 +417,12 @@ pub async fn build_chapter_context(
             ),
             rag_elapsed_ms,
             "ok",
+            agent_harness_core::TAXONOMY_PROJECT_BRAIN,
+            "memory",
         );
     } else {
         // RAG returned no chunks; source is absent from composer but retrieval was attempted
-        composer.add_source(
+        composer.add_source_with_meta(
             "project_brain",
             "project_brain.json",
             "Project Brain relevant chunks",
@@ -415,6 +431,8 @@ pub async fn build_chapter_context(
             None,
             rag_elapsed_ms,
             "not_found",
+            agent_harness_core::TAXONOMY_PROJECT_BRAIN,
+            "memory",
         );
     }
 
@@ -428,7 +446,7 @@ pub async fn build_chapter_context(
         .join("\n");
     let profile_elapsed_ms = profile_t0.elapsed().as_millis() as u64;
     if !profile_text.trim().is_empty() {
-        composer.add_source(
+        composer.add_source_with_meta(
             "user_profile",
             "user_drift_profile",
             "User style preferences",
@@ -437,6 +455,8 @@ pub async fn build_chapter_context(
             None,
             profile_elapsed_ms,
             "ok",
+            agent_harness_core::TAXONOMY_AUTHOR_VOICE,
+            "style",
         );
     }
 
@@ -623,6 +643,7 @@ pub async fn build_chapter_context(
                 truncated_source_count: budget_report.truncated_source_count,
                 warnings: budget_report.warnings.clone(),
             },
+            context_hash: String::new(),
         };
         Some(agent_harness_core::evaluate_context_quality(
             &request_id,

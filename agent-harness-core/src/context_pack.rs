@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +37,23 @@ pub const TAXONOMY_AUTHOR_VOICE: &str = "author_voice";
 pub const TAXONOMY_SCENE_PLAN: &str = "scene_plan";
 pub const TAXONOMY_UNKNOWN: &str = "unknown";
 
+/// Priority for deterministic source ordering (lower = higher priority).
+/// Core grounding sources first, volatile/auxiliary sources last.
+pub fn source_priority(source_type: &str) -> usize {
+    match source_type {
+        "instruction" | "system_contract" => 0,
+        "outline" | "target_beat" => 10,
+        "previous_chapters" | "prior_chapter" => 20,
+        "lorebook" | "canon" | "promise" => 30,
+        "project_brain" | "rag" => 40,
+        "next_chapter" => 50,
+        "target_existing_text" => 60,
+        "user_profile" | "author_style" => 70,
+        "story_impact" | "reader_compensation" => 80,
+        _ => 90,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextBudgetReport {
@@ -51,6 +70,9 @@ pub struct PackedContext {
     pub text: String,
     pub sources: Vec<ContextSourceReport>,
     pub budget: ContextBudgetReport,
+    /// Deterministic hash of all source contents concatenated.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub context_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +105,25 @@ impl ContextPacker {
         content: &str,
         source_cap: usize,
         score: Option<f32>,
+    ) {
+        self.add_source_with_meta(
+            source_type, id, label, content, source_cap, score,
+            "", "", 0, "",
+        );
+    }
+
+    pub fn add_source_with_meta(
+        &mut self,
+        source_type: &str,
+        id: &str,
+        label: &str,
+        content: &str,
+        source_cap: usize,
+        score: Option<f32>,
+        taxonomy: &str,
+        role: &str,
+        elapsed_ms: u64,
+        retrieval_status: &str,
     ) {
         if content.trim().is_empty() || self.remaining_chars() == 0 {
             return;
@@ -121,20 +162,30 @@ impl ContextPacker {
             included_chars,
             truncated,
             score,
-            taxonomy: String::new(),
-            role: String::new(),
-            elapsed_ms: 0,
-            retrieval_status: String::new(),
+            taxonomy: taxonomy.to_string(),
+            role: role.to_string(),
+            elapsed_ms,
+            retrieval_status: retrieval_status.to_string(),
         });
     }
 
-    pub fn finish(self) -> PackedContext {
+    pub fn finish(mut self) -> PackedContext {
         let included_chars = char_count(&self.text);
         let truncated_source_count = self
             .sources
             .iter()
             .filter(|source| source.truncated)
             .count();
+
+        // Deterministic ordering by source priority, then by id for stability.
+        self.sources.sort_by(|a, b| {
+            let pa = source_priority(&a.source_type);
+            let pb = source_priority(&b.source_type);
+            pa.cmp(&pb).then_with(|| a.id.cmp(&b.id))
+        });
+
+        let context_hash = compute_context_hash(&self.sources);
+
         PackedContext {
             text: self.text,
             budget: ContextBudgetReport {
@@ -145,8 +196,27 @@ impl ContextPacker {
                 warnings: self.warnings,
             },
             sources: self.sources,
+            context_hash,
         }
     }
+}
+
+/// Compute a deterministic hash from all source contents concatenated.
+pub fn compute_context_hash(sources: &[ContextSourceReport]) -> String {
+    let mut hasher = DefaultHasher::new();
+    for source in sources {
+        source.source_type.hash(&mut hasher);
+        source.id.hash(&mut hasher);
+        source.label.hash(&mut hasher);
+        source.included_chars.hash(&mut hasher);
+        source.original_chars.hash(&mut hasher);
+        source.truncated.hash(&mut hasher);
+        source.taxonomy.hash(&mut hasher);
+        source.role.hash(&mut hasher);
+        source.elapsed_ms.hash(&mut hasher);
+        source.retrieval_status.hash(&mut hasher);
+    }
+    format!("{:x}", hasher.finish())
 }
 
 pub fn char_count(text: &str) -> usize {
@@ -187,5 +257,93 @@ mod tests {
         assert_eq!(text, "林墨");
         assert_eq!(included, 2);
         assert!(truncated);
+    }
+
+    #[test]
+    fn same_input_produces_deterministic_order_and_hash() {
+        let mut packer_a = ContextPacker::new(200);
+        packer_a.add_source_with_meta(
+            "lorebook", "l1", "Lore", "content-a", 50, None,
+            TAXONOMY_LORE, "grounding", 10, "ok",
+        );
+        packer_a.add_source_with_meta(
+            "instruction", "i1", "Instruction", "content-b", 50, None,
+            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+        );
+        packer_a.add_source_with_meta(
+            "outline", "o1", "Outline", "content-c", 50, None,
+            TAXONOMY_OUTLINE, "grounding", 8, "ok",
+        );
+
+        let mut packer_b = ContextPacker::new(200);
+        // Add in reverse order
+        packer_b.add_source_with_meta(
+            "outline", "o1", "Outline", "content-c", 50, None,
+            TAXONOMY_OUTLINE, "grounding", 8, "ok",
+        );
+        packer_b.add_source_with_meta(
+            "instruction", "i1", "Instruction", "content-b", 50, None,
+            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+        );
+        packer_b.add_source_with_meta(
+            "lorebook", "l1", "Lore", "content-a", 50, None,
+            TAXONOMY_LORE, "grounding", 10, "ok",
+        );
+
+        let packed_a = packer_a.finish();
+        let packed_b = packer_b.finish();
+
+        // Same hash despite different insertion order
+        assert_eq!(packed_a.context_hash, packed_b.context_hash);
+        // Sources ordered by priority: instruction (0) < outline (10) < lorebook (30)
+        assert_eq!(packed_a.sources[0].source_type, "instruction");
+        assert_eq!(packed_a.sources[1].source_type, "outline");
+        assert_eq!(packed_a.sources[2].source_type, "lorebook");
+        assert_eq!(packed_b.sources[0].source_type, "instruction");
+        assert_eq!(packed_b.sources[1].source_type, "outline");
+        assert_eq!(packed_b.sources[2].source_type, "lorebook");
+    }
+
+    #[test]
+    fn source_timeout_does_not_swallow_other_sources() {
+        let mut packer = ContextPacker::new(200);
+        packer.add_source_with_meta(
+            "instruction", "i1", "Instruction", "content-b", 50, None,
+            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+        );
+        // Simulate a failed/timeout source with empty content — it should be skipped
+        packer.add_source_with_meta(
+            "project_brain", "p1", "RAG", "", 50, None,
+            TAXONOMY_PROJECT_BRAIN, "memory", 5000, "timeout",
+        );
+        packer.add_source_with_meta(
+            "outline", "o1", "Outline", "content-c", 50, None,
+            TAXONOMY_OUTLINE, "grounding", 8, "ok",
+        );
+
+        let packed = packer.finish();
+        assert_eq!(packed.sources.len(), 2);
+        assert!(packed.sources.iter().any(|s| s.source_type == "instruction"));
+        assert!(packed.sources.iter().any(|s| s.source_type == "outline"));
+        assert!(!packed.sources.iter().any(|s| s.source_type == "project_brain"));
+    }
+
+    #[test]
+    fn context_hash_changes_when_source_content_changes() {
+        let mut packer_a = ContextPacker::new(200);
+        packer_a.add_source_with_meta(
+            "instruction", "i1", "Instruction", "content-b", 50, None,
+            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+        );
+        let packed_a = packer_a.finish();
+
+        let mut packer_b = ContextPacker::new(200);
+        packer_b.add_source_with_meta(
+            "instruction", "i1", "Instruction", "different-content", 50, None,
+            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+        );
+        let packed_b = packer_b.finish();
+
+        assert_ne!(packed_a.context_hash, packed_b.context_hash);
     }
 }

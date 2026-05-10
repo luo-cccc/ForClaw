@@ -112,6 +112,18 @@ pub enum WriterFailureCategory {
     ReceiptMismatch,
     SaveFailed,
     FeedbackBlocked,
+    // A5: Failure taxonomy categories
+    ProviderTransient,
+    ProviderBudget,
+    ProviderAuth,
+    ContextOverflow,
+    ToolPermission,
+    ToolSchema,
+    SaveConflict,
+    QualityGate,
+    DoomLoop,
+    UnsafeWrite,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -126,6 +138,10 @@ pub struct WriterFailureEvidenceBundle {
     pub details: serde_json::Value,
     pub remediation: Vec<String>,
     pub created_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub failure_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub recovery_decision: Option<String>,
 }
 
 impl WriterFailureEvidenceBundle {
@@ -151,7 +167,30 @@ impl WriterFailureEvidenceBundle {
             details,
             remediation: normalize_strings(remediation),
             created_at_ms,
+            failure_kind: None,
+            recovery_decision: None,
         }
+    }
+
+    /// Attach A5 failure taxonomy metadata.
+    pub fn with_failure_taxonomy(
+        mut self,
+        kind: &agent_harness_core::FailureKind,
+        decision: &agent_harness_core::RecoveryDecision,
+    ) -> Self {
+        self.failure_kind = Some(
+            serde_json::to_string(kind)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string(),
+        );
+        self.recovery_decision = Some(
+            serde_json::to_string(decision)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string(),
+        );
+        self
     }
 }
 

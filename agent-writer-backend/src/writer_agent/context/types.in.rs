@@ -6,6 +6,12 @@ pub struct ContextExcerpt {
     pub truncated: bool,
     pub priority: u8,
     pub evidence_ref: Option<String>,
+    /// Time taken to retrieve this source in milliseconds.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Retrieval status: "ok", "not_found", "timeout", "error", etc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub retrieval_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -600,6 +600,8 @@ mod tests {
                 truncated: false,
                 priority: 1,
                 evidence_ref: None,
+                elapsed_ms: 0,
+                retrieval_status: String::new(),
             })
             .collect::<Vec<_>>();
         let total_chars = excerpts.iter().map(|source| source.char_count).sum();

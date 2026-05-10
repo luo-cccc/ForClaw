@@ -129,9 +129,13 @@ impl WriterAgentKernel {
                     truncated: source.truncated,
                     score: None,
                     taxonomy: taxonomy_for_source(&source.source).to_string(),
-                    role: String::new(),
-                    elapsed_ms: 0,
-                    retrieval_status: "sync".to_string(),
+                    role: role_for_source(&source.source).to_string(),
+                    elapsed_ms: source.elapsed_ms,
+                    retrieval_status: if source.retrieval_status.is_empty() {
+                        "sync".to_string()
+                    } else {
+                        source.retrieval_status.clone()
+                    },
                 })
                 .collect(),
             budget: agent_harness_core::ContextBudgetReport {
@@ -160,6 +164,7 @@ impl WriterAgentKernel {
                     })
                     .collect(),
             },
+            context_hash: String::new(),
         };
         let context_quality = agent_harness_core::evaluate_context_quality(
             &observation.id,
@@ -687,6 +692,32 @@ fn taxonomy_for_source(source: &crate::writer_agent::context::ContextSource) -> 
         }
         ContextSource::SystemContract => TAXONOMY_INSTRUCTION,
         _ => TAXONOMY_UNKNOWN,
+    }
+}
+
+fn role_for_source(source: &crate::writer_agent::context::ContextSource) -> &'static str {
+    use crate::writer_agent::context::ContextSource;
+    match source {
+        ContextSource::SystemContract => "directive",
+        ContextSource::ProjectBrief => "grounding",
+        ContextSource::ChapterMission | ContextSource::NextBeat => "grounding",
+        ContextSource::CanonSlice => "grounding",
+        ContextSource::PromiseSlice => "continuity",
+        ContextSource::DecisionSlice => "memory",
+        ContextSource::AuthorStyle => "style",
+        ContextSource::OutlineSlice | ContextSource::StoryImpactRadius => "grounding",
+        ContextSource::PreviousChapter => "continuity",
+        ContextSource::NextChapter => "foreshadowing",
+        ContextSource::BookState | ContextSource::ArcSnapshot | ContextSource::VolumeSnapshot => {
+            "grounding"
+        }
+        ContextSource::RagExcerpt => "memory",
+        ContextSource::CursorPrefix | ContextSource::CursorSuffix | ContextSource::SelectedText => {
+            "directive"
+        }
+        ContextSource::NeighborText => "continuity",
+        ContextSource::ResultFeedback => "style",
+        ContextSource::ReaderCompensation => "style",
     }
 }
 

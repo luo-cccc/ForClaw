@@ -1,5 +1,17 @@
 use crate::context_pack::PackedContext;
+use crate::execution_plan::StepFailureAction;
 use serde::{Deserialize, Serialize};
+
+/// Evidence of a low-value source being truncated, preserving the chain of custody.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TruncationEvidence {
+    pub source_type: String,
+    pub id: String,
+    pub reason: String,
+    pub original_chars: usize,
+    pub included_chars: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +24,9 @@ pub struct ContextQualityReport {
     pub missing_evidence: Vec<String>,
     pub warnings: Vec<String>,
     pub recommendation: ContextQualityRecommendation,
+    /// Evidence chain for truncated low-value sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub truncation_evidence: Vec<TruncationEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,6 +41,24 @@ pub enum ContextQualityRecommendation {
     Critical {
         reason: String,
     },
+}
+
+impl ContextQualityRecommendation {
+    /// Map quality recommendation directly to a step failure action.
+    /// - Critical -> blocked (Stop)
+    /// - Supplement -> request context supplement
+    /// - Sufficient -> no action (None)
+    pub fn to_step_failure_action(&self) -> Option<StepFailureAction> {
+        match self {
+            ContextQualityRecommendation::Critical { .. } => Some(StepFailureAction::Stop),
+            ContextQualityRecommendation::Supplement { sources, .. } => {
+                Some(StepFailureAction::RequestContextSupplement {
+                    sources: sources.clone(),
+                })
+            }
+            ContextQualityRecommendation::Sufficient => None,
+        }
+    }
 }
 
 pub fn evaluate_context_quality(
@@ -98,6 +131,23 @@ pub fn evaluate_context_quality(
         ContextQualityRecommendation::Sufficient
     };
 
+    // Build truncation evidence chain for low-value truncated sources.
+    let truncation_evidence: Vec<TruncationEvidence> = packed
+        .sources
+        .iter()
+        .filter(|s| s.truncated)
+        .map(|s| TruncationEvidence {
+            source_type: s.source_type.clone(),
+            id: s.id.clone(),
+            reason: format!(
+                "truncated from {} to {} chars (budget pressure)",
+                s.original_chars, s.included_chars
+            ),
+            original_chars: s.original_chars,
+            included_chars: s.included_chars,
+        })
+        .collect();
+
     ContextQualityReport {
         request_id: request_id.to_string(),
         overall_score,
@@ -107,6 +157,7 @@ pub fn evaluate_context_quality(
         missing_evidence,
         warnings,
         recommendation,
+        truncation_evidence,
     }
 }
 
@@ -153,7 +204,7 @@ mod context_quality_tests {
                     id: format!("s{}", i),
                     label: t.to_string(),
                     original_chars: 100,
-                    included_chars: 100,
+                    included_chars: if truncated_mask.get(i).copied().unwrap_or(false) { 30 } else { 100 },
                     truncated: truncated_mask.get(i).copied().unwrap_or(false),
                     score: None,
                     taxonomy: String::new(),
@@ -169,6 +220,7 @@ mod context_quality_tests {
                 truncated_source_count: truncated_mask.iter().filter(|&&t| t).count(),
                 warnings: vec![],
             },
+            context_hash: String::new(),
         }
     }
 
@@ -270,5 +322,64 @@ mod context_quality_tests {
             }
             other => panic!("expected Supplement recommendation, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn truncation_evidence_chain_is_preserved() {
+        let packed = make_packed(&["outline", "lorebook", "chapter"], &[true, false, true]);
+        let report = evaluate_context_quality("r8", &packed, &[]);
+        assert_eq!(report.truncation_evidence.len(), 2);
+        assert!(report.truncation_evidence.iter().any(|e| e.source_type == "outline"));
+        assert!(report.truncation_evidence.iter().any(|e| e.source_type == "chapter"));
+        assert!(!report.truncation_evidence.iter().any(|e| e.source_type == "lorebook"));
+        let outline_ev = report.truncation_evidence.iter().find(|e| e.source_type == "outline").unwrap();
+        assert_eq!(outline_ev.original_chars, 100);
+        assert_eq!(outline_ev.included_chars, 30);
+        assert!(outline_ev.reason.contains("truncated"));
+    }
+
+    #[test]
+    fn critical_recommendation_maps_to_stop_action() {
+        let packed = make_packed(&[], &[]
+        );
+        let report = evaluate_context_quality(
+            "r9",
+            &packed,
+            &["outline".into(), "lorebook".into(), "chapter".into()],
+        );
+        let action = report.recommendation.to_step_failure_action();
+        assert_eq!(action, Some(StepFailureAction::Stop));
+    }
+
+    #[test]
+    fn supplement_recommendation_maps_to_request_context_supplement() {
+        let packed = make_packed(&["outline"], &[false]
+        );
+        let report = evaluate_context_quality(
+            "r10",
+            &packed,
+            &["outline".into(), "lorebook".into()],
+        );
+        let action = report.recommendation.to_step_failure_action();
+        assert!(
+            matches!(
+                &action,
+                Some(StepFailureAction::RequestContextSupplement { sources })
+                    if sources.contains(&"lorebook".to_string())
+            ),
+            "expected RequestContextSupplement with lorebook, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn sufficient_recommendation_maps_to_none() {
+        let packed = make_packed(
+            &["outline", "lorebook", "chapter", "project_brain"],
+            &[false; 4],
+        );
+        let report = evaluate_context_quality("r11", &packed, &[]);
+        assert_eq!(report.recommendation, ContextQualityRecommendation::Sufficient);
+        assert_eq!(report.recommendation.to_step_failure_action(), None);
     }
 }

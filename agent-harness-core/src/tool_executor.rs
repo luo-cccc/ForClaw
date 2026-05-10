@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::permission::{PermissionDecision, PermissionMode, PermissionPolicy};
+use crate::recovery::classify_failure_kind;
 use crate::tool_registry::ToolRegistry;
 
 /// Callback trait for tool handlers.
@@ -27,6 +28,15 @@ pub struct ToolExecution {
     #[serde(default)]
     pub remediation: Vec<ToolExecutionRemediation>,
     pub duration_ms: u64,
+}
+
+impl ToolExecution {
+    /// Derive the `FailureKind` from this tool execution's error and remediation.
+    pub fn failure_kind(&self) -> Option<crate::recovery::FailureKind> {
+        let error = self.error.as_ref()?;
+        let code = self.remediation.first().map(|r| r.code.as_str());
+        Some(classify_failure_kind(error, code))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -87,6 +97,9 @@ pub struct ToolExecutor<H: ToolHandler> {
     pub doom_detector: DoomLoopDetector,
     pub permission_policy: PermissionPolicy,
     audit_sink: Option<ToolExecutionAuditSink>,
+    /// If set, only tools in this list are permitted to execute.
+    /// Checked before registry lookup and permission policy.
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 impl<H: ToolHandler> ToolExecutor<H> {
@@ -97,6 +110,7 @@ impl<H: ToolHandler> ToolExecutor<H> {
             doom_detector: DoomLoopDetector::default(),
             permission_policy: PermissionPolicy::new(PermissionMode::WorkspaceWrite),
             audit_sink: None,
+            allowed_tools: None,
         }
     }
 
@@ -114,10 +128,40 @@ impl<H: ToolHandler> ToolExecutor<H> {
         self.audit_sink = Some(audit_sink);
     }
 
+    /// Set the step-level allowed-tools whitelist.
+    /// If `names` is non-empty, only those tool names may be executed.
+    /// Pass `None` to clear the restriction.
+    pub fn set_allowed_tools(&mut self, names: Option<Vec<String>>) {
+        self.allowed_tools = names;
+    }
+
     /// Execute a tool and return structured result.
     pub async fn execute(&mut self, tool_name: &str, args: serde_json::Value) -> ToolExecution {
         let start = std::time::Instant::now();
         self.emit_audit_start(tool_name, &args);
+
+        // Step-level allowed_tools check
+        if let Some(ref allowed) = self.allowed_tools {
+            if !allowed.is_empty() && !allowed.iter().any(|name| name == tool_name) {
+                return self.emit_audit_end(ToolExecution {
+                    tool_name: tool_name.to_string(),
+                    input: args,
+                    output: serde_json::Value::Null,
+                    error: Some(format!(
+                        "Tool '{}' is not in the step's allowed_tools list",
+                        tool_name
+                    )),
+                    remediation: vec![ToolExecutionRemediation {
+                        code: "tool_not_in_allowed_list".to_string(),
+                        message: format!(
+                            "Tool '{}' is outside the current step's contract. Use the effective tool inventory to pick an allowed alternative.",
+                            tool_name
+                        ),
+                    }],
+                    duration_ms: start.elapsed().as_millis() as u64,
+                });
+            }
+        }
 
         let descriptor = {
             let registry = self.registry.lock().await;
@@ -241,7 +285,7 @@ fn remediation_for_permission_error(
     let lower = reason.to_ascii_lowercase();
     if requires_approval || lower.contains("approval") {
         return vec![ToolExecutionRemediation {
-            code: "approval_required".to_string(),
+            code: "request_approval".to_string(),
             message: format!(
                 "Surface an explicit approval request before retrying '{}', or choose a read-only/preview tool.",
                 tool_name
@@ -270,7 +314,7 @@ fn remediation_for_handler_error(tool_name: &str, error: &str) -> Vec<ToolExecut
     let lower = error.to_ascii_lowercase();
     let (code, message) = if lower.contains("unknown tool") || lower.contains("unknown agent") {
         (
-            "unknown_agent_or_tool",
+            "refresh_inventory",
             format!(
                 "Verify the external agent/tool name for '{}', refresh the registry, and retry only if it appears in the allowed inventory.",
                 tool_name
@@ -282,9 +326,21 @@ fn remediation_for_handler_error(tool_name: &str, error: &str) -> Vec<ToolExecut
         || lower.contains("could not find")
     {
         (
-            "missing_binary_or_resource",
+            "refresh_inventory",
             format!(
                 "Install or configure the binary/resource required by '{}', then run the tool again.",
+                tool_name
+            ),
+        )
+    } else if lower.contains("rate limit")
+        || lower.contains("429")
+        || lower.contains("timeout")
+        || lower.contains("transient")
+    {
+        (
+            "retry_transient",
+            format!(
+                "Transient failure for '{}'. Back off and retry with the same or narrower arguments.",
                 tool_name
             ),
         )
@@ -295,6 +351,22 @@ fn remediation_for_handler_error(tool_name: &str, error: &str) -> Vec<ToolExecut
             "workspace_unavailable",
             format!(
                 "Recreate or select a valid workspace for '{}', then retry with a workspace-local path.",
+                tool_name
+            ),
+        )
+    } else if lower.contains("context") && (lower.contains("overflow") || lower.contains("too long")) {
+        (
+            "shrink_context",
+            format!(
+                "Reduce context size before retrying '{}'. Remove non-essential sources or truncate long artifacts.",
+                tool_name
+            ),
+        )
+    } else if lower.contains("unsafe") || lower.contains("destructive") || lower.contains("overwrite") {
+        (
+            "abort_unsafe_write",
+            format!(
+                "'{}' attempted an unsafe write. Abort and surface an explicit approval request before retrying.",
                 tool_name
             ),
         )
@@ -448,7 +520,7 @@ mod tests {
         assert!(result
             .remediation
             .iter()
-            .any(|item| item.code == "approval_required"));
+            .any(|item| item.code == "request_approval"));
     }
 
     #[tokio::test]
@@ -488,5 +560,76 @@ mod tests {
             ToolExecutionAuditEvent::End { execution }
                 if execution.tool_name == "read_tool" && execution.error.is_none()
         ));
+    }
+
+    #[tokio::test]
+    async fn executor_remediation_codes_match_governance_spec() {
+        // Missing tool -> refresh_inventory
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        let result = executor.execute("missing_tool", serde_json::json!({})).await;
+        assert!(result
+            .remediation
+            .iter()
+            .any(|r| r.code == "refresh_inventory" || r.code == "tool_not_registered"));
+
+        // Approval required -> request_approval
+        let result2 = executor.execute("write_tool", serde_json::json!({})).await;
+        assert!(result2
+            .remediation
+            .iter()
+            .any(|r| r.code == "request_approval"));
+    }
+
+    #[tokio::test]
+    async fn executor_blocks_tool_not_in_allowed_list() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        executor.set_allowed_tools(Some(vec!["read_tool".to_string()]));
+
+        let result = executor.execute("write_tool", serde_json::json!({})).await;
+
+        assert!(result
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("not in the step's allowed_tools list")));
+        assert!(result
+            .remediation
+            .iter()
+            .any(|item| item.code == "tool_not_in_allowed_list"));
+    }
+
+    #[tokio::test]
+    async fn executor_allows_tool_in_allowed_list() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        executor.set_allowed_tools(Some(vec!["read_tool".to_string()]));
+
+        let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
+
+        assert!(result.error.is_none());
+        assert_eq!(result.output["tool"], "read_tool");
+    }
+
+    #[tokio::test]
+    async fn executor_allows_all_tools_when_allowed_list_empty() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        executor.set_allowed_tools(Some(vec![]));
+
+        let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
+        assert!(result.error.is_none());
+
+        let result2 = executor.execute("write_tool", serde_json::json!({})).await;
+        // write_tool still blocked by approval policy, not by allowed list
+        assert!(result2
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("requires explicit approval")));
+    }
+
+    #[tokio::test]
+    async fn executor_allows_all_tools_when_allowed_list_none() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        executor.set_allowed_tools(None);
+
+        let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
+        assert!(result.error.is_none());
     }
 }
