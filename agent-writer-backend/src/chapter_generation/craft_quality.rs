@@ -11,6 +11,7 @@ const OVERALL_WEIGHTS: &[(&str, f32)] = &[
     ("plot_progression", 0.08),
     ("new_information_density", 0.08),
     ("state_delta_coverage", 0.04),
+    ("world_consistency", 0.08),
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -20,6 +21,8 @@ pub struct ChapterQualitySignals {
     pub required_anchors: Vec<crate::chapter_generation::StoryAnchor>,
     pub required_state_deltas: Vec<crate::chapter_generation::StateDelta>,
     pub prior_chapter_summaries: Vec<String>,
+    pub scene_contract: Option<crate::writer_agent::world_bible::SceneContract>,
+    pub world_assets: Vec<crate::writer_agent::world_bible::WorldAsset>,
 }
 
 pub fn evaluate_chapter_quality(
@@ -63,6 +66,7 @@ pub fn evaluate_chapter_quality_with_signals(
         metric_plot_progression(chapter_text),
         metric_new_information_density(chapter_text, &signals.prior_chapter_summaries),
         metric_state_delta_coverage(chapter_text, &signals.required_state_deltas),
+        metric_world_consistency(chapter_text, signals.scene_contract.as_ref(), &signals.world_assets),
     ];
 
     let overall_score: f32 = metric_results
@@ -115,6 +119,12 @@ pub fn evaluate_chapter_quality_with_signals(
 
     let no_fatal_issue = fatal_issues.is_empty();
 
+    let world_consistency_violations = if let Some(contract) = signals.scene_contract.as_ref() {
+        crate::writer_agent::world_bible::validate_world_consistency(chapter_text, contract, &signals.world_assets)
+    } else {
+        Vec::new()
+    };
+
     ChapterQualityReport {
         chapter_title: chapter_title.to_string(),
         overall_score,
@@ -123,6 +133,7 @@ pub fn evaluate_chapter_quality_with_signals(
         metric_results,
         top_revision_targets,
         no_fatal_issue,
+        world_consistency_violations,
     }
 }
 
@@ -891,6 +902,64 @@ fn metric_state_delta_coverage(
     )
 }
 
+fn metric_world_consistency(
+    text: &str,
+    scene_contract: Option<&crate::writer_agent::world_bible::SceneContract>,
+    world_assets: &[crate::writer_agent::world_bible::WorldAsset],
+) -> QualityMetricResult {
+    let Some(contract) = scene_contract else {
+        return gated_metric(
+            "world_consistency",
+            0.5,
+            "",
+            "world_bible",
+            "无场景合约，跳过世界观一致性评估",
+            "",
+        );
+    };
+
+    let violations = crate::writer_agent::world_bible::validate_world_consistency(text, contract, world_assets);
+    if violations.is_empty() {
+        return gated_metric(
+            "world_consistency",
+            1.0,
+            "无世界观一致性违规",
+            "world_bible",
+            "世界观一致性通过",
+            "",
+        );
+    }
+
+    let hard_count = violations
+        .iter()
+        .filter(|v| matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard))
+        .count();
+    let warning_count = violations.len() - hard_count;
+    let penalty = (hard_count as f32 * 0.3 + warning_count as f32 * 0.1).min(1.0);
+    let score = 1.0 - penalty;
+
+    let evidence = violations
+        .iter()
+        .take(3)
+        .map(|v| format!("[{:?}] {}", v.kind, v.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let reason = format!(
+        "世界观一致性违规: {} hard, {} warning",
+        hard_count, warning_count
+    );
+
+    gated_metric(
+        "world_consistency",
+        score,
+        &evidence,
+        "world_bible",
+        &reason,
+        &format!("修复 {} 个世界观违规", violations.len()),
+    )
+}
+
 pub fn build_revision_prompt(
     chapter_text: &str,
     quality_report: &ChapterQualityReport,
@@ -1446,12 +1515,13 @@ mod craft_quality_tests {
     fn all_metrics_present() {
         let plan = SceneCraftPlan::default();
         let report = evaluate_chapter_quality("一些测试文本内容", "test-chapter", &plan, &[], 0, 500);
-        assert_eq!(report.metric_results.len(), 12, "all 12 metrics should be present");
+        assert_eq!(report.metric_results.len(), 13, "all 13 metrics should be present");
         let expected_metrics = [
             "anchor_carry", "style_drift", "length_compliance",
             "dialogue_function", "exposition_ratio", "ending_hook",
             "scene_causality", "promise_progress",
             "scene_repetition", "plot_progression", "new_information_density", "state_delta_coverage",
+            "world_consistency",
         ];
         for expected in &expected_metrics {
             assert!(
@@ -1540,6 +1610,8 @@ mod craft_quality_tests {
             required_anchors: Vec::new(),
             required_state_deltas: Vec::new(),
             prior_chapter_summaries: Vec::new(),
+            scene_contract: None,
+            world_assets: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             "林墨只好拔出寒影剑，因此付出代价。",
@@ -1615,6 +1687,8 @@ mod craft_quality_tests {
             ],
             required_state_deltas: Vec::new(),
             prior_chapter_summaries: Vec::new(),
+            scene_contract: None,
+            world_assets: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             text, "test-chapter", &plan, &[], 0, 500, &signals,
@@ -1653,6 +1727,8 @@ mod craft_quality_tests {
             ],
             required_state_deltas: Vec::new(),
             prior_chapter_summaries: Vec::new(),
+            scene_contract: None,
+            world_assets: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             text, "test-chapter", &plan, &[], 0, 500, &signals,

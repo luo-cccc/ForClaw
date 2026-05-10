@@ -42,6 +42,7 @@ use crate::writer_agent::supervised_sprint::{
     resume_sprint, set_sprint_quality_gate, sprint_progress, update_current_chapter_state,
     SprintCheckpoint, SprintProgress, SupervisedSprintPlan,
 };
+use crate::writer_agent::world_bible::{ApprovalStatus, WorldAsset};
 use crate::writer_agent::WriterAgentKernel;
 
 const ACTIVE_PROJECT_FILENAME: &str = "active_project.json";
@@ -861,6 +862,34 @@ impl HeadlessBackend {
         )?;
         self.reseed_story_model();
         Ok(entries)
+    }
+
+    pub fn list_world_assets(&self) -> Result<Vec<WorldAsset>, String> {
+        read_json_array(&world_assets_path(&self.config.data_dir, &self.project.id)?)
+    }
+
+    pub fn approve_world_asset(&self, asset_id: String) -> Result<(), String> {
+        let path = world_assets_path(&self.config.data_dir, &self.project.id)?;
+        let mut assets: Vec<WorldAsset> = read_json_array(&path)?;
+        let asset = assets
+            .iter_mut()
+            .find(|a| a.id == asset_id)
+            .ok_or_else(|| format!("World asset '{}' not found", asset_id))?;
+        asset.approval_status = ApprovalStatus::Approved;
+        write_json_pretty(&path, &assets)?;
+        Ok(())
+    }
+
+    pub fn reject_world_asset(&self, asset_id: String) -> Result<(), String> {
+        let path = world_assets_path(&self.config.data_dir, &self.project.id)?;
+        let mut assets: Vec<WorldAsset> = read_json_array(&path)?;
+        let asset = assets
+            .iter_mut()
+            .find(|a| a.id == asset_id)
+            .ok_or_else(|| format!("World asset '{}' not found", asset_id))?;
+        asset.approval_status = ApprovalStatus::Rejected;
+        write_json_pretty(&path, &assets)?;
+        Ok(())
     }
 
     pub fn load_outline(&self) -> Result<Vec<OutlineNode>, String> {
@@ -2703,6 +2732,17 @@ Output ONLY the JSON object, no explanation outside. Example:
                 let id = required_string(&params, "id")?;
                 to_value(self.delete_lore_entry(id)?)
             }
+            "list_world_assets" => to_value(self.list_world_assets()?),
+            "approve_world_asset" => {
+                let asset_id = required_string_any(&params, &["assetId", "asset_id"])?;
+                self.approve_world_asset(asset_id)?;
+                to_value(serde_json::json!({ "ok": true }))
+            }
+            "reject_world_asset" => {
+                let asset_id = required_string_any(&params, &["assetId", "asset_id"])?;
+                self.reject_world_asset(asset_id)?;
+                to_value(serde_json::json!({ "ok": true }))
+            }
             "load_outline" => to_value(self.load_outline()?),
             "save_outline_node" => {
                 let chapter_title = required_string(&params, "chapterTitle")
@@ -3552,6 +3592,10 @@ fn writer_memory_path(data_dir: &Path, project_id: &str) -> Result<PathBuf, Stri
 
 fn lorebook_path(data_dir: &Path, project_id: &str) -> Result<PathBuf, String> {
     Ok(project_data_dir(data_dir, project_id)?.join("lorebook.json"))
+}
+
+fn world_assets_path(data_dir: &Path, project_id: &str) -> Result<PathBuf, String> {
+    Ok(project_data_dir(data_dir, project_id)?.join("world_assets.json"))
 }
 
 fn outline_path(data_dir: &Path, project_id: &str) -> Result<PathBuf, String> {

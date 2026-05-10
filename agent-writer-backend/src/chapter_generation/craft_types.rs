@@ -168,6 +168,8 @@ pub struct ChapterQualityReport {
     pub metric_results: Vec<QualityMetricResult>,
     pub top_revision_targets: Vec<String>,
     pub no_fatal_issue: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub world_consistency_violations: Vec<crate::writer_agent::world_bible::WorldConsistencyViolation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

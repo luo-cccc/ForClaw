@@ -105,6 +105,9 @@ const BACKEND_ACTIONS: &[&str] = &[
     "restore_file_backup",
     "set_api_key",
     "check_api_key",
+    "list_world_assets",
+    "approve_world_asset",
+    "reject_world_asset",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

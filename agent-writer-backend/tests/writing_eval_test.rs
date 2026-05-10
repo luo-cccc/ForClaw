@@ -144,8 +144,8 @@ fn eval_xianxia_quality_evaluation_task() {
         min_score
     );
 
-    // All 12 metrics present
-    assert_eq!(report.metric_results.len(), 12);
+    // All 13 metrics present
+    assert_eq!(report.metric_results.len(), 13);
 
     // Verify requested metrics have scores
     for metric_name in metrics {
@@ -494,6 +494,8 @@ fn fixture_quality_signals() -> ChapterQualitySignals {
         required_anchors: Vec::new(),
         required_state_deltas: Vec::new(),
         prior_chapter_summaries: Vec::new(),
+        scene_contract: None,
+        world_assets: Vec::new(),
     }
 }
 

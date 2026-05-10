@@ -106,6 +106,10 @@ pub struct CanonConstraint {
     pub severity: ConstraintSeverity,
     pub source_asset_id: String,
     pub evidence: Vec<EvidenceRef>,
+    /// 约束适用的实体/范围（如特定角色、势力、地点）
+    pub applies_to: Vec<String>,
+    /// 违反约束的预期后果（用于报告建议）
+    pub expected_consequence: String,
 }
 
 impl CanonConstraint {
@@ -133,6 +137,10 @@ pub struct SceneContract {
     pub allowed_reveals: Vec<String>,
     pub blocked_reveals: Vec<String>,
     pub evidence_refs: Vec<EvidenceRef>,
+    /// 连续性锚点（从前章继承的必须保持的状态）
+    pub continuity_anchors: Vec<String>,
+    /// 本章必须支付的代价（从 RequiredCost 约束编译）
+    pub required_costs: Vec<String>,
 }
 
 impl SceneContract {
@@ -295,6 +303,8 @@ pub fn compile_canon_constraints(assets: &[WorldAsset]) -> Vec<CanonConstraint> 
             severity,
             source_asset_id: asset.id.clone(),
             evidence: asset.evidence.clone(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
         });
     }
     constraints
@@ -367,6 +377,8 @@ pub fn compile_scene_contract(
         allowed_reveals: Vec::new(),
         blocked_reveals: Vec::new(),
         evidence_refs,
+        continuity_anchors: Vec::new(),
+        required_costs: Vec::new(),
     }
 }
 
@@ -776,6 +788,8 @@ mod tests {
             severity: ConstraintSeverity::Hard,
             source_asset_id: asset.id.clone(),
             evidence: asset.evidence.clone(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
         };
         let contract = SceneContract {
             chapter_id: "ch1".to_string(),
@@ -786,6 +800,8 @@ mod tests {
             allowed_reveals: vec![],
             blocked_reveals: vec![],
             evidence_refs: vec![],
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
         };
         let violations = validate_world_consistency("he used fire", &contract, &[asset.clone()]);
         assert!(!violations.is_empty());
@@ -809,6 +825,8 @@ mod tests {
             severity: ConstraintSeverity::Hard,
             source_asset_id: asset.id.clone(),
             evidence: asset.evidence.clone(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
         };
         let contract = SceneContract {
             chapter_id: "ch1".to_string(),
@@ -819,6 +837,8 @@ mod tests {
             allowed_reveals: vec![],
             blocked_reveals: vec![],
             evidence_refs: vec![],
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
         };
         let violations = validate_world_consistency(
             "他只是一个炼气期弟子，却催动了金丹法宝",
@@ -861,6 +881,8 @@ mod tests {
             severity: ConstraintSeverity::Hard,
             source_asset_id: proposed.id.clone(),
             evidence: proposed.evidence.clone(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
         }];
         let warnings = preflight_world_bible(&[proposed.clone()], &constraints);
         assert!(
@@ -884,6 +906,8 @@ mod tests {
             severity: ConstraintSeverity::Hard,
             source_asset_id: asset.id.clone(),
             evidence: vec![],
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
         }];
         let warnings = preflight_world_bible(&[asset.clone()], &constraints);
         assert!(
@@ -934,6 +958,8 @@ mod tests {
             allowed_reveals: vec![],
             blocked_reveals: vec![],
             evidence_refs: vec![],
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
         };
         let deltas = extract_state_deltas_from_chapter(
             "The hero finally knows the truth about his past.",

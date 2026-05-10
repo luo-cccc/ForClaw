@@ -403,6 +403,16 @@ pub fn check_sprint_quality_gate(
         ));
     }
 
+    // strict 模式下，hard world consistency violations 也视为 fatal
+    let has_hard_world_violation = qr.world_consistency_violations.iter()
+        .any(|v| matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard));
+    if sprint.stop_on_fatal_issue && has_hard_world_violation {
+        return Err(format!(
+            "Sprint quality gate: hard world consistency violation detected in chapter {}",
+            qr.chapter_title
+        ));
+    }
+
     Ok(())
 }
 
@@ -546,6 +556,7 @@ mod tests {
             metric_results: vec![],
             top_revision_targets: vec![],
             no_fatal_issue: true,
+            world_consistency_violations: Vec::new(),
         };
         assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_err());
     }
@@ -562,6 +573,7 @@ mod tests {
             metric_results: vec![],
             top_revision_targets: vec![],
             no_fatal_issue: true,
+            world_consistency_violations: Vec::new(),
         };
         assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_ok());
     }
@@ -578,6 +590,7 @@ mod tests {
             metric_results: vec![],
             top_revision_targets: vec![],
             no_fatal_issue: false,
+            world_consistency_violations: Vec::new(),
         };
         assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_err());
     }

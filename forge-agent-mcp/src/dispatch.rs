@@ -256,6 +256,9 @@ pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Resul
         "forge_restore_file_backup" => backend.dispatch("restore_file_backup", arguments),
         "forge_set_api_key" => backend.dispatch("set_api_key", arguments),
         "forge_check_api_key" => backend.dispatch("check_api_key", arguments),
+        "forge_list_world_assets" => backend.dispatch("list_world_assets", json!({})),
+        "forge_approve_world_asset" => backend.dispatch("approve_world_asset", arguments),
+        "forge_reject_world_asset" => backend.dispatch("reject_world_asset", arguments),
         other => {
             return Ok(tool_error_result(
                 ErrorKind::Validation,

@@ -10,7 +10,7 @@ use agent_writer_lib::writer_agent::author_voice::{
 };
 use agent_writer_lib::writer_agent::world_bible::{
     compile_canon_constraints, compile_scene_contract, validate_world_consistency,
-    CanonConstraint, CanonConstraintKind, ConstraintSeverity,
+    CanonConstraint, CanonConstraintKind, ConstraintSeverity, SceneContract,
     WorldAsset,
 };
 use serde::{Deserialize, Serialize};
@@ -140,6 +140,20 @@ struct EvalTrendReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldConsistencySummary {
+    total_checks: usize,
+    hard_violations: usize,
+    warnings: usize,
+    profiles: BTreeMap<String, ProfileWorldConsistency>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProfileWorldConsistency {
+    checks: usize,
+    violations: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct EvalSummary {
     timestamp: String,
     mode: String,
@@ -150,6 +164,8 @@ struct EvalSummary {
     regressions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     quality_warnings: Vec<QualityWarning>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    world_consistency: Option<WorldConsistencySummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1284,6 +1300,8 @@ fn run_negative_style_drift_eval(
         required_anchors: Vec::new(),
         required_state_deltas: Vec::new(),
         prior_chapter_summaries: Vec::new(),
+        scene_contract: None,
+        world_assets: Vec::new(),
     };
     let report = evaluate_chapter_quality_with_signals(
         drifted_text,
@@ -1791,6 +1809,8 @@ fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySi
         required_anchors: Vec::new(),
         required_state_deltas: Vec::new(),
         prior_chapter_summaries: Vec::new(),
+        scene_contract: None,
+        world_assets: Vec::new(),
     }
 }
 
@@ -2640,6 +2660,8 @@ fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde
             severity: ConstraintSeverity::Hard,
             source_asset_id: asset.id.clone(),
             evidence: asset.evidence.clone(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
         };
         constraints.push(required_cost);
     }
@@ -2804,6 +2826,164 @@ fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &ser
     }
 }
 
+fn run_unsupported_world_claim_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let claim_text = expected["claim_text"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+
+    // Heuristic: check if claim_text matches any approved asset's name/tags/summary
+    let claim_lower = claim_text.to_lowercase();
+    let matched = assets.iter().any(|asset| {
+        if !matches!(asset.approval_status, agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Approved) {
+            return false;
+        }
+        let name_lower = asset.name.to_lowercase();
+        let summary_lower = asset.summary.to_lowercase();
+        if name_lower.contains(&claim_lower) || claim_lower.contains(&name_lower) {
+            return true;
+        }
+        if summary_lower.contains(&claim_lower) || claim_lower.contains(&summary_lower) {
+            return true;
+        }
+        asset.tags.iter().any(|tag| {
+            let tag_lower = tag.to_lowercase();
+            tag_lower.contains(&claim_lower) || claim_lower.contains(&tag_lower)
+        })
+    });
+
+    // If the claim text is in the chapter text and doesn't match any asset, it's unsupported
+    let claim_in_text = chapter_text.to_lowercase().contains(&claim_lower);
+    let detected = claim_in_text && !matched;
+
+    let status = if detected == should_detect { "pass" } else { "fail" };
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({ "claim_in_text": claim_in_text, "matched_asset": matched })),
+        after: None,
+        delta: None,
+        message: format!(
+            "unsupported_world_claim: expected_detect={}, got={}, claim_in_text={}, matched_asset={}",
+            should_detect, detected, claim_in_text, matched
+        ),
+    }
+}
+
+fn run_hierarchy_confusion_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+
+    // Build a HierarchyLimit constraint from task expected
+    let mut constraints = compile_canon_constraints(&assets);
+
+    // If task specifies explicit hierarchy terms, add a HierarchyLimit constraint
+    if let (Some(low_tier), Some(high_action)) = (
+        expected["low_tier"].as_str(),
+        expected["high_action"].as_str(),
+    ) {
+        let hierarchy_constraint = CanonConstraint {
+            id: "constraint-hierarchy-eval".to_string(),
+            kind: CanonConstraintKind::HierarchyLimit,
+            summary: format!("{} 不可执行 {}", low_tier, high_action),
+            trigger_terms: vec![low_tier.to_string()],
+            forbidden_terms: vec![high_action.to_string()],
+            required_terms: vec![],
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "eval-hierarchy".to_string(),
+            evidence: vec![],
+            applies_to: vec![],
+            expected_consequence: String::new(),
+        };
+        constraints.push(hierarchy_constraint);
+    }
+
+    // Build contract directly with hierarchy constraint active to bypass mission filtering
+    let contract = SceneContract {
+        chapter_id: task.chapter.clone(),
+        mission: "test mission".to_string(),
+        required_facts: Vec::new(),
+        active_constraints: constraints.clone(),
+        required_state_deltas: Vec::new(),
+        allowed_reveals: Vec::new(),
+        blocked_reveals: Vec::new(),
+        evidence_refs: Vec::new(),
+        continuity_anchors: Vec::new(),
+        required_costs: Vec::new(),
+    };
+    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+
+    let detected = violations.iter().any(|v| v.kind == CanonConstraintKind::HierarchyLimit);
+
+    let status = if detected == should_detect { "pass" } else { "fail" };
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({ "violations": violations.len() })),
+        after: None,
+        delta: None,
+        message: format!(
+            "hierarchy_confusion: expected_detect={}, got={}, hierarchy_violations={}",
+            should_detect,
+            detected,
+            violations.iter().filter(|v| v.kind == CanonConstraintKind::HierarchyLimit).count()
+        ),
+    }
+}
+
+fn run_state_regression_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    use agent_writer_lib::writer_agent::world_bible::{StateLedgerDelta, check_state_regression};
+
+    let expected = &task.expected;
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+
+    // Build prior_deltas from task expected
+    let prior_deltas: Vec<StateLedgerDelta> = expected["prior_deltas"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(StateLedgerDelta {
+                delta_type: item["delta_type"].as_str()?.to_string(),
+                entity_id: item["entity_id"].as_str()?.to_string(),
+                before_state: item["before_state"].as_str()?.to_string(),
+                after_state: item["after_state"].as_str()?.to_string(),
+                source_constraint_id: item["source_constraint_id"].as_str().map(|s| s.to_string()),
+                evidence_excerpt: item["evidence_excerpt"].as_str().unwrap_or("").to_string(),
+            })
+        })
+        .collect();
+
+    let regressions = check_state_regression(chapter_text, &prior_deltas);
+    let detected = !regressions.is_empty();
+
+    let status = if detected == should_detect { "pass" } else { "fail" };
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({ "prior_deltas": prior_deltas.len() })),
+        after: Some(serde_json::json!({ "regressions": regressions.len() })),
+        delta: None,
+        message: format!(
+            "state_regression: expected_detect={}, got={}, regressions={:?}",
+            should_detect, detected,
+            regressions.iter().map(|r| &r.entity_id).collect::<Vec<_>>()
+        ),
+    }
+}
+
 fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendReport) {
     let fixture = load_fixture(profile);
     let all_tasks = load_tasks(profile);
@@ -2850,6 +3030,9 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
             "canon_required_cost" => run_canon_required_cost_eval(profile, task, &fixture),
             "canon_proposed_not_hard" => run_canon_proposed_not_hard_eval(profile, task, &fixture),
             "scene_contract_prompt" => run_scene_contract_prompt_eval(profile, task, &fixture),
+            "unsupported_world_claim" => run_unsupported_world_claim_eval(profile, task, &fixture),
+            "hierarchy_confusion" => run_hierarchy_confusion_eval(profile, task, &fixture),
+            "state_regression" => run_state_regression_eval(profile, task, &fixture),
             other => EvalResult {
                 profile: profile.to_string(),
                 task: task.task.clone(),
@@ -2922,6 +3105,69 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
     std::fs::write(&trend_path, trend_output).expect("write eval_trend.json");
 
     (results, trend_report)
+}
+
+fn compute_world_consistency_summary(results: &[EvalResult]) -> WorldConsistencySummary {
+    let world_bible_tasks = [
+        "world_asset_contract",
+        "canon_forbidden_claim",
+        "canon_required_cost",
+        "canon_proposed_not_hard",
+        "scene_contract_prompt",
+        "unsupported_world_claim",
+        "hierarchy_confusion",
+        "state_regression",
+    ];
+
+    let mut total_checks = 0usize;
+    let mut hard_violations = 0usize;
+    let mut warnings = 0usize;
+    let mut profile_checks: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+
+    for result in results {
+        if !world_bible_tasks.contains(&result.task.as_str()) {
+            continue;
+        }
+        total_checks += 1;
+        let entry = profile_checks
+            .entry(result.profile.clone())
+            .or_insert((0, 0));
+        entry.0 += 1;
+        if result.status != "pass" {
+            hard_violations += 1;
+            entry.1 += 1;
+        }
+    }
+
+    // Warnings are approximated as non-pass, non-hard tasks (e.g. proposed rules)
+    warnings = results
+        .iter()
+        .filter(|r| {
+            world_bible_tasks.contains(&r.task.as_str())
+                && r.status == "pass"
+                && r.message.contains("warning")
+        })
+        .count();
+
+    let profiles = profile_checks
+        .into_iter()
+        .map(|(profile, (checks, violations))| {
+            (
+                profile,
+                ProfileWorldConsistency {
+                    checks,
+                    violations,
+                },
+            )
+        })
+        .collect();
+
+    WorldConsistencySummary {
+        total_checks,
+        hard_violations,
+        warnings,
+        profiles,
+    }
 }
 
 fn main() {
@@ -2997,6 +3243,8 @@ fn main() {
         .flat_map(|ps| ps.quality_warnings.clone())
         .collect();
 
+    let world_consistency = compute_world_consistency_summary(&all_results);
+
     let summary = EvalSummary {
         timestamp,
         mode: mode.to_string(),
@@ -3006,6 +3254,7 @@ fn main() {
         total_fail,
         regressions: all_regressions.clone(),
         quality_warnings,
+        world_consistency: Some(world_consistency),
     };
 
     // Write aggregate summary
@@ -3142,6 +3391,25 @@ fn build_markdown_summary(
     }
     if summary.total_fail == 0 && all_regs.is_empty() {
         md.push_str("- No quality regressions detected. Safe to proceed.\n");
+    }
+    md.push('\n');
+
+    md.push_str("## World Consistency\n\n");
+    if let Some(ref wc) = summary.world_consistency {
+        md.push_str(&format!(
+            "- **Total checks:** {}, **Hard violations:** {}, **Warnings:** {}\n",
+            wc.total_checks, wc.hard_violations, wc.warnings
+        ));
+        md.push_str("| Profile | Checks | Violations |\n");
+        md.push_str("|---------|--------|------------|\n");
+        for (profile, pwc) in &wc.profiles {
+            md.push_str(&format!(
+                "| {} | {} | {} |\n",
+                profile, pwc.checks, pwc.violations
+            ));
+        }
+    } else {
+        md.push_str("No world consistency data available.\n");
     }
     md.push('\n');
 

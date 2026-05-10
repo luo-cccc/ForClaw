@@ -32,3 +32,14 @@
 {"task":"canon_proposed_not_hard","chapter":"第一章","expected":{"profile":"xianxia_world","chapter_text":"林墨服用了上古丹药，逆转了寒影剑的寿元消耗。","source_asset_id":"proposed-ancient-pill","should_detect":true,"max_severity":"warning"}}
 {"task":"scene_contract_prompt","chapter":"第一章","expected":{"profile":"xianxia_world","mission":"林墨在破庙中发现古剑，遭遇散修追杀","contract_non_empty":true,"has_chapter_id":true}}
 {"task":"scene_contract_prompt","chapter":"第二章","expected":{"profile":"xianxia_world","mission":"古剑引来过路散修追杀，主角被迫使用古剑","contract_non_empty":true,"has_active_constraints":true}}
+{"task":"unsupported_world_claim","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"林墨运转体内灵力，突然施展出传说中的九天雷劫术，这是只有化神期大能才能掌握的禁术。","claim_text":"九天雷劫术","should_detect":true}}
+{"task":"unsupported_world_claim","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"林墨握紧寒影剑，感受到剑中传来的寒意，他知道每次出鞘都要付出代价。","claim_text":"寒影剑","should_detect":false}}
+{"task":"hierarchy_confusion","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"林墨只是一个炼气期弟子，却催动了金丹期法宝，一击将散修击退。","low_tier":"炼气","high_action":"金丹期","should_detect":true}}
+{"task":"hierarchy_confusion","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"林墨只是一个炼气期弟子，面对散修只能狼狈逃窜，根本无力反抗。","low_tier":"炼气","high_action":"金丹期","should_detect":false}}
+{"task":"state_regression","chapter":"第三章","expected":{"chapter_text":"林墨回到青云宗，面对执事审问，他竟然不知寒影剑的代价，仿佛从未使用过。","should_detect":true,"prior_deltas":[{"delta_type":"knowledge","entity_id":"林墨","before_state":"不知","after_state":"知道代价","source_constraint_id":"cold-shadow-cost","evidence_excerpt":"林墨拔出寒影剑，鬓发变白"}]}}
+{"task":"state_regression","chapter":"第三章","expected":{"chapter_text":"林墨回到青云宗，面对执事审问，他清楚寒影剑的代价，白发就是证据。","should_detect":false,"prior_deltas":[{"delta_type":"knowledge","entity_id":"林墨","before_state":"不知","after_state":"知道代价","source_constraint_id":"cold-shadow-cost","evidence_excerpt":"林墨拔出寒影剑，鬓发变白"}]}}
+{"task":"world_asset_contract","chapter":"第二章","expected":{"profile":"xianxia_world","min_constraints":2,"contract_non_empty":true,"mission":"林墨隐瞒寒影剑代价，面对执事审问"}}
+{"task":"canon_forbidden_claim","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"青云宗执事堂宣布，弟子可以私藏仙器，门规不再禁止。","forbidden_term":"私藏","should_detect":true,"expected_constraint_id":"constraint-sect-artifact-law"}}
+{"task":"canon_required_cost","chapter":"第三章","expected":{"profile":"xianxia_world","chapter_text":"林墨再次拔出寒影剑斩杀妖兽，剑光凌厉，但他毫发无伤。","trigger_term":"寒影剑","required_term":"寿元","should_detect":true,"expected_constraint_kind":"RequiredCost"}}
+{"task":"unsupported_world_claim","chapter":"第三章","expected":{"profile":"xianxia_world","chapter_text":"林墨发现寒影剑中封印着上古剑灵，剑灵主动传授他失传万年的太虚剑诀。","claim_text":"太虚剑诀","should_detect":true}}
+{"task":"hierarchy_confusion","chapter":"第三章","expected":{"profile":"xianxia_world","chapter_text":"青云宗外门弟子林墨，竟然以炼气修为催动元婴期禁制，震慑全场。","low_tier":"炼气","high_action":"元婴期","should_detect":true}}

@@ -104,6 +104,20 @@ where
     // Preflight: select generation strategy based on context size and risk.
     let strategy = select_generation_strategy(&context, 0);
     context.generation_strategy = strategy.clone();
+
+    // P14-P19: Load world assets and run preflight checks
+    let world_assets = Vec::new();
+    let canon_constraints = crate::writer_agent::world_bible::compile_canon_constraints(&world_assets);
+    let preflight_warnings = crate::writer_agent::world_bible::preflight_world_bible(&world_assets, &canon_constraints);
+    if !preflight_warnings.is_empty() {
+        for warning in &preflight_warnings {
+            context.warnings.push(format!(
+                "[world-bible preflight] {}: {}",
+                warning.code, warning.message
+            ));
+        }
+    }
+
     let context_built_ms = context_t0.elapsed().as_millis() as u64;
 
     record_task_packet(&context);
@@ -424,12 +438,31 @@ where
         .as_ref()
         .cloned()
         .unwrap_or_default();
+    // P14-P19: Compile scene contract for world consistency checking
+    let scene_contract = {
+        let mission = context
+            .craft_plan
+            .as_ref()
+            .map(|p| p.objective.clone())
+            .unwrap_or_else(|| context.target.title.clone());
+        Some(crate::writer_agent::world_bible::compile_scene_contract(
+            &context.target.title,
+            &mission,
+            &world_assets,
+            &canon_constraints,
+            &context.required_state_deltas,
+            Some(8),
+        ))
+    };
+
     let quality_signals = ChapterQualitySignals {
         anchor_keywords: context.quality_anchor_keywords.clone(),
         author_voice: context.author_voice_snapshot.clone(),
         required_anchors: context.required_story_anchors.clone(),
         required_state_deltas: context.required_state_deltas.clone(),
         prior_chapter_summaries,
+        scene_contract,
+        world_assets,
     };
     let quality_report_t0 = std::time::Instant::now();
     let quality_report_before = if quality_mode == GenerationQualityMode::Fast {
@@ -1077,6 +1110,8 @@ pub fn record_manual_craft_edit_feedback(
         required_anchors: Vec::new(),
         required_state_deltas: Vec::new(),
         prior_chapter_summaries: Vec::new(),
+        scene_contract: None,
+        world_assets: Vec::new(),
     };
     let min_chars = request.target_min_chars.unwrap_or(0);
     let max_chars = request.target_max_chars.unwrap_or_else(|| {
@@ -1476,6 +1511,7 @@ fn single_metric_report(metric: &str, text: &str) -> ChapterQualityReport {
         metric_results: vec![result],
         top_revision_targets: vec![metric.to_string()],
         no_fatal_issue: true,
+        world_consistency_violations: Vec::new(),
     }
 }
 
@@ -1819,6 +1855,24 @@ fn write_chapter_generation_checkpoint(
 
     if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(memory_path) {
         let _ = memory.insert_long_task_checkpoint(project_id, &checkpoint);
+    }
+}
+
+fn load_world_assets_for_project<P: ChapterGenerationProject>(
+    project: &P,
+    _project_id: &str,
+) -> Vec<crate::writer_agent::world_bible::WorldAsset> {
+    let path = project.project_data_dir().join("world_assets.json");
+    if !path.exists() {
+        return Vec::new();
+    }
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    match serde_json::from_str::<Vec<crate::writer_agent::world_bible::WorldAsset>>(&text) {
+        Ok(assets) => assets,
+        Err(_) => Vec::new(),
     }
 }
 

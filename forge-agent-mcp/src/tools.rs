@@ -876,6 +876,36 @@ pub(crate) fn tools() -> Vec<Value> {
                 "required": ["provider"]
             }),
         ),
+        tool(
+            "forge_list_world_assets",
+            "List World Assets",
+            "List world-building assets for the active project, including their approval status and evidence.",
+            empty_schema(),
+        ),
+        tool(
+            "forge_approve_world_asset",
+            "Approve World Asset",
+            "Approve a proposed world asset so it can be used as a hard constraint source.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "assetId": { "type": "string" }
+                },
+                "required": ["assetId"]
+            }),
+        ),
+        tool(
+            "forge_reject_world_asset",
+            "Reject World Asset",
+            "Reject a proposed world asset.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "assetId": { "type": "string" }
+                },
+                "required": ["assetId"]
+            }),
+        ),
     ];
     tools.sort_by(|left, right| {
         left["name"]

@@ -118,5 +118,20 @@
     ],
     "approvalStatus": "approved",
     "tags": ["上古", "仙魔大战", "三千年前"]
+  },
+  {
+    "id": "relation-lin-qingyun",
+    "kind": "relation",
+    "name": "林墨与青云宗的关系",
+    "summary": "林墨是青云宗外门弟子，受门规约束，对宗门有服从义务。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-009",
+        "excerpt": "林墨身为青云宗外门弟子，须遵守执事堂一切裁定",
+        "confidence": 0.9
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["林墨", "青云宗", "弟子", "门规"]
   }
 ]

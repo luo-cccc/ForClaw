@@ -118,5 +118,35 @@
     ],
     "approvalStatus": "approved",
     "tags": ["量子密钥", "自动销毁", "一次性", "解密"]
+  },
+  {
+    "id": "corp-hierarchy",
+    "kind": "hierarchy",
+    "name": "NeuroLink 权限层级",
+    "summary": "L1实习生→L3工程师→L5主管→L7高管→L9董事会。低权限角色不可访问高权限系统。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-009",
+        "excerpt": "NeuroLink权限架构：L3工程师仅能访问备份系统，L7以上方可接触核心记忆编辑日志",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["权限", "层级", "L3", "L7", "NeuroLink"]
+  },
+  {
+    "id": "relation-lin-shen",
+    "kind": "relation",
+    "name": "林晓与沈重山的关系",
+    "summary": "林晓是NeuroLink底层员工，沈重山是CEO。二人存在权力不对等关系。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-010",
+        "excerpt": "林晓作为L3记忆工程师，与CEO沈重山仅有单向汇报关系",
+        "confidence": 0.9
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["林晓", "沈重山", "上下级", "权力"]
   }
 ]

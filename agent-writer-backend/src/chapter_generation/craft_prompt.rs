@@ -582,11 +582,15 @@ mod craft_prompt_tests {
                 severity: crate::writer_agent::world_bible::ConstraintSeverity::Hard,
                 source_asset_id: "asset1".to_string(),
                 evidence: vec![],
+                applies_to: Vec::new(),
+                expected_consequence: String::new(),
             }],
             required_state_deltas: vec![],
             allowed_reveals: vec!["允许揭示".to_string()],
             blocked_reveals: vec!["禁止揭示".to_string()],
             evidence_refs: vec![],
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
         };
 
         let prompt = format_scene_contract_prompt(&contract);
@@ -609,6 +613,8 @@ mod craft_prompt_tests {
             allowed_reveals: vec![],
             blocked_reveals: vec![],
             evidence_refs: vec![],
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
         };
 
         let packet = compile_empowerment_prompt_with_memory(
