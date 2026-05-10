@@ -186,35 +186,7 @@ pub fn evaluate_provider_budget(
         request.requested_output_tokens,
     );
 
-    let mut reasons = Vec::new();
-    if estimated_total_tokens > request.max_total_tokens_without_approval {
-        reasons.push(format!(
-            "estimated tokens {} exceed approval-free limit {}",
-            estimated_total_tokens, request.max_total_tokens_without_approval
-        ));
-    }
-    if estimated_cost_micros > request.max_estimated_cost_micros_without_approval {
-        reasons.push(format!(
-            "estimated cost {} micros exceeds approval-free limit {}",
-            estimated_cost_micros, request.max_estimated_cost_micros_without_approval
-        ));
-    }
-
-    let high_risk_long_task = matches!(
-        request.task,
-        WriterProviderBudgetTask::ChapterGeneration
-            | WriterProviderBudgetTask::BatchGeneration
-            | WriterProviderBudgetTask::ProjectBrainQuery
-            | WriterProviderBudgetTask::ProjectBrainRebuild
-            | WriterProviderBudgetTask::ExternalResearch
-            | WriterProviderBudgetTask::MetacognitiveRecovery
-    ) && estimated_total_tokens
-        >= request.max_total_tokens_without_approval * 4 / 5;
-    if high_risk_long_task {
-        reasons.push("long-running provider task is near approval-free budget".to_string());
-    }
-
-    // P0: usage calibration
+    // P2: usage calibration — compute calibrated estimates before decision
     let (calibrated_input, calibrated_output, calibration_confidence, calibration_fallback) =
         if request.input_chars > 0 {
             let est = agent_harness_core::estimate_with_confidence(
@@ -239,7 +211,60 @@ pub fn evaluate_provider_budget(
             )
         };
 
-    let decision = if estimated_total_tokens == 0 {
+    let calibrated_total_tokens = calibrated_input.saturating_add(calibrated_output);
+    let calibrated_cost_micros = estimate_provider_cost_micros(
+        &request.model,
+        calibrated_input,
+        calibrated_output,
+    );
+
+    // Use calibrated estimates for decision when confidence is sufficient;
+    // otherwise fall back to static estimates (conservative).
+    let use_calibration = calibration_confidence == "High" || calibration_confidence == "Medium";
+    let decision_total_tokens = if use_calibration {
+        calibrated_total_tokens
+    } else {
+        estimated_total_tokens
+    };
+    let decision_cost_micros = if use_calibration {
+        calibrated_cost_micros
+    } else {
+        estimated_cost_micros
+    };
+
+    let mut reasons = Vec::new();
+    if decision_total_tokens > request.max_total_tokens_without_approval {
+        reasons.push(format!(
+            "{}estimated tokens {} exceed approval-free limit {}",
+            if use_calibration { "[calibrated] " } else { "" },
+            decision_total_tokens,
+            request.max_total_tokens_without_approval
+        ));
+    }
+    if decision_cost_micros > request.max_estimated_cost_micros_without_approval {
+        reasons.push(format!(
+            "{}estimated cost {} micros exceeds approval-free limit {}",
+            if use_calibration { "[calibrated] " } else { "" },
+            decision_cost_micros,
+            request.max_estimated_cost_micros_without_approval
+        ));
+    }
+
+    let high_risk_long_task = matches!(
+        request.task,
+        WriterProviderBudgetTask::ChapterGeneration
+            | WriterProviderBudgetTask::BatchGeneration
+            | WriterProviderBudgetTask::ProjectBrainQuery
+            | WriterProviderBudgetTask::ProjectBrainRebuild
+            | WriterProviderBudgetTask::ExternalResearch
+            | WriterProviderBudgetTask::MetacognitiveRecovery
+    ) && decision_total_tokens
+        >= request.max_total_tokens_without_approval * 4 / 5;
+    if high_risk_long_task {
+        reasons.push("long-running provider task is near approval-free budget".to_string());
+    }
+
+    let decision = if decision_total_tokens == 0 {
         WriterProviderBudgetDecision::Blocked
     } else if reasons.is_empty() {
         WriterProviderBudgetDecision::Allowed
@@ -390,5 +415,60 @@ mod tests {
             WriterProviderBudgetDecision::ApprovalRequired
         );
         assert!(approved_report.approval_required);
+    }
+
+    #[test]
+    fn calibration_used_when_input_chars_provided() {
+        // Static estimate would exceed budget (100k > 80k)
+        let mut request = WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ChapterGeneration,
+            "gpt-4o",
+            80_000,
+            20_000,
+        )
+        .with_chars(50_000, 10_000);
+        request.max_total_tokens_without_approval = 90_000;
+
+        let report = evaluate_provider_budget(request);
+
+        // With calibration, 50k chars at ~1/3 tokens per char = ~16k input tokens
+        // which is well under the 90k limit, so decision should be Allowed
+        assert!(
+            report.calibrated_input_tokens > 0,
+            "calibrated input should be computed"
+        );
+        assert!(
+            report.calibrated_output_tokens > 0,
+            "calibrated output should be computed"
+        );
+        // The calibration confidence should be recorded
+        assert!(
+            !report.calibration_confidence.is_empty(),
+            "calibration confidence should be recorded"
+        );
+    }
+
+    #[test]
+    fn static_estimate_used_when_no_input_chars() {
+        let mut request = WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ChapterGeneration,
+            "gpt-4o",
+            100_000,
+            20_000,
+        );
+        // No input_chars set, so calibration falls back to static
+        request.max_total_tokens_without_approval = 90_000;
+
+        let report = evaluate_provider_budget(request);
+
+        assert_eq!(
+            report.decision,
+            WriterProviderBudgetDecision::ApprovalRequired,
+            "static estimate 120k > 90k should require approval"
+        );
+        assert_eq!(
+            report.calibration_fallback_reason,
+            Some("input_chars not provided; using static token estimate".to_string())
+        );
     }
 }
