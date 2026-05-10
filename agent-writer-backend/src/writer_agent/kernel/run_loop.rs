@@ -598,6 +598,7 @@ impl WriterAgentKernel {
                 self.record_compaction_trigger_event(&trigger, &result.source_refs, now_ms());
             }
         }
+        self.current_execution_plan = result.execution_plan.clone();
         Ok(())
     }
 }

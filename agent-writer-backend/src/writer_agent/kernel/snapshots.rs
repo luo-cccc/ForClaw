@@ -460,6 +460,7 @@ impl WriterAgentKernel {
             product_metrics: self.product_metrics(),
             product_metrics_trend: self.product_metrics_trend(limit),
             metacognitive_snapshot: Default::default(),
+            execution_plan: self.current_execution_plan.clone(),
         };
         snapshot.metacognitive_snapshot =
             crate::writer_agent::metacognition::metacognitive_snapshot_from_trace(&snapshot);

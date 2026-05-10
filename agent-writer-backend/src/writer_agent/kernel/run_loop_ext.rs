@@ -88,6 +88,7 @@ pub struct WriterAgentRunResult {
     pub tool_inventory: EffectiveToolInventory,
     pub trace_refs: Vec<String>,
     pub source_refs: Vec<String>,
+    pub execution_plan: Option<agent_harness_core::ExecutionPlan>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -234,6 +235,7 @@ where
             tool_inventory: self.tool_inventory,
             trace_refs: self.trace_refs,
             source_refs: self.source_refs,
+            execution_plan: Some(plan),
         })
     }
 }

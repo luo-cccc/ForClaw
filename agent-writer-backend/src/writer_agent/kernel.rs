@@ -315,6 +315,7 @@ pub struct WriterAgentTraceSnapshot {
     pub product_metrics: WriterProductMetrics,
     pub product_metrics_trend: WriterProductMetricsTrend,
     pub metacognitive_snapshot: WriterMetacognitiveSnapshot,
+    pub execution_plan: Option<agent_harness_core::ExecutionPlan>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -464,6 +465,7 @@ pub struct WriterAgentKernel {
     pub active_chapter: Option<String>,
     pub last_spine: Option<crate::writer_agent::context::ContextSpine>,
     pub focus: crate::writer_agent::context::FocusState,
+    pub current_execution_plan: Option<agent_harness_core::ExecutionPlan>,
 }
 
 struct SuppressedProposalSlot {
@@ -507,6 +509,7 @@ impl WriterAgentKernel {
             active_chapter: None,
             last_spine: None,
             focus: crate::writer_agent::context::FocusState::default(),
+            current_execution_plan: None,
         }
     }
 }

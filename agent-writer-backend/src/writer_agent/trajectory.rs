@@ -82,6 +82,7 @@ mod tests {
             product_metrics: Default::default(),
             product_metrics_trend: Default::default(),
             metacognitive_snapshot: Default::default(),
+            execution_plan: None,
         };
 
         let export = export_trace_snapshot("novel-a", "session-a", &snapshot);

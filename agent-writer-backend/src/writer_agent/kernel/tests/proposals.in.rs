@@ -342,6 +342,24 @@ fn trace_snapshot_survives_kernel_restart() {
 }
 
 #[test]
+fn trace_snapshot_includes_execution_plan() {
+    let memory = WriterMemory::open(std::path::Path::new(":memory:")).unwrap();
+    let mut kernel = WriterAgentKernel::new("default", memory);
+    let plan = agent_harness_core::compile_plan(
+        &agent_harness_core::TaskPacket::new("t1", "test", agent_harness_core::TaskScope::Chapter, 1),
+        "plan-1",
+        1,
+    );
+    kernel.current_execution_plan = Some(plan.clone());
+    let trace = kernel.trace_snapshot(10);
+    assert!(trace.execution_plan.is_some());
+    let snapshot_plan = trace.execution_plan.unwrap();
+    assert_eq!(snapshot_plan.plan_id, "plan-1");
+    assert_eq!(snapshot_plan.steps.len(), 4);
+    assert_eq!(snapshot_plan.steps[0].goal, "preflight: assemble context and contracts");
+}
+
+#[test]
 fn proposal_ids_do_not_collide_across_kernel_restarts() {
     let db_path = std::env::temp_dir().join(format!(
         "forge-proposal-id-{}.sqlite",

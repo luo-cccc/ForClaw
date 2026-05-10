@@ -563,6 +563,7 @@ mod tests {
             product_metrics: WriterProductMetrics::default(),
             product_metrics_trend: Default::default(),
             metacognitive_snapshot: Default::default(),
+            execution_plan: None,
         };
         let summary = build_companion_timeline_summary(&snapshot);
         assert!(!summary.includes_internal_trace);
