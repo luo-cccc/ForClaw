@@ -1,0 +1,122 @@
+[
+  {
+    "id": "realm-hierarchy",
+    "kind": "hierarchy",
+    "name": "修真境界体系",
+    "summary": "炼气→筑基→金丹→元婴→化神。低境界修士不可使用高境界法宝。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-001",
+        "excerpt": "修真境界体系：炼气、筑基、金丹、元婴、化神",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["境界", "修为", "炼气", "筑基", "金丹"]
+  },
+  {
+    "id": "forbidden-demon-art",
+    "kind": "rule",
+    "name": "禁术：血祭大法",
+    "summary": "以他人精血为引强行提升修为的禁术，为正道所不容。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-002",
+        "excerpt": "血祭大法被列为正道禁术，使用者将被全体正道追杀",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["血祭", "禁术", "精血", "魔道"]
+  },
+  {
+    "id": "cold-shadow-cost",
+    "kind": "rule",
+    "name": "寒影剑代价",
+    "summary": "寒影剑每次出鞘都会吞噬使用者寿元，不可无偿使用。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-003",
+        "excerpt": "寒影剑出鞘必噬寿元，剑主林墨鬓发已白",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["寿元", "白发", "代价", "寒影剑"]
+  },
+  {
+    "id": "sect-artifact-law",
+    "kind": "rule",
+    "name": "青云宗门规",
+    "summary": "青云宗严禁弟子私藏仙器，所有仙器必须登记在册。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-004",
+        "excerpt": "青云宗门规第三百条：私藏仙器者，废除修为，逐出师门",
+        "confidence": 0.9
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["私藏", "仙器", "门规", "青云宗"]
+  },
+  {
+    "id": "proposed-ancient-pill",
+    "kind": "rule",
+    "name": "上古丹方推测",
+    "summary": "推测存在一种上古丹药可以逆转寒影剑的寿元消耗。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-005",
+        "excerpt": "古籍残卷记载逆转寿元的丹方，但内容残缺无法验证",
+        "confidence": 0.4
+      }
+    ],
+    "approvalStatus": "proposed",
+    "tags": ["丹药", "寿元", "逆转", "上古"]
+  },
+  {
+    "id": "entity-lin-mo",
+    "kind": "entity",
+    "name": "林墨",
+    "summary": "主角，炼气期弟子，寒影剑现任剑主。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-006",
+        "excerpt": "林墨，青云宗外门弟子，炼气七层",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["主角", "炼气", "青云宗"]
+  },
+  {
+    "id": "entity-qingyun",
+    "kind": "entity",
+    "name": "青云宗",
+    "summary": "林墨所在师门，以剑道立宗。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-007",
+        "excerpt": "青云宗位于云岚山脉，执事堂掌管仙器登记",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["师门", "剑道", "执事堂"]
+  },
+  {
+    "id": "timeline-ancient-war",
+    "kind": "timeline_fact",
+    "name": "上古仙魔大战",
+    "summary": "三千年前仙魔大战导致大量上古剑器流落人间。",
+    "evidence": [
+      {
+        "sourceId": "xianxia-lore-008",
+        "excerpt": "仙魔大战发生于三千年前，寒影剑正是当时遗留",
+        "confidence": 0.85
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["上古", "仙魔大战", "三千年前"]
+  }
+]

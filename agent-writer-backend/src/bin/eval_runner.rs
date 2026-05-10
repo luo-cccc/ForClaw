@@ -8,6 +8,11 @@ use agent_writer_lib::chapter_generation::{
 use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
 };
+use agent_writer_lib::writer_agent::world_bible::{
+    compile_canon_constraints, compile_scene_contract, validate_world_consistency,
+    CanonConstraint, CanonConstraintKind, ConstraintSeverity,
+    WorldAsset,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -211,6 +216,15 @@ fn load_tasks(profile: &str) -> Vec<EvalTask> {
         .filter(|l| !l.is_empty() && !l.starts_with("//"))
         .map(|l| serde_json::from_str(l).expect("parse eval task"))
         .collect()
+}
+
+fn load_world_assets(profile: &str) -> Vec<WorldAsset> {
+    let path = fixture_dir().join(profile).join("world_assets.json");
+    if !path.exists() {
+        return Vec::new();
+    }
+    let text = std::fs::read_to_string(&path).expect("read world_assets.json");
+    serde_json::from_str(&text).expect("parse world_assets.json")
 }
 
 fn is_smoke_task(task: &EvalTask) -> bool {
@@ -886,6 +900,7 @@ fn run_craft_memory_prompt_eval(
         Some(2000),
         None,
         &[sample],
+        None,
     );
     let section = format_craft_prompt_section(&packet);
     let must_contain: Vec<String> = task.expected["must_contain"]
@@ -2494,6 +2509,301 @@ fn build_eval_trend_report(
     }
 }
 
+fn run_world_asset_contract_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let constraints = compile_canon_constraints(&assets);
+    let min_constraints = expected["min_constraints"].as_u64().unwrap_or(1) as usize;
+    let contract_non_empty = expected["contract_non_empty"].as_bool().unwrap_or(true);
+
+    let mission = expected["mission"].as_str().unwrap_or("test mission");
+    let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[]);
+
+    let mut messages = Vec::new();
+    if constraints.len() < min_constraints {
+        messages.push(format!(
+            "Expected at least {} constraints, got {}",
+            min_constraints,
+            constraints.len()
+        ));
+    }
+    if contract_non_empty && contract.active_constraints.is_empty() {
+        messages.push("Scene contract has no active constraints".to_string());
+    }
+    if expected["has_chapter_id"].as_bool().unwrap_or(false) && contract.chapter_id.is_empty() {
+        messages.push("Scene contract missing chapter_id".to_string());
+    }
+
+    if messages.is_empty() {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "pass".to_string(),
+            before: Some(serde_json::json!({ "constraint_count": constraints.len() })),
+            after: None,
+            delta: None,
+            message: format!("World asset contract compiled: {} constraints, {} active", constraints.len(), contract.active_constraints.len()),
+        }
+    } else {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "fail".to_string(),
+            before: Some(serde_json::json!({ "constraint_count": constraints.len() })),
+            after: None,
+            delta: None,
+            message: messages.join("; "),
+        }
+    }
+}
+
+fn run_canon_forbidden_claim_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let constraints = compile_canon_constraints(&assets);
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let forbidden_term = expected["forbidden_term"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+    let expected_constraint_id = expected["expected_constraint_id"].as_str();
+
+    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[]);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+
+    let detected = violations.iter().any(|v| {
+        v.kind == CanonConstraintKind::ForbiddenClaim
+            && expected_constraint_id.map_or(
+                forbidden_term.is_empty() || v.message.contains(forbidden_term),
+                |id| v.constraint_id == id
+            )
+    });
+
+    if detected == should_detect {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "pass".to_string(),
+            before: Some(serde_json::json!({ "violations": violations.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Forbidden claim detection: expected={}, got={}, violations={}",
+                should_detect, detected, violations.len()
+            ),
+        }
+    } else {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "fail".to_string(),
+            before: Some(serde_json::json!({ "violations": violations.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Forbidden claim mismatch: expected detection={}, but got {}. violations={:?}",
+                should_detect, detected,
+                violations.iter().map(|v| &v.constraint_id).collect::<Vec<_>>()
+            ),
+        }
+    }
+}
+
+fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let trigger_term = expected["trigger_term"].as_str().unwrap_or("");
+    let required_term = expected["required_term"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+    let expected_constraint_kind = expected["expected_constraint_kind"].as_str();
+
+    // Build a RequiredCost constraint manually since compile_canon_constraints only makes ForbiddenClaim
+    let source_asset = assets.iter().find(|a| {
+        trigger_term.is_empty() || a.name.contains(trigger_term) || a.tags.iter().any(|t| t.contains(trigger_term))
+    });
+
+    let mut constraints = compile_canon_constraints(&assets);
+    if let Some(asset) = source_asset {
+        let required_cost = CanonConstraint {
+            id: format!("required-cost-{}", asset.id),
+            kind: CanonConstraintKind::RequiredCost,
+            summary: format!("Using {} requires paying {}", trigger_term, required_term),
+            trigger_terms: vec![trigger_term.to_string()],
+            forbidden_terms: vec![],
+            required_terms: vec![required_term.to_string()],
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: asset.id.clone(),
+            evidence: asset.evidence.clone(),
+        };
+        constraints.push(required_cost);
+    }
+
+    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[]);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+
+    let detected = violations.iter().any(|v| {
+        v.kind == CanonConstraintKind::RequiredCost
+            && (trigger_term.is_empty() || v.message.contains(trigger_term))
+            && expected_constraint_kind.map_or(true, |k| {
+                let kind_str = match v.kind {
+                    CanonConstraintKind::RequiredFact => "RequiredFact",
+                    CanonConstraintKind::ForbiddenClaim => "ForbiddenClaim",
+                    CanonConstraintKind::ForbiddenAction => "ForbiddenAction",
+                    CanonConstraintKind::RequiredCost => "RequiredCost",
+                    CanonConstraintKind::HierarchyLimit => "HierarchyLimit",
+                    CanonConstraintKind::ExceptionRule => "ExceptionRule",
+                };
+                kind_str == k
+            })
+    });
+
+    if detected == should_detect {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "pass".to_string(),
+            before: Some(serde_json::json!({ "violations": violations.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Required cost detection: expected={}, got={}, violations={}",
+                should_detect, detected, violations.len()
+            ),
+        }
+    } else {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "fail".to_string(),
+            before: Some(serde_json::json!({ "violations": violations.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Required cost mismatch: expected detection={}, but got {}. violations={:?}",
+                should_detect, detected,
+                violations.iter().map(|v| &v.constraint_id).collect::<Vec<_>>()
+            ),
+        }
+    }
+}
+
+fn run_canon_proposed_not_hard_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let source_asset_id = expected["source_asset_id"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+    let max_severity = expected["max_severity"].as_str().unwrap_or("warning");
+
+    let constraints = compile_canon_constraints(&assets);
+    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[]);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+
+    let detected = violations.iter().any(|v| {
+        v.constraint_id.contains(source_asset_id)
+    });
+
+    let severity_ok = violations.iter().all(|v| {
+        if v.constraint_id.contains(source_asset_id) {
+            let severity_str = match v.severity {
+                ConstraintSeverity::Info => "info",
+                ConstraintSeverity::Warning => "warning",
+                ConstraintSeverity::Hard => "hard",
+            };
+            severity_str == max_severity || (max_severity == "warning" && severity_str == "info")
+        } else {
+            true
+        }
+    });
+
+    if detected == should_detect && severity_ok {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "pass".to_string(),
+            before: Some(serde_json::json!({ "violations": violations.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Proposed rule severity check: detected={}, max_severity respected, violations={}",
+                detected, violations.len()
+            ),
+        }
+    } else {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "fail".to_string(),
+            before: Some(serde_json::json!({ "violations": violations.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Proposed rule check failed: detected={}, expected={}, severity_ok={}. violations={:?}",
+                detected, should_detect, severity_ok,
+                violations.iter().map(|v| (&v.constraint_id, &v.severity)).collect::<Vec<_>>()
+            ),
+        }
+    }
+}
+
+fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let constraints = compile_canon_constraints(&assets);
+    let mission = expected["mission"].as_str().unwrap_or("test mission");
+    let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[]);
+
+    let mut messages = Vec::new();
+    if expected["contract_non_empty"].as_bool().unwrap_or(false) && contract.active_constraints.is_empty() {
+        messages.push("Scene contract has no active constraints".to_string());
+    }
+    if expected["has_chapter_id"].as_bool().unwrap_or(false) && contract.chapter_id.is_empty() {
+        messages.push("Scene contract missing chapter_id".to_string());
+    }
+    if expected["has_active_constraints"].as_bool().unwrap_or(false) && contract.active_constraints.is_empty() {
+        messages.push("Scene contract missing active constraints".to_string());
+    }
+
+    if messages.is_empty() {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "pass".to_string(),
+            before: Some(serde_json::json!({ "active_constraints": contract.active_constraints.len() })),
+            after: None,
+            delta: None,
+            message: format!(
+                "Scene contract prompt: {} active constraints, chapter_id={}",
+                contract.active_constraints.len(), contract.chapter_id
+            ),
+        }
+    } else {
+        EvalResult {
+            profile: profile.to_string(),
+            task: task.task.clone(),
+            chapter: task.chapter.clone(),
+            status: "fail".to_string(),
+            before: Some(serde_json::json!({ "active_constraints": contract.active_constraints.len() })),
+            after: None,
+            delta: None,
+            message: messages.join("; "),
+        }
+    }
+}
+
 fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendReport) {
     let fixture = load_fixture(profile);
     let all_tasks = load_tasks(profile);
@@ -2535,6 +2845,11 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
             }
             "negative_plot_stalled" => run_negative_plot_stalled_eval(profile, task, &fixture),
             "state_delta_trace" => run_state_delta_trace_eval(profile, task, &fixture),
+            "world_asset_contract" => run_world_asset_contract_eval(profile, task, &fixture),
+            "canon_forbidden_claim" => run_canon_forbidden_claim_eval(profile, task, &fixture),
+            "canon_required_cost" => run_canon_required_cost_eval(profile, task, &fixture),
+            "canon_proposed_not_hard" => run_canon_proposed_not_hard_eval(profile, task, &fixture),
+            "scene_contract_prompt" => run_scene_contract_prompt_eval(profile, task, &fixture),
             other => EvalResult {
                 profile: profile.to_string(),
                 task: task.task.clone(),

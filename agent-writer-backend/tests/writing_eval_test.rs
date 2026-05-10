@@ -180,11 +180,11 @@ fn eval_matrix_has_three_profiles() {
 }
 
 #[test]
-fn eval_matrix_has_30_plus_tasks() {
+fn eval_matrix_has_46_plus_tasks() {
     let total = all_tasks().len();
     assert!(
-        total >= 30,
-        "eval matrix should have at least 30 tasks, got {}",
+        total >= 46,
+        "eval matrix should have at least 46 tasks, got {}",
         total
     );
 }
@@ -207,6 +207,11 @@ fn eval_matrix_covers_required_task_types() {
         "planning_review",
         "promise_progression",
         "continuity_diagnostic",
+        "world_asset_contract",
+        "canon_forbidden_claim",
+        "canon_required_cost",
+        "canon_proposed_not_hard",
+        "scene_contract_prompt",
     ];
     for req in &required {
         assert!(
@@ -557,10 +562,68 @@ fn craft_memory_samples_flow_into_prompt_section() {
                 rejected_count: 2,
             }],
         }],
+        None,
     );
     let section = format_craft_prompt_section(&packet);
 
     assert!(section.contains("项目写法记忆"));
     assert!(section.contains("必须选择"));
     assert!(section.contains("一整段古剑来历"));
+}
+
+#[test]
+fn eval_world_assets_fixture_loads_xianxia() {
+    use agent_writer_lib::writer_agent::world_bible::{WorldAsset, compile_canon_constraints};
+    let path = fixture_dir().join("xianxia_world").join("world_assets.json");
+    let text = std::fs::read_to_string(path).unwrap();
+    let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
+    assert!(assets.len() >= 5, "xianxia_world should have at least 5 assets");
+    let constraints = compile_canon_constraints(&assets);
+    assert!(!constraints.is_empty(), "should compile at least one constraint from rules");
+}
+
+#[test]
+fn eval_world_assets_fixture_loads_scifi() {
+    use agent_writer_lib::writer_agent::world_bible::{WorldAsset, compile_canon_constraints};
+    let path = fixture_dir().join("scifi_world").join("world_assets.json");
+    let text = std::fs::read_to_string(path).unwrap();
+    let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
+    assert!(assets.len() >= 5, "scifi_world should have at least 5 assets");
+    let constraints = compile_canon_constraints(&assets);
+    assert!(!constraints.is_empty(), "should compile at least one constraint from rules");
+}
+
+#[test]
+fn eval_xianxia_has_world_bible_task_coverage() {
+    let tasks = load_tasks("xianxia");
+    assert!(tasks.iter().any(|t| t.task == "world_asset_contract"));
+    assert!(tasks.iter().any(|t| t.task == "canon_forbidden_claim"));
+    assert!(tasks.iter().any(|t| t.task == "canon_required_cost"));
+    assert!(tasks.iter().any(|t| t.task == "canon_proposed_not_hard"));
+    assert!(tasks.iter().any(|t| t.task == "scene_contract_prompt"));
+}
+
+#[test]
+fn eval_scifi_has_world_bible_task_coverage() {
+    let tasks = load_tasks("scifi");
+    assert!(tasks.iter().any(|t| t.task == "world_asset_contract"));
+    assert!(tasks.iter().any(|t| t.task == "canon_forbidden_claim"));
+    assert!(tasks.iter().any(|t| t.task == "canon_required_cost"));
+    assert!(tasks.iter().any(|t| t.task == "canon_proposed_not_hard"));
+    assert!(tasks.iter().any(|t| t.task == "scene_contract_prompt"));
+}
+
+#[test]
+fn eval_world_asset_proposed_rule_downgraded() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        WorldAsset, compile_canon_constraints, ConstraintSeverity,
+    };
+    let path = fixture_dir().join("xianxia_world").join("world_assets.json");
+    let text = std::fs::read_to_string(path).unwrap();
+    let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
+    let constraints = compile_canon_constraints(&assets);
+    let proposed_constraint = constraints.iter().find(|c| c.source_asset_id == "proposed-ancient-pill");
+    if let Some(c) = proposed_constraint {
+        assert_eq!(c.severity, ConstraintSeverity::Warning, "proposed rule should be downgraded to Warning");
+    }
 }

@@ -77,6 +77,7 @@ pub fn compile_empowerment_prompt(
         max_prompt_chars,
         rule_stats,
         &[],
+        None,
     )
 }
 
@@ -89,6 +90,7 @@ pub fn compile_empowerment_prompt_with_memory(
     max_prompt_chars: Option<usize>,
     rule_stats: Option<&HashMap<String, CraftRuleStats>>,
     memory_samples: &[CraftMemoryPromptSamples],
+    scene_contract: Option<&crate::writer_agent::world_bible::SceneContract>,
 ) -> EmpowermentPromptPacket {
     let max_rules = max_rules.unwrap_or(DEFAULT_MAX_RULES);
     let max_prompt_chars = max_prompt_chars.unwrap_or(DEFAULT_MAX_PROMPT_CHARS);
@@ -192,6 +194,10 @@ pub fn compile_empowerment_prompt_with_memory(
         })
         .sum::<usize>();
 
+    let scene_contract_prompt = scene_contract
+        .map(|sc| format_scene_contract_prompt(sc))
+        .unwrap_or_default();
+
     EmpowermentPromptPacket {
         craft_rules: selected,
         chapter_discipline,
@@ -200,6 +206,7 @@ pub fn compile_empowerment_prompt_with_memory(
         memory_examples,
         memory_bad_patterns,
         total_token_estimate: chars_used,
+        scene_contract_prompt,
     }
 }
 
@@ -300,10 +307,78 @@ pub fn build_scene_craft_plan(
     }
 }
 
+/// Format a SceneContract into a prompt section for the LLM.
+pub fn format_scene_contract_prompt(
+    contract: &crate::writer_agent::world_bible::SceneContract,
+) -> String {
+    let mut section = String::new();
+    section.push_str("\n\n## 世界观约束契约\n\n");
+    section.push_str(&format!("- 章节ID: {}\n", contract.chapter_id));
+    section.push_str(&format!("- 本章任务: {}\n", contract.mission));
+
+    if !contract.required_facts.is_empty() {
+        section.push_str("\n### 必须出现的事实\n");
+        for fact in &contract.required_facts {
+            section.push_str(&format!("- [{}] {}\n", fact.id, fact.summary));
+        }
+    }
+
+    if !contract.active_constraints.is_empty() {
+        section.push_str("\n### 活跃约束\n");
+        for c in &contract.active_constraints {
+            let severity_label = match c.severity {
+                crate::writer_agent::world_bible::ConstraintSeverity::Hard => "【硬性】",
+                crate::writer_agent::world_bible::ConstraintSeverity::Warning => "【警告】",
+                crate::writer_agent::world_bible::ConstraintSeverity::Info => "【提示】",
+            };
+            section.push_str(&format!(
+                "- {}{} [{:?}]: {}\n",
+                severity_label, c.id, c.kind, c.summary
+            ));
+            if !c.forbidden_terms.is_empty() {
+                section.push_str(&format!("  - 禁用词: {}\n", c.forbidden_terms.join(", ")));
+            }
+            if !c.required_terms.is_empty() {
+                section.push_str(&format!("  - 要求词: {}\n", c.required_terms.join(", ")));
+            }
+        }
+    }
+
+    if !contract.allowed_reveals.is_empty() {
+        section.push_str("\n### 允许揭示的信息\n");
+        for reveal in &contract.allowed_reveals {
+            section.push_str(&format!("- {}\n", reveal));
+        }
+    }
+
+    if !contract.blocked_reveals.is_empty() {
+        section.push_str("\n### 禁止揭示的信息\n");
+        for block in &contract.blocked_reveals {
+            section.push_str(&format!("- {}\n", block));
+        }
+    }
+
+    if !contract.required_state_deltas.is_empty() {
+        section.push_str("\n### 要求状态变更\n");
+        for delta in &contract.required_state_deltas {
+            section.push_str(&format!(
+                "- [{}] {} (来源: {})\n",
+                delta.delta_type, delta.description, delta.source
+            ));
+        }
+    }
+
+    section
+}
+
 // ── Prompt Section Formatter ──
 
 pub fn format_craft_prompt_section(packet: &EmpowermentPromptPacket) -> String {
     let mut section = String::new();
+
+    if !packet.scene_contract_prompt.is_empty() {
+        section.push_str(&packet.scene_contract_prompt);
+    }
 
     if !packet.chapter_discipline.is_empty() {
         section.push_str("\n\n## 本章写作纪律\n\n");
@@ -428,6 +503,7 @@ mod craft_prompt_tests {
             memory_examples: vec![],
             memory_bad_patterns: vec![],
             total_token_estimate: 0,
+            scene_contract_prompt: String::new(),
         };
         let plan = build_scene_craft_plan(
             "test-chapter", "objective", &[], "beat", None, &[], &packet,
@@ -447,6 +523,7 @@ mod craft_prompt_tests {
             memory_examples: vec![],
             memory_bad_patterns: vec![],
             total_token_estimate: 100,
+            scene_contract_prompt: String::new(),
         };
         let section = format_craft_prompt_section(&packet);
         assert!(section.contains("本章写作纪律"));
@@ -481,10 +558,73 @@ mod craft_prompt_tests {
                     rejected_count: 2,
                 }],
             }],
+            None,
         );
         let section = format_craft_prompt_section(&packet);
         assert!(section.contains("项目写法记忆"));
         assert!(section.contains("必须选择"));
         assert!(section.contains("一整段背景"));
+    }
+
+    #[test]
+    fn scene_contract_prompt_injected_when_provided() {
+        let contract = crate::writer_agent::world_bible::SceneContract {
+            chapter_id: "ch1".to_string(),
+            mission: "test mission".to_string(),
+            required_facts: vec![],
+            active_constraints: vec![crate::writer_agent::world_bible::CanonConstraint {
+                id: "c1".to_string(),
+                kind: crate::writer_agent::world_bible::CanonConstraintKind::ForbiddenClaim,
+                summary: "禁止飞剑".to_string(),
+                trigger_terms: vec!["剑".to_string()],
+                forbidden_terms: vec!["飞剑".to_string()],
+                required_terms: vec![],
+                severity: crate::writer_agent::world_bible::ConstraintSeverity::Hard,
+                source_asset_id: "asset1".to_string(),
+                evidence: vec![],
+            }],
+            required_state_deltas: vec![],
+            allowed_reveals: vec!["允许揭示".to_string()],
+            blocked_reveals: vec!["禁止揭示".to_string()],
+            evidence_refs: vec![],
+        };
+
+        let prompt = format_scene_contract_prompt(&contract);
+        assert!(prompt.contains("世界观约束契约"));
+        assert!(prompt.contains("ch1"));
+        assert!(prompt.contains("test mission"));
+        assert!(prompt.contains("禁止飞剑"));
+        assert!(prompt.contains("允许揭示"));
+        assert!(prompt.contains("禁止揭示"));
+    }
+
+    #[test]
+    fn craft_prompt_section_includes_scene_contract() {
+        let contract = crate::writer_agent::world_bible::SceneContract {
+            chapter_id: "ch1".to_string(),
+            mission: "test".to_string(),
+            required_facts: vec![],
+            active_constraints: vec![],
+            required_state_deltas: vec![],
+            allowed_reveals: vec![],
+            blocked_reveals: vec![],
+            evidence_refs: vec![],
+        };
+
+        let packet = compile_empowerment_prompt_with_memory(
+            "test objective",
+            "test beat",
+            0,
+            false,
+            Some(3),
+            Some(600),
+            None,
+            &[],
+            Some(&contract),
+        );
+
+        assert!(!packet.scene_contract_prompt.is_empty());
+        let section = format_craft_prompt_section(&packet);
+        assert!(section.contains("世界观约束契约"));
     }
 }

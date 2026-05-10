@@ -35,6 +35,8 @@ pub struct EmpowermentPromptPacket {
     #[serde(default)]
     pub memory_bad_patterns: Vec<CraftMemoryPromptBadPattern>,
     pub total_token_estimate: usize,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scene_contract_prompt: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -86,7 +88,7 @@ pub struct SceneCraftPlan {
     pub required_state_deltas: Vec<StateDelta>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateDelta {
     pub delta_type: String,

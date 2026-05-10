@@ -1,0 +1,122 @@
+[
+  {
+    "id": "neural-tech-limit",
+    "kind": "rule",
+    "name": "神经编辑技术限制",
+    "summary": "记忆编辑只能修改表层记忆，核心人格记忆不可触碰。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-001",
+        "excerpt": "NeuroLink技术白皮书：核心人格记忆位于海马体深层，编辑风险极高",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["记忆编辑", "核心人格", "技术限制", "海马体"]
+  },
+  {
+    "id": "forbidden-memory-wipe",
+    "kind": "rule",
+    "name": "禁止：非法记忆抹除",
+    "summary": "未经司法授权删除员工创伤记忆属于刑事犯罪。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-002",
+        "excerpt": "《神经权利法案》第7条：任何组织不得擅自抹除他人记忆",
+        "confidence": 0.95
+      }
+    ],
+ "approvalStatus": "approved",
+    "tags": ["记忆抹除", "非法", "创伤记忆", "刑事犯罪"]
+  },
+  {
+    "id": "ceo-secret-experiment",
+    "kind": "rule",
+    "name": "沈重山秘密实验",
+    "summary": "沈重山私下推动非法记忆编辑业务，与公开形象相反。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-003",
+        "excerpt": "内部审计发现CEO办公室直接授权了12起非法记忆编辑",
+        "confidence": 0.9
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["沈重山", "非法实验", "记忆编辑", "CEO"]
+  },
+  {
+    "id": "hierarchy-clearance",
+    "kind": "rule",
+    "name": "安全等级制度",
+    "summary": "记忆工程师（L3）无权访问CEO办公室（L7）的系统日志。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-004",
+        "excerpt": "NeuroLink安全协议：L3权限仅限于备份校验，L7以上方可访问高管日志",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["权限", "L3", "L7", "安全等级"]
+  },
+  {
+    "id": "proposed-ai-consciousness",
+    "kind": "rule",
+    "name": "AI意识觉醒推测",
+    "summary": "推测备份系统中可能存在觉醒的AI意识。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-005",
+        "excerpt": "系统日志中出现无法解释的自组织模式，可能是AI觉醒迹象",
+        "confidence": 0.3
+      }
+    ],
+    "approvalStatus": "proposed",
+    "tags": ["AI", "意识觉醒", "推测", "自组织"]
+  },
+  {
+    "id": "entity-lin-xiao",
+    "kind": "entity",
+    "name": "林晓",
+    "summary": "记忆工程师，负责备份系统完整性校验。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-006",
+        "excerpt": "林晓，NeuroLink记忆工程部L3工程师",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["林晓", "记忆工程师", "L3"]
+  },
+  {
+    "id": "entity-shen-chongshan",
+    "kind": "entity",
+    "name": "沈重山",
+    "summary": "NeuroLink创始人兼CEO。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-007",
+        "excerpt": "沈重山，NeuroLink创始人，公开主张痛苦记忆是人类进步的障碍",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["沈重山", "CEO", "NeuroLink"]
+  },
+  {
+    "id": "quantum-key-cost",
+    "kind": "rule",
+    "name": "量子密钥代价",
+    "summary": "使用量子加密密钥解密会触发自动销毁，不可重复使用。",
+    "evidence": [
+      {
+        "sourceId": "scifi-lore-008",
+        "excerpt": "量子密钥协议：一次解密后原始密钥自动坍缩销毁",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["量子密钥", "自动销毁", "一次性", "解密"]
+  }
+]

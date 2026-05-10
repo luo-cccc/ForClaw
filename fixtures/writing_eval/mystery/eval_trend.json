@@ -2,7 +2,7 @@
   "profile": "mystery",
   "current": {
     "profile": "mystery",
-    "timestamp": "2026-05-10T02:57:53.748489+00:00",
+    "timestamp": "2026-05-10T06:24:42.664972+00:00",
     "task_count": 23,
     "pass": 23,
     "fail": 0,
@@ -79,9 +79,9 @@
     "min_chars": 299,
     "max_chars": 434,
     "avg_carry_rate": 0.20000002,
-    "p50_latency_ms": 0,
-    "p90_latency_ms": 0,
-    "p95_latency_ms": 0,
+    "p50_latency_ms": 86235,
+    "p90_latency_ms": 118348,
+    "p95_latency_ms": 206041,
     "quality_warnings": [
       {
         "kind": "low_carry_rate",
@@ -92,7 +92,7 @@
   },
   "previous": {
     "profile": "mystery",
-    "timestamp": "2026-05-10T02:55:31.540218900+00:00",
+    "timestamp": "2026-05-10T06:23:55.437184600+00:00",
     "task_count": 23,
     "pass": 23,
     "fail": 0,

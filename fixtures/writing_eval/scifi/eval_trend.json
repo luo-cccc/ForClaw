@@ -2,9 +2,9 @@
   "profile": "scifi",
   "current": {
     "profile": "scifi",
-    "timestamp": "2026-05-10T02:57:53.751725200+00:00",
-    "task_count": 23,
-    "pass": 23,
+    "timestamp": "2026-05-10T06:24:42.671646900+00:00",
+    "task_count": 31,
+    "pass": 31,
     "fail": 0,
     "average_after_score": 0.64335704,
     "average_score_delta": 0.0,
@@ -39,6 +39,9 @@
     "task_status": {
       "canon_conflict:第三章": "pass",
       "canon_conflict:第二章": "pass",
+      "canon_forbidden_claim:第一章": "pass",
+      "canon_proposed_not_hard:第一章": "pass",
+      "canon_required_cost:第二章": "pass",
       "chapter_generation:第一章": "pass",
       "chapter_generation:第三章": "pass",
       "chapter_generation:第二章": "pass",
@@ -57,9 +60,12 @@
       "quality_evaluation:第二章": "pass",
       "quality_signals:第三章": "pass",
       "quality_signals:第二章": "pass",
+      "scene_contract_prompt:第一章": "pass",
+      "scene_contract_prompt:第二章": "pass",
       "state_delta_trace:第三章": "pass",
       "targeted_revision:第三章": "pass",
-      "targeted_revision:第二章": "pass"
+      "targeted_revision:第二章": "pass",
+      "world_asset_contract:第一章": "pass"
     },
     "task_after_score": {
       "chapter_generation:第一章": 0.56652796,
@@ -79,9 +85,9 @@
     "min_chars": 294,
     "max_chars": 379,
     "avg_carry_rate": 0.28571433,
-    "p50_latency_ms": 0,
-    "p90_latency_ms": 0,
-    "p95_latency_ms": 0,
+    "p50_latency_ms": 86235,
+    "p90_latency_ms": 118348,
+    "p95_latency_ms": 206041,
     "quality_warnings": [
       {
         "kind": "low_carry_rate",
@@ -92,10 +98,10 @@
   },
   "previous": {
     "profile": "scifi",
-    "timestamp": "2026-05-10T02:55:31.545583500+00:00",
-    "task_count": 23,
-    "pass": 23,
-    "fail": 0,
+    "timestamp": "2026-05-10T06:23:55.445615100+00:00",
+    "task_count": 31,
+    "pass": 30,
+    "fail": 1,
     "average_after_score": 0.64335704,
     "average_score_delta": 0.0,
     "metric_after_average": {
@@ -129,6 +135,9 @@
     "task_status": {
       "canon_conflict:第三章": "pass",
       "canon_conflict:第二章": "pass",
+      "canon_forbidden_claim:第一章": "pass",
+      "canon_proposed_not_hard:第一章": "pass",
+      "canon_required_cost:第二章": "pass",
       "chapter_generation:第一章": "pass",
       "chapter_generation:第三章": "pass",
       "chapter_generation:第二章": "pass",
@@ -147,9 +156,12 @@
       "quality_evaluation:第二章": "pass",
       "quality_signals:第三章": "pass",
       "quality_signals:第二章": "pass",
+      "scene_contract_prompt:第一章": "pass",
+      "scene_contract_prompt:第二章": "pass",
       "state_delta_trace:第三章": "pass",
       "targeted_revision:第三章": "pass",
-      "targeted_revision:第二章": "pass"
+      "targeted_revision:第二章": "pass",
+      "world_asset_contract:第一章": "pass"
     },
     "task_after_score": {
       "chapter_generation:第一章": 0.56652796,
@@ -164,7 +176,9 @@
       "targeted_revision:第三章": 0.6576,
       "targeted_revision:第二章": 0.6136
     },
-    "failing_tasks": [],
+    "failing_tasks": [
+      "canon_forbidden_claim:第一章"
+    ],
     "repair_rate": 0.0,
     "min_chars": 0,
     "max_chars": 0,
@@ -173,8 +187,8 @@
     "p95_latency_ms": 0
   },
   "delta": {
-    "pass_delta": 0,
-    "fail_delta": 0,
+    "pass_delta": 1,
+    "fail_delta": -1,
     "average_after_score_delta": 0.0,
     "average_score_delta_delta": 0.0,
     "metric_after_average_delta": {

@@ -79,6 +79,7 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         Some(600),
         context.craft_rule_stats.as_ref(),
         &context.craft_memory_prompt_samples,
+        None,
     );
 
     let system_prompt = if !craft_packet.chapter_discipline.is_empty() {

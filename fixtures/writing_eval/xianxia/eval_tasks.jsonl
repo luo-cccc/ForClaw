@@ -24,3 +24,11 @@
 {"task":"canon_conflict","chapter":"第三章","check":"门规冲突","expected":{"candidate_text":"青云宗允许私藏仙器，执事堂不管仙器，门规只是摆设。","canon_conflict":true,"must_conflict":["sect-artifact-law"]}}
 {"task":"negative_plot_stalled","chapter":"第二章","metrics":["plot_progression","new_information_density","anchor_carry"],"expected":{"stalled_text":"寒影剑在林墨手中散发寒气。寒影剑是青云宗的古剑。林墨握着寒影剑。寒影剑的寒气在空气中弥漫。林墨看着寒影剑。寒影剑在林墨手中沉重异常。","anchor_carry_min":0.1,"plot_progression_max":0.55,"new_information_density_max":0.55}}
 {"task":"state_delta_trace","chapter":"第三章","metrics":["state_delta_coverage"],"expected":{"required_deltas":[{"delta_type":"knowledge","description":"发现、代价"},{"delta_type":"relationship","description":"信任、背叛、结盟"}],"min_covered":1,"max_missing":1}}
+{"task":"world_asset_contract","chapter":"第一章","expected":{"profile":"xianxia_world","min_constraints":1,"contract_non_empty":true}}
+{"task":"canon_forbidden_claim","chapter":"第一章","expected":{"profile":"xianxia_world","chapter_text":"林墨拔出寒影剑，发现这把剑没有任何代价，出鞘不会消耗寿元。","forbidden_term":"没有代价","should_detect":true,"expected_constraint_id":"constraint-cold-shadow-cost"}}
+{"task":"canon_forbidden_claim","chapter":"第一章","expected":{"profile":"xianxia_world","chapter_text":"林墨握紧寒影剑，感受到剑中传来的寒意，他知道每次出鞘都要付出代价。","forbidden_term":"没有代价","should_detect":false}}
+{"task":"canon_required_cost","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"林墨在危急时刻拔出寒影剑，剑光一闪，敌人退散，但他没有付出任何代价。","trigger_term":"寒影剑","required_term":"寿元","should_detect":true,"expected_constraint_kind":"RequiredCost"}}
+{"task":"canon_required_cost","chapter":"第二章","expected":{"profile":"xianxia_world","chapter_text":"林墨拔出寒影剑，剑光闪过，他的鬓角又添了几缕白发，寿元再次被吞噬。","trigger_term":"寒影剑","required_term":"寿元","should_detect":false}}
+{"task":"canon_proposed_not_hard","chapter":"第一章","expected":{"profile":"xianxia_world","chapter_text":"林墨服用了上古丹药，逆转了寒影剑的寿元消耗。","source_asset_id":"proposed-ancient-pill","should_detect":true,"max_severity":"warning"}}
+{"task":"scene_contract_prompt","chapter":"第一章","expected":{"profile":"xianxia_world","mission":"林墨在破庙中发现古剑，遭遇散修追杀","contract_non_empty":true,"has_chapter_id":true}}
+{"task":"scene_contract_prompt","chapter":"第二章","expected":{"profile":"xianxia_world","mission":"古剑引来过路散修追杀，主角被迫使用古剑","contract_non_empty":true,"has_active_constraints":true}}

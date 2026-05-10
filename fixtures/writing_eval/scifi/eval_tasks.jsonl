@@ -21,3 +21,11 @@
 {"task":"canon_conflict","chapter":"第三章","check":"CEO非法业务冲突","expected":{"candidate_text":"沈重山公开反对记忆编辑，CEO没有参与非法业务，他一直致力于保护员工记忆。","canon_conflict":true,"must_conflict":["ceo-secret"]}}
 {"task":"negative_plot_stalled","chapter":"第二章","metrics":["plot_progression","new_information_density","anchor_carry"],"expected":{"stalled_text":"记忆备份系统在服务器上运行。记忆备份是沈重山公司的核心。林晓查看记忆备份日志。记忆备份的数据在屏幕上闪烁。记忆备份记录着每个人的过去。","anchor_carry_min":0.1,"plot_progression_max":0.55,"new_information_density_max":0.55}}
 {"task":"state_delta_trace","chapter":"第三章","metrics":["state_delta_coverage"],"expected":{"required_deltas":[{"delta_type":"knowledge","description":"解密、密钥"},{"delta_type":"possession","description":"删除、证据"}],"min_covered":1,"max_missing":1}}
+{"task":"world_asset_contract","chapter":"第一章","expected":{"profile":"scifi_world","min_constraints":1,"contract_non_empty":true}}
+{"task":"canon_forbidden_claim","chapter":"第一章","expected":{"profile":"scifi_world","chapter_text":"沈重山公开宣布，NeuroLink有权删除员工的创伤记忆，这是完全合法的公司权利。","forbidden_term":"删除","should_detect":true,"expected_constraint_id":"constraint-forbidden-memory-wipe"}}
+{"task":"canon_forbidden_claim","chapter":"第一章","expected":{"profile":"scifi_world","chapter_text":"林晓查阅了《神经权利法案》，确认任何组织不得擅自抹除他人记忆。","forbidden_term":"删除","should_detect":false}}
+{"task":"canon_required_cost","chapter":"第二章","expected":{"profile":"scifi_world","chapter_text":"林晓用张远留下的密钥解密了文件，发现证据还在，密钥也完好无损。","trigger_term":"密钥","required_term":"销毁","should_detect":true,"expected_constraint_kind":"RequiredCost"}}
+{"task":"canon_required_cost","chapter":"第二章","expected":{"profile":"scifi_world","chapter_text":"林晓将密钥插入终端，解密完成后，屏幕上显示密钥已自动销毁。","trigger_term":"密钥","required_term":"销毁","should_detect":false}}
+{"task":"canon_proposed_not_hard","chapter":"第一章","expected":{"profile":"scifi_world","chapter_text":"备份系统的AI突然开口说话，它已经有了自我意识。","source_asset_id":"proposed-ai-consciousness","should_detect":true,"max_severity":"warning"}}
+{"task":"scene_contract_prompt","chapter":"第一章","expected":{"profile":"scifi_world","mission":"林晓发现废弃备份记忆，决定拷贝证据","contract_non_empty":true,"has_chapter_id":true}}
+{"task":"scene_contract_prompt","chapter":"第二章","expected":{"profile":"scifi_world","mission":"张远发现异常访问记录，留给林晓加密密钥后辞职","contract_non_empty":true,"has_active_constraints":true}}

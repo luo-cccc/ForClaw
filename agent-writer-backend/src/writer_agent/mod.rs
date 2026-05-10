@@ -34,6 +34,9 @@ pub mod feedback;
 pub mod memory;
 pub mod metacognition;
 
+// ── World Bible & Canon ──
+pub mod world_bible;
+
 // ── Input Governance ──
 pub mod input_governance;
 
