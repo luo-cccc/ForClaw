@@ -195,7 +195,7 @@ pub fn compile_empowerment_prompt_with_memory(
         .sum::<usize>();
 
     let scene_contract_prompt = scene_contract
-        .map(|sc| format_scene_contract_prompt(sc))
+        .map(format_scene_contract_prompt)
         .unwrap_or_default();
 
     EmpowermentPromptPacket {

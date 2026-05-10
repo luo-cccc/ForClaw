@@ -575,24 +575,38 @@ fn craft_memory_samples_flow_into_prompt_section() {
 
 #[test]
 fn eval_world_assets_fixture_loads_xianxia() {
-    use agent_writer_lib::writer_agent::world_bible::{WorldAsset, compile_canon_constraints};
-    let path = fixture_dir().join("xianxia_world").join("world_assets.json");
+    use agent_writer_lib::writer_agent::world_bible::{compile_canon_constraints, WorldAsset};
+    let path = fixture_dir()
+        .join("xianxia_world")
+        .join("world_assets.json");
     let text = std::fs::read_to_string(path).unwrap();
     let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
-    assert!(assets.len() >= 5, "xianxia_world should have at least 5 assets");
+    assert!(
+        assets.len() >= 5,
+        "xianxia_world should have at least 5 assets"
+    );
     let constraints = compile_canon_constraints(&assets);
-    assert!(!constraints.is_empty(), "should compile at least one constraint from rules");
+    assert!(
+        !constraints.is_empty(),
+        "should compile at least one constraint from rules"
+    );
 }
 
 #[test]
 fn eval_world_assets_fixture_loads_scifi() {
-    use agent_writer_lib::writer_agent::world_bible::{WorldAsset, compile_canon_constraints};
+    use agent_writer_lib::writer_agent::world_bible::{compile_canon_constraints, WorldAsset};
     let path = fixture_dir().join("scifi_world").join("world_assets.json");
     let text = std::fs::read_to_string(path).unwrap();
     let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
-    assert!(assets.len() >= 5, "scifi_world should have at least 5 assets");
+    assert!(
+        assets.len() >= 5,
+        "scifi_world should have at least 5 assets"
+    );
     let constraints = compile_canon_constraints(&assets);
-    assert!(!constraints.is_empty(), "should compile at least one constraint from rules");
+    assert!(
+        !constraints.is_empty(),
+        "should compile at least one constraint from rules"
+    );
 }
 
 #[test]
@@ -618,14 +632,22 @@ fn eval_scifi_has_world_bible_task_coverage() {
 #[test]
 fn eval_world_asset_proposed_rule_downgraded() {
     use agent_writer_lib::writer_agent::world_bible::{
-        WorldAsset, compile_canon_constraints, ConstraintSeverity,
+        compile_canon_constraints, ConstraintSeverity, WorldAsset,
     };
-    let path = fixture_dir().join("xianxia_world").join("world_assets.json");
+    let path = fixture_dir()
+        .join("xianxia_world")
+        .join("world_assets.json");
     let text = std::fs::read_to_string(path).unwrap();
     let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
     let constraints = compile_canon_constraints(&assets);
-    let proposed_constraint = constraints.iter().find(|c| c.source_asset_id == "proposed-ancient-pill");
+    let proposed_constraint = constraints
+        .iter()
+        .find(|c| c.source_asset_id == "proposed-ancient-pill");
     if let Some(c) = proposed_constraint {
-        assert_eq!(c.severity, ConstraintSeverity::Warning, "proposed rule should be downgraded to Warning");
+        assert_eq!(
+            c.severity,
+            ConstraintSeverity::Warning,
+            "proposed rule should be downgraded to Warning"
+        );
     }
 }

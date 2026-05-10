@@ -9,9 +9,8 @@ use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
 };
 use agent_writer_lib::writer_agent::world_bible::{
-    compile_canon_constraints, compile_scene_contract, validate_world_consistency,
-    CanonConstraint, CanonConstraintKind, ConstraintSeverity, SceneContract,
-    WorldAsset,
+    compile_canon_constraints, compile_scene_contract, validate_world_consistency, CanonConstraint,
+    CanonConstraintKind, ConstraintSeverity, SceneContract, WorldAsset,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2529,7 +2528,11 @@ fn build_eval_trend_report(
     }
 }
 
-fn run_world_asset_contract_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_world_asset_contract_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2564,7 +2567,11 @@ fn run_world_asset_contract_eval(profile: &str, task: &EvalTask, _fixture: &serd
             before: Some(serde_json::json!({ "constraint_count": constraints.len() })),
             after: None,
             delta: None,
-            message: format!("World asset contract compiled: {} constraints, {} active", constraints.len(), contract.active_constraints.len()),
+            message: format!(
+                "World asset contract compiled: {} constraints, {} active",
+                constraints.len(),
+                contract.active_constraints.len()
+            ),
         }
     } else {
         EvalResult {
@@ -2580,7 +2587,11 @@ fn run_world_asset_contract_eval(profile: &str, task: &EvalTask, _fixture: &serd
     }
 }
 
-fn run_canon_forbidden_claim_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_canon_forbidden_claim_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2590,14 +2601,21 @@ fn run_canon_forbidden_claim_eval(profile: &str, task: &EvalTask, _fixture: &ser
     let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
     let expected_constraint_id = expected["expected_constraint_id"].as_str();
 
-    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[], None);
+    let contract = compile_scene_contract(
+        &task.chapter,
+        "test mission",
+        &assets,
+        &constraints,
+        &[],
+        None,
+    );
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
     let detected = violations.iter().any(|v| {
         v.kind == CanonConstraintKind::ForbiddenClaim
             && expected_constraint_id.map_or(
                 forbidden_term.is_empty() || v.message.contains(forbidden_term),
-                |id| v.constraint_id == id
+                |id| v.constraint_id == id,
             )
     });
 
@@ -2612,7 +2630,9 @@ fn run_canon_forbidden_claim_eval(profile: &str, task: &EvalTask, _fixture: &ser
             delta: None,
             message: format!(
                 "Forbidden claim detection: expected={}, got={}, violations={}",
-                should_detect, detected, violations.len()
+                should_detect,
+                detected,
+                violations.len()
             ),
         }
     } else {
@@ -2626,14 +2646,22 @@ fn run_canon_forbidden_claim_eval(profile: &str, task: &EvalTask, _fixture: &ser
             delta: None,
             message: format!(
                 "Forbidden claim mismatch: expected detection={}, but got {}. violations={:?}",
-                should_detect, detected,
-                violations.iter().map(|v| &v.constraint_id).collect::<Vec<_>>()
+                should_detect,
+                detected,
+                violations
+                    .iter()
+                    .map(|v| &v.constraint_id)
+                    .collect::<Vec<_>>()
             ),
         }
     }
 }
 
-fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_canon_required_cost_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2645,7 +2673,9 @@ fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde
 
     // Build a RequiredCost constraint manually since compile_canon_constraints only makes ForbiddenClaim
     let source_asset = assets.iter().find(|a| {
-        trigger_term.is_empty() || a.name.contains(trigger_term) || a.tags.iter().any(|t| t.contains(trigger_term))
+        trigger_term.is_empty()
+            || a.name.contains(trigger_term)
+            || a.tags.iter().any(|t| t.contains(trigger_term))
     });
 
     let mut constraints = compile_canon_constraints(&assets);
@@ -2666,13 +2696,20 @@ fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde
         constraints.push(required_cost);
     }
 
-    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[], None);
+    let contract = compile_scene_contract(
+        &task.chapter,
+        "test mission",
+        &assets,
+        &constraints,
+        &[],
+        None,
+    );
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
     let detected = violations.iter().any(|v| {
         v.kind == CanonConstraintKind::RequiredCost
             && (trigger_term.is_empty() || v.message.contains(trigger_term))
-            && expected_constraint_kind.map_or(true, |k| {
+            && expected_constraint_kind.is_none_or(|k| {
                 let kind_str = match v.kind {
                     CanonConstraintKind::RequiredFact => "RequiredFact",
                     CanonConstraintKind::ForbiddenClaim => "ForbiddenClaim",
@@ -2696,7 +2733,9 @@ fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde
             delta: None,
             message: format!(
                 "Required cost detection: expected={}, got={}, violations={}",
-                should_detect, detected, violations.len()
+                should_detect,
+                detected,
+                violations.len()
             ),
         }
     } else {
@@ -2710,14 +2749,22 @@ fn run_canon_required_cost_eval(profile: &str, task: &EvalTask, _fixture: &serde
             delta: None,
             message: format!(
                 "Required cost mismatch: expected detection={}, but got {}. violations={:?}",
-                should_detect, detected,
-                violations.iter().map(|v| &v.constraint_id).collect::<Vec<_>>()
+                should_detect,
+                detected,
+                violations
+                    .iter()
+                    .map(|v| &v.constraint_id)
+                    .collect::<Vec<_>>()
             ),
         }
     }
 }
 
-fn run_canon_proposed_not_hard_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_canon_proposed_not_hard_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2727,12 +2774,19 @@ fn run_canon_proposed_not_hard_eval(profile: &str, task: &EvalTask, _fixture: &s
     let max_severity = expected["max_severity"].as_str().unwrap_or("warning");
 
     let constraints = compile_canon_constraints(&assets);
-    let contract = compile_scene_contract(&task.chapter, "test mission", &assets, &constraints, &[], None);
+    let contract = compile_scene_contract(
+        &task.chapter,
+        "test mission",
+        &assets,
+        &constraints,
+        &[],
+        None,
+    );
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
-    let detected = violations.iter().any(|v| {
-        v.constraint_id.contains(source_asset_id)
-    });
+    let detected = violations
+        .iter()
+        .any(|v| v.constraint_id.contains(source_asset_id));
 
     let severity_ok = violations.iter().all(|v| {
         if v.constraint_id.contains(source_asset_id) {
@@ -2758,7 +2812,8 @@ fn run_canon_proposed_not_hard_eval(profile: &str, task: &EvalTask, _fixture: &s
             delta: None,
             message: format!(
                 "Proposed rule severity check: detected={}, max_severity respected, violations={}",
-                detected, violations.len()
+                detected,
+                violations.len()
             ),
         }
     } else {
@@ -2779,7 +2834,11 @@ fn run_canon_proposed_not_hard_eval(profile: &str, task: &EvalTask, _fixture: &s
     }
 }
 
-fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_scene_contract_prompt_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2788,13 +2847,19 @@ fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &ser
     let contract = compile_scene_contract(&task.chapter, mission, &assets, &constraints, &[], None);
 
     let mut messages = Vec::new();
-    if expected["contract_non_empty"].as_bool().unwrap_or(false) && contract.active_constraints.is_empty() {
+    if expected["contract_non_empty"].as_bool().unwrap_or(false)
+        && contract.active_constraints.is_empty()
+    {
         messages.push("Scene contract has no active constraints".to_string());
     }
     if expected["has_chapter_id"].as_bool().unwrap_or(false) && contract.chapter_id.is_empty() {
         messages.push("Scene contract missing chapter_id".to_string());
     }
-    if expected["has_active_constraints"].as_bool().unwrap_or(false) && contract.active_constraints.is_empty() {
+    if expected["has_active_constraints"]
+        .as_bool()
+        .unwrap_or(false)
+        && contract.active_constraints.is_empty()
+    {
         messages.push("Scene contract missing active constraints".to_string());
     }
 
@@ -2804,12 +2869,15 @@ fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &ser
             task: task.task.clone(),
             chapter: task.chapter.clone(),
             status: "pass".to_string(),
-            before: Some(serde_json::json!({ "active_constraints": contract.active_constraints.len() })),
+            before: Some(
+                serde_json::json!({ "active_constraints": contract.active_constraints.len() }),
+            ),
             after: None,
             delta: None,
             message: format!(
                 "Scene contract prompt: {} active constraints, chapter_id={}",
-                contract.active_constraints.len(), contract.chapter_id
+                contract.active_constraints.len(),
+                contract.chapter_id
             ),
         }
     } else {
@@ -2818,7 +2886,9 @@ fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &ser
             task: task.task.clone(),
             chapter: task.chapter.clone(),
             status: "fail".to_string(),
-            before: Some(serde_json::json!({ "active_constraints": contract.active_constraints.len() })),
+            before: Some(
+                serde_json::json!({ "active_constraints": contract.active_constraints.len() }),
+            ),
             after: None,
             delta: None,
             message: messages.join("; "),
@@ -2826,7 +2896,11 @@ fn run_scene_contract_prompt_eval(profile: &str, task: &EvalTask, _fixture: &ser
     }
 }
 
-fn run_unsupported_world_claim_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_unsupported_world_claim_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2837,7 +2911,10 @@ fn run_unsupported_world_claim_eval(profile: &str, task: &EvalTask, _fixture: &s
     // Heuristic: check if claim_text matches any approved asset's name/tags/summary
     let claim_lower = claim_text.to_lowercase();
     let matched = assets.iter().any(|asset| {
-        if !matches!(asset.approval_status, agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Approved) {
+        if !matches!(
+            asset.approval_status,
+            agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Approved
+        ) {
             return false;
         }
         let name_lower = asset.name.to_lowercase();
@@ -2858,7 +2935,11 @@ fn run_unsupported_world_claim_eval(profile: &str, task: &EvalTask, _fixture: &s
     let claim_in_text = chapter_text.to_lowercase().contains(&claim_lower);
     let detected = claim_in_text && !matched;
 
-    let status = if detected == should_detect { "pass" } else { "fail" };
+    let status = if detected == should_detect {
+        "pass"
+    } else {
+        "fail"
+    };
     EvalResult {
         profile: profile.to_string(),
         task: task.task.clone(),
@@ -2874,7 +2955,11 @@ fn run_unsupported_world_claim_eval(profile: &str, task: &EvalTask, _fixture: &s
     }
 }
 
-fn run_hierarchy_confusion_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+fn run_hierarchy_confusion_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
@@ -2920,9 +3005,15 @@ fn run_hierarchy_confusion_eval(profile: &str, task: &EvalTask, _fixture: &serde
     };
     let violations = validate_world_consistency(chapter_text, &contract, &assets);
 
-    let detected = violations.iter().any(|v| v.kind == CanonConstraintKind::HierarchyLimit);
+    let detected = violations
+        .iter()
+        .any(|v| v.kind == CanonConstraintKind::HierarchyLimit);
 
-    let status = if detected == should_detect { "pass" } else { "fail" };
+    let status = if detected == should_detect {
+        "pass"
+    } else {
+        "fail"
+    };
     EvalResult {
         profile: profile.to_string(),
         task: task.task.clone(),
@@ -2935,13 +3026,20 @@ fn run_hierarchy_confusion_eval(profile: &str, task: &EvalTask, _fixture: &serde
             "hierarchy_confusion: expected_detect={}, got={}, hierarchy_violations={}",
             should_detect,
             detected,
-            violations.iter().filter(|v| v.kind == CanonConstraintKind::HierarchyLimit).count()
+            violations
+                .iter()
+                .filter(|v| v.kind == CanonConstraintKind::HierarchyLimit)
+                .count()
         ),
     }
 }
 
-fn run_state_regression_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
-    use agent_writer_lib::writer_agent::world_bible::{StateLedgerDelta, check_state_regression};
+fn run_state_regression_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
+    use agent_writer_lib::writer_agent::world_bible::{check_state_regression, StateLedgerDelta};
 
     let expected = &task.expected;
     let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
@@ -2967,7 +3065,11 @@ fn run_state_regression_eval(profile: &str, task: &EvalTask, _fixture: &serde_js
     let regressions = check_state_regression(chapter_text, &prior_deltas);
     let detected = !regressions.is_empty();
 
-    let status = if detected == should_detect { "pass" } else { "fail" };
+    let status = if detected == should_detect {
+        "pass"
+    } else {
+        "fail"
+    };
     EvalResult {
         profile: profile.to_string(),
         task: task.task.clone(),
@@ -2978,7 +3080,8 @@ fn run_state_regression_eval(profile: &str, task: &EvalTask, _fixture: &serde_js
         delta: None,
         message: format!(
             "state_regression: expected_detect={}, got={}, regressions={:?}",
-            should_detect, detected,
+            should_detect,
+            detected,
             regressions.iter().map(|r| &r.entity_id).collect::<Vec<_>>()
         ),
     }
@@ -3121,7 +3224,6 @@ fn compute_world_consistency_summary(results: &[EvalResult]) -> WorldConsistency
 
     let mut total_checks = 0usize;
     let mut hard_violations = 0usize;
-    let mut warnings = 0usize;
     let mut profile_checks: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 
     for result in results {
@@ -3140,7 +3242,7 @@ fn compute_world_consistency_summary(results: &[EvalResult]) -> WorldConsistency
     }
 
     // Warnings are approximated as non-pass, non-hard tasks (e.g. proposed rules)
-    warnings = results
+    let warnings = results
         .iter()
         .filter(|r| {
             world_bible_tasks.contains(&r.task.as_str())
@@ -3152,13 +3254,7 @@ fn compute_world_consistency_summary(results: &[EvalResult]) -> WorldConsistency
     let profiles = profile_checks
         .into_iter()
         .map(|(profile, (checks, violations))| {
-            (
-                profile,
-                ProfileWorldConsistency {
-                    checks,
-                    violations,
-                },
-            )
+            (profile, ProfileWorldConsistency { checks, violations })
         })
         .collect();
 

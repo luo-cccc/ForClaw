@@ -19,6 +19,7 @@ impl ContextComposer {
         self.max_chars.saturating_sub(char_count(&self.text))
     }
 
+    #[allow(dead_code)]
     fn add_source(
         &mut self,
         source_type: &str,
@@ -36,6 +37,7 @@ impl ContextComposer {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn add_source_with_meta(
         &mut self,
         source_type: &str,

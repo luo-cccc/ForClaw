@@ -404,8 +404,12 @@ pub fn check_sprint_quality_gate(
     }
 
     // strict 模式下，hard world consistency violations 也视为 fatal
-    let has_hard_world_violation = qr.world_consistency_violations.iter()
-        .any(|v| matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard));
+    let has_hard_world_violation = qr.world_consistency_violations.iter().any(|v| {
+        matches!(
+            v.severity,
+            crate::writer_agent::world_bible::ConstraintSeverity::Hard
+        )
+    });
     if sprint.stop_on_fatal_issue && has_hard_world_violation {
         return Err(format!(
             "Sprint quality gate: hard world consistency violation detected in chapter {}",

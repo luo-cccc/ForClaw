@@ -204,7 +204,11 @@ mod context_quality_tests {
                     id: format!("s{}", i),
                     label: t.to_string(),
                     original_chars: 100,
-                    included_chars: if truncated_mask.get(i).copied().unwrap_or(false) { 30 } else { 100 },
+                    included_chars: if truncated_mask.get(i).copied().unwrap_or(false) {
+                        30
+                    } else {
+                        100
+                    },
                     truncated: truncated_mask.get(i).copied().unwrap_or(false),
                     score: None,
                     taxonomy: String::new(),
@@ -329,10 +333,23 @@ mod context_quality_tests {
         let packed = make_packed(&["outline", "lorebook", "chapter"], &[true, false, true]);
         let report = evaluate_context_quality("r8", &packed, &[]);
         assert_eq!(report.truncation_evidence.len(), 2);
-        assert!(report.truncation_evidence.iter().any(|e| e.source_type == "outline"));
-        assert!(report.truncation_evidence.iter().any(|e| e.source_type == "chapter"));
-        assert!(!report.truncation_evidence.iter().any(|e| e.source_type == "lorebook"));
-        let outline_ev = report.truncation_evidence.iter().find(|e| e.source_type == "outline").unwrap();
+        assert!(report
+            .truncation_evidence
+            .iter()
+            .any(|e| e.source_type == "outline"));
+        assert!(report
+            .truncation_evidence
+            .iter()
+            .any(|e| e.source_type == "chapter"));
+        assert!(!report
+            .truncation_evidence
+            .iter()
+            .any(|e| e.source_type == "lorebook"));
+        let outline_ev = report
+            .truncation_evidence
+            .iter()
+            .find(|e| e.source_type == "outline")
+            .unwrap();
         assert_eq!(outline_ev.original_chars, 100);
         assert_eq!(outline_ev.included_chars, 30);
         assert!(outline_ev.reason.contains("truncated"));
@@ -340,8 +357,7 @@ mod context_quality_tests {
 
     #[test]
     fn critical_recommendation_maps_to_stop_action() {
-        let packed = make_packed(&[], &[]
-        );
+        let packed = make_packed(&[], &[]);
         let report = evaluate_context_quality(
             "r9",
             &packed,
@@ -353,13 +369,9 @@ mod context_quality_tests {
 
     #[test]
     fn supplement_recommendation_maps_to_request_context_supplement() {
-        let packed = make_packed(&["outline"], &[false]
-        );
-        let report = evaluate_context_quality(
-            "r10",
-            &packed,
-            &["outline".into(), "lorebook".into()],
-        );
+        let packed = make_packed(&["outline"], &[false]);
+        let report =
+            evaluate_context_quality("r10", &packed, &["outline".into(), "lorebook".into()]);
         let action = report.recommendation.to_step_failure_action();
         assert!(
             matches!(
@@ -379,7 +391,10 @@ mod context_quality_tests {
             &[false; 4],
         );
         let report = evaluate_context_quality("r11", &packed, &[]);
-        assert_eq!(report.recommendation, ContextQualityRecommendation::Sufficient);
+        assert_eq!(
+            report.recommendation,
+            ContextQualityRecommendation::Sufficient
+        );
         assert_eq!(report.recommendation.to_step_failure_action(), None);
     }
 }

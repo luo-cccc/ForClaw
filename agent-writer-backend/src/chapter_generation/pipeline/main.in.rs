@@ -1878,7 +1878,7 @@ fn write_agent_checkpoint(
     request_id: &str,
     counter: &mut usize,
     phase: agent_harness_core::execution_plan::CheckpointPhase,
-    chapter_title: &str,
+    _chapter_title: &str,
     budget_spent_micros: u64,
     artifact_refs: &[&str],
     resume_policy: agent_harness_core::execution_plan::ResumePolicy,
@@ -1906,6 +1906,7 @@ fn write_agent_checkpoint(
     }
 }
 
+#[allow(dead_code)]
 fn load_world_assets_for_project<P: ChapterGenerationProject>(
     project: &P,
     _project_id: &str,
@@ -1918,10 +1919,8 @@ fn load_world_assets_for_project<P: ChapterGenerationProject>(
         Ok(t) => t,
         Err(_) => return Vec::new(),
     };
-    match serde_json::from_str::<Vec<crate::writer_agent::world_bible::WorldAsset>>(&text) {
-        Ok(assets) => assets,
-        Err(_) => Vec::new(),
-    }
+    serde_json::from_str::<Vec<crate::writer_agent::world_bible::WorldAsset>>(&text)
+        .unwrap_or_default()
 }
 
 fn make_draft_title(target_title: &str, request_id: &str) -> String {

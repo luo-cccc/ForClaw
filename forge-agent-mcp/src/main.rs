@@ -293,9 +293,9 @@ async fn handle_message(backend: &HeadlessBackend, message: JsonRpcMessage) -> O
             if let Some(id) = message.id {
                 match call_tool(backend, message.params).await {
                     Ok(result) => Some(success_response(id, result)),
-                    Err(error) => Some(success_response(
+                    Err(classified) => Some(success_response(
                         id,
-                        tool_error_result(ErrorKind::Backend, error),
+                        tool_error_result(classified.kind, classified.message),
                     )),
                 }
             } else {

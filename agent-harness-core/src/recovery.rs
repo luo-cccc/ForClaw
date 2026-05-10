@@ -14,6 +14,7 @@ pub struct RuntimeCallRecord {
     pub input_redacted_summary: String,
     pub output_summary: String,
     pub duration_ms: u64,
+    pub ttft_ms: Option<u64>,
     pub status: RuntimeCallStatus,
     pub remediation_code: Option<String>,
 }
@@ -75,7 +76,10 @@ pub fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
                     || key_lower.contains("authorization");
 
                 if is_sensitive_key {
-                    out.insert(k.clone(), serde_json::Value::String("[REDACTED]".to_string()));
+                    out.insert(
+                        k.clone(),
+                        serde_json::Value::String("[REDACTED]".to_string()),
+                    );
                 } else if let serde_json::Value::String(s) = v {
                     out.insert(k.clone(), serde_json::Value::String(redact_str(s)));
                 } else {
@@ -201,13 +205,26 @@ pub fn classify_failure_kind(error: &str, remediation_code: Option<&str>) -> Fai
     if lower.contains("doom loop") || code == "tool_doom_loop" {
         return FailureKind::DoomLoop;
     }
-    if lower.contains("unsafe") || lower.contains("destructive") || lower.contains("overwrite") || code == "abort_unsafe_write" {
+    if lower.contains("unsafe")
+        || lower.contains("destructive")
+        || lower.contains("overwrite")
+        || code == "abort_unsafe_write"
+    {
         return FailureKind::UnsafeWrite;
     }
-    if lower.contains("rate limit") || lower.contains("429") || lower.contains("timeout") || lower.contains("transient") || code == "retry_transient" {
+    if lower.contains("rate limit")
+        || lower.contains("429")
+        || lower.contains("timeout")
+        || lower.contains("transient")
+        || code == "retry_transient"
+    {
         return FailureKind::ProviderTransient;
     }
-    if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized") || lower.contains("auth") {
+    if lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("auth")
+    {
         return FailureKind::ProviderAuth;
     }
     if lower.contains("budget") || lower.contains("ceiling") {
@@ -219,10 +236,17 @@ pub fn classify_failure_kind(error: &str, remediation_code: Option<&str>) -> Fai
     if lower.contains("context") && (lower.contains("missing") || lower.contains("unavailable")) {
         return FailureKind::ContextMissing;
     }
-    if code == "tool_not_in_allowed_list" || code == "tool_denied" || code == "request_approval" || code == "external_access_denied" {
+    if code == "tool_not_in_allowed_list"
+        || code == "tool_denied"
+        || code == "request_approval"
+        || code == "external_access_denied"
+    {
         return FailureKind::ToolPermission;
     }
-    if code == "tool_not_registered" || code == "refresh_inventory" || code == "missing_binary_or_resource" {
+    if code == "tool_not_registered"
+        || code == "refresh_inventory"
+        || code == "missing_binary_or_resource"
+    {
         return FailureKind::ToolSchema;
     }
     if lower.contains("conflict") || lower.contains("save conflict") || code == "save_conflict" {
@@ -371,6 +395,7 @@ mod recovery_tests {
             input_redacted_summary: "redacted".into(),
             output_summary: "ok".into(),
             duration_ms: 120,
+            ttft_ms: Some(80),
             status: RuntimeCallStatus::Success,
             remediation_code: None,
         };

@@ -247,7 +247,7 @@ mod tests {
         let tools = registry.list();
         let filtered = filter_tools_by_allowed_list(
             &tools,
-            &vec![
+            &[
                 "load_current_chapter".to_string(),
                 "search_lorebook".to_string(),
             ],
@@ -262,7 +262,7 @@ mod tests {
     fn filter_tools_by_allowed_list_empty_passes_all() {
         let registry = default_writing_tool_registry();
         let tools = registry.list();
-        let filtered = filter_tools_by_allowed_list(&tools, &vec![]);
+        let filtered = filter_tools_by_allowed_list(&tools, &[]);
         assert_eq!(filtered.len(), tools.len());
     }
 }

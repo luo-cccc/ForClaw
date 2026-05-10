@@ -1030,7 +1030,10 @@ fn step_contract_serialization_roundtrip() {
         step_id: "step-1".to_string(),
         input_summary: "load context".to_string(),
         required_context: vec!["outline".to_string()],
-        allowed_tools: vec!["load_current_chapter".to_string(), "search_lorebook".to_string()],
+        allowed_tools: vec![
+            "load_current_chapter".to_string(),
+            "search_lorebook".to_string(),
+        ],
         max_side_effect: ToolSideEffectLevel::Read,
         provider_allowed: false,
         success_evidence_required: vec!["chapter_text".to_string()],
@@ -1039,7 +1042,10 @@ fn step_contract_serialization_roundtrip() {
     let json = serde_json::to_string(&contract).unwrap();
     let decoded: StepContract = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.step_id, "step-1");
-    assert_eq!(decoded.allowed_tools, vec!["load_current_chapter", "search_lorebook"]);
+    assert_eq!(
+        decoded.allowed_tools,
+        vec!["load_current_chapter", "search_lorebook"]
+    );
     assert_eq!(decoded.success_evidence_required, vec!["chapter_text"]);
 }
 
@@ -1086,7 +1092,10 @@ fn execution_step_with_contract_and_evidence() {
         ..Default::default()
     };
     assert!(step.contract.is_some());
-    assert_eq!(step.contract.as_ref().unwrap().allowed_tools, vec!["read_tool"]);
+    assert_eq!(
+        step.contract.as_ref().unwrap().allowed_tools,
+        vec!["read_tool"]
+    );
 
     step.evidence = Some(StepEvidence {
         step_id: "step-0".to_string(),
@@ -1106,7 +1115,9 @@ fn plan_resume_skips_terminal_steps_with_contract() {
     let mut plan = compile_plan(&task, "p-resume-contract", 1);
 
     // Step 0: completed with contract
-    plan.steps[0].status = StepStatus::Completed { evidence: vec!["ok".to_string()] };
+    plan.steps[0].status = StepStatus::Completed {
+        evidence: vec!["ok".to_string()],
+    };
     plan.steps[0].step_state = ExecutionStepState::Completed;
     plan.steps[0].contract = Some(StepContract {
         step_id: "step-0".to_string(),
@@ -1147,7 +1158,10 @@ fn plan_resume_skips_terminal_steps_with_contract() {
     assert_eq!(plan.steps[1].status, StepStatus::Ready);
     // Contract is preserved
     assert!(plan.steps[1].contract.is_some());
-    assert_eq!(plan.steps[1].contract.as_ref().unwrap().allowed_tools, vec!["generate_bounded_continuation"]);
+    assert_eq!(
+        plan.steps[1].contract.as_ref().unwrap().allowed_tools,
+        vec!["generate_bounded_continuation"]
+    );
 }
 
 #[test]

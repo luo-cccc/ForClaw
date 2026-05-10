@@ -31,8 +31,8 @@ pub use compaction::{
 };
 pub use context_pack::{
     char_count, source_priority, truncate_text_report, ContextBudgetReport, ContextPacker,
-    ContextSourceReport, PackedContext, TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON, TAXONOMY_INSTRUCTION,
-    TAXONOMY_LORE, TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER,
+    ContextSourceReport, PackedContext, TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON,
+    TAXONOMY_INSTRUCTION, TAXONOMY_LORE, TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER,
     TAXONOMY_PROJECT_BRAIN, TAXONOMY_PROMISE, TAXONOMY_SCENE_PLAN, TAXONOMY_UNKNOWN,
 };
 pub use context_quality::{
@@ -57,7 +57,11 @@ pub use recovery::{
 pub use router::{
     classify_intent, classify_intent_simple, ClassificationSource, Intent, IntentClassification,
 };
-pub use run_trace::{AgentRunEvent, AgentRunEventKind, AgentRunReport, AgentRunStatus, AgentRunTrace, build_agent_run_report, PlanSummary, StepSummary, ProviderTimeline, ContextQualitySummary, BudgetSummary, FailureRecoverySummary};
+pub use run_trace::{
+    build_agent_run_report, AgentRunEvent, AgentRunEventKind, AgentRunReport, AgentRunStatus,
+    AgentRunTrace, BudgetSummary, ContextQualitySummary, FailureRecoverySummary, PlanSummary,
+    ProviderTimeline, StepSummary,
+};
 pub use task_packet::{
     FeedbackContract, FoundationCoverage, RequiredContext, TaskBelief, TaskPacket,
     TaskPacketValidationError, TaskScope, ToolPolicyContract,

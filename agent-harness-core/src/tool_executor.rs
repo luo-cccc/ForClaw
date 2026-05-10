@@ -354,7 +354,9 @@ fn remediation_for_handler_error(tool_name: &str, error: &str) -> Vec<ToolExecut
                 tool_name
             ),
         )
-    } else if lower.contains("context") && (lower.contains("overflow") || lower.contains("too long")) {
+    } else if lower.contains("context")
+        && (lower.contains("overflow") || lower.contains("too long"))
+    {
         (
             "shrink_context",
             format!(
@@ -362,7 +364,10 @@ fn remediation_for_handler_error(tool_name: &str, error: &str) -> Vec<ToolExecut
                 tool_name
             ),
         )
-    } else if lower.contains("unsafe") || lower.contains("destructive") || lower.contains("overwrite") {
+    } else if lower.contains("unsafe")
+        || lower.contains("destructive")
+        || lower.contains("overwrite")
+    {
         (
             "abort_unsafe_write",
             format!(
@@ -566,7 +571,9 @@ mod tests {
     async fn executor_remediation_codes_match_governance_spec() {
         // Missing tool -> refresh_inventory
         let mut executor = ToolExecutor::new(registry(), MockHandler);
-        let result = executor.execute("missing_tool", serde_json::json!({})).await;
+        let result = executor
+            .execute("missing_tool", serde_json::json!({}))
+            .await;
         assert!(result
             .remediation
             .iter()
@@ -602,7 +609,9 @@ mod tests {
         let mut executor = ToolExecutor::new(registry(), MockHandler);
         executor.set_allowed_tools(Some(vec!["read_tool".to_string()]));
 
-        let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
+        let result = executor
+            .execute("read_tool", serde_json::json!({"id": 1}))
+            .await;
 
         assert!(result.error.is_none());
         assert_eq!(result.output["tool"], "read_tool");
@@ -613,7 +622,9 @@ mod tests {
         let mut executor = ToolExecutor::new(registry(), MockHandler);
         executor.set_allowed_tools(Some(vec![]));
 
-        let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
+        let result = executor
+            .execute("read_tool", serde_json::json!({"id": 1}))
+            .await;
         assert!(result.error.is_none());
 
         let result2 = executor.execute("write_tool", serde_json::json!({})).await;
@@ -629,7 +640,9 @@ mod tests {
         let mut executor = ToolExecutor::new(registry(), MockHandler);
         executor.set_allowed_tools(None);
 
-        let result = executor.execute("read_tool", serde_json::json!({"id": 1})).await;
+        let result = executor
+            .execute("read_tool", serde_json::json!({"id": 1}))
+            .await;
         assert!(result.error.is_none());
     }
 
@@ -653,14 +666,22 @@ mod tests {
         executor.set_allowed_tools(Some(contract.allowed_tools.clone()));
 
         // Attempt to call write_tool (not in allowed list) -> blocked
-        let result = executor.execute("write_tool", serde_json::json!({"path": "/tmp/out.txt"})).await;
+        let result = executor
+            .execute("write_tool", serde_json::json!({"path": "/tmp/out.txt"}))
+            .await;
         assert!(
-            result.error.as_ref().is_some_and(|e| e.contains("not in the step's allowed_tools list")),
+            result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("not in the step's allowed_tools list")),
             "expected blocked by allowed_tools, got: {:?}",
             result.error
         );
         assert!(
-            result.remediation.iter().any(|r| r.code == "tool_not_in_allowed_list"),
+            result
+                .remediation
+                .iter()
+                .any(|r| r.code == "tool_not_in_allowed_list"),
             "expected remediation code tool_not_in_allowed_list"
         );
         let kind = result.failure_kind();
@@ -699,14 +720,25 @@ mod tests {
         let mut executor = ToolExecutor::new(registry(), MockHandler);
 
         // Call write_tool without any approval context -> denied
-        let result = executor.execute("write_tool", serde_json::json!({"path": "/workspace/chapter.md"})).await;
+        let result = executor
+            .execute(
+                "write_tool",
+                serde_json::json!({"path": "/workspace/chapter.md"}),
+            )
+            .await;
         assert!(
-            result.error.as_ref().is_some_and(|e| e.contains("requires explicit approval")),
+            result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("requires explicit approval")),
             "expected approval required error, got: {:?}",
             result.error
         );
         assert!(
-            result.remediation.iter().any(|r| r.code == "request_approval"),
+            result
+                .remediation
+                .iter()
+                .any(|r| r.code == "request_approval"),
             "expected remediation code request_approval"
         );
         let kind = result.failure_kind();

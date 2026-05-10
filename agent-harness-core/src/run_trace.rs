@@ -50,6 +50,7 @@ pub struct ProviderTimeline {
     pub latency_p90_ms: u64,
     pub latency_p95_ms: u64,
     pub avg_ttft_ms: u64,
+    pub avg_call_duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,10 +95,7 @@ pub fn build_agent_run_report(
 
     // ── Plan summary ──
     let (completed_steps, failed_steps, skipped_steps) = plan.summary();
-    let total_duration_ms = step_evidences
-        .iter()
-        .map(|e| e.completion_time_ms)
-        .sum();
+    let total_duration_ms = step_evidences.iter().map(|e| e.completion_time_ms).sum();
 
     let plan_summary = PlanSummary {
         plan_id: plan.plan_id.clone(),
@@ -157,13 +155,12 @@ pub fn build_agent_run_report(
         .collect();
 
     // ── Provider timeline ──
-    let provider_durations: Vec<u64> = runtime_calls
+    let provider_calls: Vec<&RuntimeCallRecord> = runtime_calls
         .iter()
         .filter(|rc| rc.call_type == RuntimeCallType::ProviderCall)
-        .map(|rc| rc.duration_ms)
         .collect();
 
-    let provider_timeline = if provider_durations.is_empty() {
+    let provider_timeline = if provider_calls.is_empty() {
         ProviderTimeline {
             total_calls: 0,
             total_duration_ms: 0,
@@ -171,16 +168,26 @@ pub fn build_agent_run_report(
             latency_p90_ms: 0,
             latency_p95_ms: 0,
             avg_ttft_ms: 0,
+            avg_call_duration_ms: 0,
         }
     } else {
-        let total_calls = provider_durations.len() as u32;
+        let total_calls = provider_calls.len() as u32;
+        let provider_durations: Vec<u64> = provider_calls.iter().map(|rc| rc.duration_ms).collect();
         let total_duration_ms: u64 = provider_durations.iter().sum();
         let mut sorted = provider_durations.clone();
         sorted.sort_unstable();
         let latency_p50_ms = percentile(&sorted, 0.50);
         let latency_p90_ms = percentile(&sorted, 0.90);
         let latency_p95_ms = percentile(&sorted, 0.95);
-        let avg_ttft_ms = total_duration_ms / total_calls as u64;
+        let avg_call_duration_ms = total_duration_ms / total_calls as u64;
+
+        // avg_ttft_ms: average of real TTFT values where available
+        let ttft_values: Vec<u64> = provider_calls.iter().filter_map(|rc| rc.ttft_ms).collect();
+        let avg_ttft_ms = if !ttft_values.is_empty() {
+            ttft_values.iter().sum::<u64>() / ttft_values.len() as u64
+        } else {
+            avg_call_duration_ms
+        };
 
         ProviderTimeline {
             total_calls,
@@ -189,6 +196,7 @@ pub fn build_agent_run_report(
             latency_p90_ms,
             latency_p95_ms,
             avg_ttft_ms,
+            avg_call_duration_ms,
         }
     };
 
@@ -223,8 +231,8 @@ pub fn build_agent_run_report(
         .sum();
     let total_tokens = total_prompt_tokens + total_completion_tokens;
     // Rough cost estimate: $0.0015 per 1K prompt tokens, $0.006 per 1K completion tokens
-    let estimated_cost_usd =
-        (total_prompt_tokens as f32 * 0.0015 / 1000.0) + (total_completion_tokens as f32 * 0.006 / 1000.0);
+    let estimated_cost_usd = (total_prompt_tokens as f32 * 0.0015 / 1000.0)
+        + (total_completion_tokens as f32 * 0.006 / 1000.0);
 
     let budget_summary = BudgetSummary {
         total_prompt_tokens,
@@ -236,9 +244,11 @@ pub fn build_agent_run_report(
 
     // ── Failure recovery ──
     let failure_recovery = match &plan.status {
-        PlanStatus::Failed { failed_step, reason } => {
-            let failure_kind =
-                crate::recovery::classify_failure_kind(reason, None);
+        PlanStatus::Failed {
+            failed_step,
+            reason,
+        } => {
+            let failure_kind = crate::recovery::classify_failure_kind(reason, None);
             let recovery_decision = crate::recovery::map_failure_to_recovery(
                 &failure_kind,
                 &crate::recovery::RecoveryContext::default(),
@@ -341,6 +351,8 @@ pub enum AgentRunEventKind {
     ToolSelected,
     ToolFinished,
     LlmDelta,
+    RetryAttempt,
+    Compaction,
     Completed,
     Failed,
     Cancelled,
@@ -465,6 +477,109 @@ impl AgentRunTrace {
             now_ms,
         );
     }
+
+    pub fn record_retry_attempt(
+        &mut self,
+        step_id: impl Into<String>,
+        attempt: u32,
+        reason: impl Into<String>,
+        now_ms: u64,
+    ) {
+        let step_id = step_id.into();
+        let reason = reason.into();
+        self.push(
+            AgentRunEventKind::RetryAttempt,
+            "retry_attempt",
+            Some(format!(
+                "step={} attempt={} reason={}",
+                step_id, attempt, reason
+            )),
+            serde_json::json!({
+                "stepId": step_id,
+                "attempt": attempt,
+                "reason": reason
+            }),
+            now_ms,
+        );
+    }
+
+    pub fn record_compaction(
+        &mut self,
+        before_tokens: u64,
+        after_tokens: u64,
+        tokens_saved: u64,
+        now_ms: u64,
+    ) {
+        self.push(
+            AgentRunEventKind::Compaction,
+            "compaction",
+            Some(format!(
+                "{} -> {} tokens (saved {})",
+                before_tokens, after_tokens, tokens_saved
+            )),
+            serde_json::json!({
+                "beforeTokens": before_tokens,
+                "afterTokens": after_tokens,
+                "tokensSaved": tokens_saved
+            }),
+            now_ms,
+        );
+    }
+
+    pub fn record_provider_guard(
+        &mut self,
+        allowed: bool,
+        model: impl Into<String>,
+        estimated_input_tokens: u64,
+        requested_output_tokens: u64,
+        now_ms: u64,
+    ) {
+        let model = model.into();
+        self.push(
+            AgentRunEventKind::ProviderGuardCheck,
+            if allowed {
+                "provider_guard_allowed"
+            } else {
+                "provider_guard_blocked"
+            },
+            Some(format!(
+                "model={} estimated_input={} requested_output={}",
+                model, estimated_input_tokens, requested_output_tokens
+            )),
+            serde_json::json!({
+                "allowed": allowed,
+                "model": model,
+                "estimatedInputTokens": estimated_input_tokens,
+                "requestedOutputTokens": requested_output_tokens
+            }),
+            now_ms,
+        );
+    }
+
+    pub fn record_context_window(
+        &mut self,
+        estimated_input: u64,
+        requested_output: u64,
+        should_warn: bool,
+        should_block: bool,
+        now_ms: u64,
+    ) {
+        self.push(
+            AgentRunEventKind::ContextWindowCheck,
+            "context_window_check",
+            Some(format!(
+                "estimated_input={} requested_output={} warn={} block={}",
+                estimated_input, requested_output, should_warn, should_block
+            )),
+            serde_json::json!({
+                "estimatedInput": estimated_input,
+                "requestedOutput": requested_output,
+                "shouldWarn": should_warn,
+                "shouldBlock": should_block
+            }),
+            now_ms,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +600,34 @@ mod tests {
         assert_eq!(trace.events[1].elapsed_ms, 50);
     }
 
+    #[test]
+    fn trace_records_retry_and_compaction() {
+        let mut trace = AgentRunTrace::new("run-1", "draft a scene", 1_000);
+        trace.record_retry_attempt("step-1", 1, "rate limit", 1_200);
+        trace.record_compaction(8000, 4000, 4000, 1_500);
+        trace.fail("max retries exceeded", 2_000);
+
+        assert_eq!(trace.status, AgentRunStatus::Failed);
+        assert_eq!(trace.events.len(), 4);
+        assert_eq!(trace.events[1].kind, AgentRunEventKind::RetryAttempt);
+        assert_eq!(trace.events[2].kind, AgentRunEventKind::Compaction);
+        assert_eq!(trace.events[1].metadata["reason"], "rate limit");
+    }
+
+    #[test]
+    fn trace_records_provider_guard_and_context_window() {
+        let mut trace = AgentRunTrace::new("run-1", "draft a scene", 1_000);
+        trace.record_provider_guard(true, "gpt-4", 1000, 500, 1_100);
+        trace.record_context_window(1000, 500, false, false, 1_200);
+        trace.complete(1_500);
+
+        assert_eq!(trace.events.len(), 4);
+        assert_eq!(trace.events[1].kind, AgentRunEventKind::ProviderGuardCheck);
+        assert_eq!(trace.events[2].kind, AgentRunEventKind::ContextWindowCheck);
+        assert_eq!(trace.events[1].metadata["allowed"], true);
+        assert_eq!(trace.events[2].metadata["shouldBlock"], false);
+    }
+
     // ── A6: AgentRunReport tests ──
 
     fn make_test_plan() -> ExecutionPlan {
@@ -498,7 +641,9 @@ mod tests {
                     goal: "preflight".to_string(),
                     allowed_tools: vec!["load_current_chapter".to_string()],
                     max_side_effect: ToolSideEffectLevel::Read,
-                    status: StepStatus::Completed { evidence: vec!["ok".to_string()] },
+                    status: StepStatus::Completed {
+                        evidence: vec!["ok".to_string()],
+                    },
                     evidence: Some(StepEvidence {
                         step_id: "step-0".to_string(),
                         artifact_refs: vec!["draft.txt".to_string()],
@@ -522,7 +667,9 @@ mod tests {
                     goal: "draft".to_string(),
                     allowed_tools: vec!["generate_bounded_continuation".to_string()],
                     max_side_effect: ToolSideEffectLevel::ProviderCall,
-                    status: StepStatus::Completed { evidence: vec!["ok".to_string()] },
+                    status: StepStatus::Completed {
+                        evidence: vec!["ok".to_string()],
+                    },
                     evidence: Some(StepEvidence {
                         step_id: "step-1".to_string(),
                         artifact_refs: vec!["chapter.txt".to_string()],
@@ -546,7 +693,9 @@ mod tests {
                     goal: "validate".to_string(),
                     allowed_tools: vec!["run_quality_diagnostics".to_string()],
                     max_side_effect: ToolSideEffectLevel::Read,
-                    status: StepStatus::Skipped { reason: "skipped".to_string() },
+                    status: StepStatus::Skipped {
+                        reason: "skipped".to_string(),
+                    },
                     evidence: None,
                     ..Default::default()
                 },
@@ -566,6 +715,7 @@ mod tests {
                 input_redacted_summary: "{\"model\":\"gpt-4\"}".to_string(),
                 output_summary: "ok".to_string(),
                 duration_ms: 1200,
+                ttft_ms: Some(300),
                 status: RuntimeCallStatus::Success,
                 remediation_code: None,
             },
@@ -577,6 +727,7 @@ mod tests {
                 input_redacted_summary: "{\"model\":\"gpt-4\"}".to_string(),
                 output_summary: "ok".to_string(),
                 duration_ms: 3500,
+                ttft_ms: Some(800),
                 status: RuntimeCallStatus::Success,
                 remediation_code: None,
             },
@@ -588,6 +739,7 @@ mod tests {
                 input_redacted_summary: "{\"query\":\"test\"}".to_string(),
                 output_summary: "result".to_string(),
                 duration_ms: 100,
+                ttft_ms: None,
                 status: RuntimeCallStatus::Success,
                 remediation_code: None,
             },
@@ -598,7 +750,11 @@ mod tests {
     fn build_report_computes_plan_summary() {
         let plan = make_test_plan();
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert_eq!(report.plan_summary.plan_id, "plan-1");
@@ -613,7 +769,11 @@ mod tests {
     fn build_report_computes_step_summaries() {
         let plan = make_test_plan();
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert_eq!(report.step_summaries.len(), 3);
@@ -640,21 +800,32 @@ mod tests {
     fn build_report_computes_provider_timeline() {
         let plan = make_test_plan();
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert_eq!(report.provider_timeline.total_calls, 2);
         assert_eq!(report.provider_timeline.total_duration_ms, 4700);
         assert_eq!(report.provider_timeline.latency_p50_ms, 3500);
         assert_eq!(report.provider_timeline.latency_p90_ms, 3500);
-        assert_eq!(report.provider_timeline.avg_ttft_ms, 2350);
+        // avg_ttft_ms is now real TTFT average: (300 + 800) / 2 = 550
+        assert_eq!(report.provider_timeline.avg_ttft_ms, 550);
+        // avg_call_duration_ms is the average provider call duration: (1200 + 3500) / 2 = 2350
+        assert_eq!(report.provider_timeline.avg_call_duration_ms, 2350);
     }
 
     #[test]
     fn build_report_computes_budget_summary() {
         let plan = make_test_plan();
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert_eq!(report.budget_summary.total_prompt_tokens, 3000);
@@ -667,7 +838,11 @@ mod tests {
     fn build_report_has_no_failure_recovery_for_success() {
         let plan = make_test_plan();
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert!(report.failure_recovery.is_none());
@@ -681,7 +856,11 @@ mod tests {
             reason: "rate limit exceeded".to_string(),
         };
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert!(report.failure_recovery.is_some());
@@ -704,14 +883,22 @@ mod tests {
             input_redacted_summary: "{\"api_key\":\"sk-live-1234567890abcdef\"}".to_string(),
             output_summary: "ok".to_string(),
             duration_ms: 500,
+            ttft_ms: Some(100),
             status: RuntimeCallStatus::Success,
             remediation_code: None,
         });
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         let json = serde_json::to_string(&report).unwrap();
-        assert!(!json.contains("sk-live"), "report must not contain raw API key");
+        assert!(
+            !json.contains("sk-live"),
+            "report must not contain raw API key"
+        );
     }
 
     #[test]
@@ -729,7 +916,11 @@ mod tests {
             recovery_suggestion: "retry".to_string(),
         };
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         // Partial report should still have plan summary
@@ -751,7 +942,11 @@ mod tests {
         plan.steps[0].evidence.as_mut().unwrap().completion_time_ms = 1500;
         plan.steps[1].evidence.as_mut().unwrap().completion_time_ms = 2500;
         let calls = make_test_runtime_calls();
-        let evidences: Vec<StepEvidence> = plan.steps.iter().filter_map(|s| s.evidence.clone()).collect();
+        let evidences: Vec<StepEvidence> = plan
+            .steps
+            .iter()
+            .filter_map(|s| s.evidence.clone())
+            .collect();
         let report = build_agent_run_report("run-1", &plan, &calls, &evidences, 10_000);
 
         assert_eq!(report.step_summaries[0].duration_ms, 1500);

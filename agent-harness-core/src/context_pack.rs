@@ -107,11 +107,20 @@ impl ContextPacker {
         score: Option<f32>,
     ) {
         self.add_source_with_meta(
-            source_type, id, label, content, source_cap, score,
-            "", "", 0, "",
+            source_type,
+            id,
+            label,
+            content,
+            source_cap,
+            score,
+            "",
+            "",
+            0,
+            "",
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_source_with_meta(
         &mut self,
         source_type: &str,
@@ -263,31 +272,79 @@ mod tests {
     fn same_input_produces_deterministic_order_and_hash() {
         let mut packer_a = ContextPacker::new(200);
         packer_a.add_source_with_meta(
-            "lorebook", "l1", "Lore", "content-a", 50, None,
-            TAXONOMY_LORE, "grounding", 10, "ok",
+            "lorebook",
+            "l1",
+            "Lore",
+            "content-a",
+            50,
+            None,
+            TAXONOMY_LORE,
+            "grounding",
+            10,
+            "ok",
         );
         packer_a.add_source_with_meta(
-            "instruction", "i1", "Instruction", "content-b", 50, None,
-            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+            "instruction",
+            "i1",
+            "Instruction",
+            "content-b",
+            50,
+            None,
+            TAXONOMY_INSTRUCTION,
+            "directive",
+            5,
+            "ok",
         );
         packer_a.add_source_with_meta(
-            "outline", "o1", "Outline", "content-c", 50, None,
-            TAXONOMY_OUTLINE, "grounding", 8, "ok",
+            "outline",
+            "o1",
+            "Outline",
+            "content-c",
+            50,
+            None,
+            TAXONOMY_OUTLINE,
+            "grounding",
+            8,
+            "ok",
         );
 
         let mut packer_b = ContextPacker::new(200);
         // Add in reverse order
         packer_b.add_source_with_meta(
-            "outline", "o1", "Outline", "content-c", 50, None,
-            TAXONOMY_OUTLINE, "grounding", 8, "ok",
+            "outline",
+            "o1",
+            "Outline",
+            "content-c",
+            50,
+            None,
+            TAXONOMY_OUTLINE,
+            "grounding",
+            8,
+            "ok",
         );
         packer_b.add_source_with_meta(
-            "instruction", "i1", "Instruction", "content-b", 50, None,
-            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+            "instruction",
+            "i1",
+            "Instruction",
+            "content-b",
+            50,
+            None,
+            TAXONOMY_INSTRUCTION,
+            "directive",
+            5,
+            "ok",
         );
         packer_b.add_source_with_meta(
-            "lorebook", "l1", "Lore", "content-a", 50, None,
-            TAXONOMY_LORE, "grounding", 10, "ok",
+            "lorebook",
+            "l1",
+            "Lore",
+            "content-a",
+            50,
+            None,
+            TAXONOMY_LORE,
+            "grounding",
+            10,
+            "ok",
         );
 
         let packed_a = packer_a.finish();
@@ -308,39 +365,85 @@ mod tests {
     fn source_timeout_does_not_swallow_other_sources() {
         let mut packer = ContextPacker::new(200);
         packer.add_source_with_meta(
-            "instruction", "i1", "Instruction", "content-b", 50, None,
-            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+            "instruction",
+            "i1",
+            "Instruction",
+            "content-b",
+            50,
+            None,
+            TAXONOMY_INSTRUCTION,
+            "directive",
+            5,
+            "ok",
         );
         // Simulate a failed/timeout source with empty content — it should be skipped
         packer.add_source_with_meta(
-            "project_brain", "p1", "RAG", "", 50, None,
-            TAXONOMY_PROJECT_BRAIN, "memory", 5000, "timeout",
+            "project_brain",
+            "p1",
+            "RAG",
+            "",
+            50,
+            None,
+            TAXONOMY_PROJECT_BRAIN,
+            "memory",
+            5000,
+            "timeout",
         );
         packer.add_source_with_meta(
-            "outline", "o1", "Outline", "content-c", 50, None,
-            TAXONOMY_OUTLINE, "grounding", 8, "ok",
+            "outline",
+            "o1",
+            "Outline",
+            "content-c",
+            50,
+            None,
+            TAXONOMY_OUTLINE,
+            "grounding",
+            8,
+            "ok",
         );
 
         let packed = packer.finish();
         assert_eq!(packed.sources.len(), 2);
-        assert!(packed.sources.iter().any(|s| s.source_type == "instruction"));
+        assert!(packed
+            .sources
+            .iter()
+            .any(|s| s.source_type == "instruction"));
         assert!(packed.sources.iter().any(|s| s.source_type == "outline"));
-        assert!(!packed.sources.iter().any(|s| s.source_type == "project_brain"));
+        assert!(!packed
+            .sources
+            .iter()
+            .any(|s| s.source_type == "project_brain"));
     }
 
     #[test]
     fn context_hash_changes_when_source_content_changes() {
         let mut packer_a = ContextPacker::new(200);
         packer_a.add_source_with_meta(
-            "instruction", "i1", "Instruction", "content-b", 50, None,
-            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+            "instruction",
+            "i1",
+            "Instruction",
+            "content-b",
+            50,
+            None,
+            TAXONOMY_INSTRUCTION,
+            "directive",
+            5,
+            "ok",
         );
         let packed_a = packer_a.finish();
 
         let mut packer_b = ContextPacker::new(200);
         packer_b.add_source_with_meta(
-            "instruction", "i1", "Instruction", "different-content", 50, None,
-            TAXONOMY_INSTRUCTION, "directive", 5, "ok",
+            "instruction",
+            "i1",
+            "Instruction",
+            "different-content",
+            50,
+            None,
+            TAXONOMY_INSTRUCTION,
+            "directive",
+            5,
+            "ok",
         );
         let packed_b = packer_b.finish();
 

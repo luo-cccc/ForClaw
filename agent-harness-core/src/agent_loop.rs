@@ -5,14 +5,13 @@ use crate::context_window_guard::{
     evaluate_context_window, ContextWindowInfo, ContextWindowSource,
 };
 use crate::execution_plan::{
-    AgentCheckpoint, CheckpointPhase, ExecutionPlan, ExecutionStep, PlanStatus, ProviderUsageSummary,
-    ResumePolicy, StepEvidence, StepFailureAction, StepStatus,
+    AgentCheckpoint, CheckpointPhase, ExecutionPlan, ExecutionStep, PlanStatus,
+    ProviderUsageSummary, ResumePolicy, StepEvidence, StepFailureAction, StepStatus,
 };
 use crate::provider::{LlmMessage, LlmRequest, Provider, StreamEvent};
 use crate::recovery::{
     classify_failure, classify_failure_kind, map_failure_to_recovery, redact_sensitive,
-    RecoveryContext, RecoveryDecision, RuntimeCallRecord,
-    RuntimeCallStatus, RuntimeCallType,
+    RecoveryContext, RecoveryDecision, RuntimeCallRecord, RuntimeCallStatus, RuntimeCallType,
 };
 use crate::router::{classify_intent, Intent};
 use crate::tool_executor::{ToolExecution, ToolExecutor, ToolHandler};
@@ -142,6 +141,7 @@ pub enum AgentLoopEvent {
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
         ttft_ms: Option<u64>,
+        provider_call_duration_ms: u64,
         total_provider_duration_ms: u64,
         first_provider_call_ms: u64,
         last_provider_call_ms: u64,
@@ -149,7 +149,9 @@ pub enum AgentLoopEvent {
     #[serde(rename = "runtime_call_record")]
     RuntimeCallRecord { record: RuntimeCallRecord },
     #[serde(rename = "run_report")]
-    RunReport { report: crate::run_trace::AgentRunReport },
+    RunReport {
+        report: crate::run_trace::AgentRunReport,
+    },
 }
 
 /// Configuration for agent loop execution.
@@ -201,6 +203,7 @@ pub struct AgentLoop<P: Provider, H: ToolHandler> {
     pub provider_call_guard: Option<ProviderCallGuard>,
     pub last_usage: Option<crate::provider::UsageInfo>,
     pub ttft_ms: Option<u64>,
+    pub provider_call_duration_ms: u64,
     pub total_provider_duration_ms: u64,
     pub first_provider_call_ms: u64,
     pub last_provider_call_ms: u64,
@@ -224,6 +227,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             provider_call_guard: None,
             last_usage: None,
             ttft_ms: None,
+            provider_call_duration_ms: 0,
             total_provider_duration_ms: 0,
             first_provider_call_ms: 0,
             last_provider_call_ms: 0,
@@ -251,11 +255,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
     }
 
     /// Build and emit an `AgentRunReport` from the current plan state.
-    fn emit_run_report(
-        &self,
-        plan: &ExecutionPlan,
-        completed_step_evidences: &[StepEvidence],
-    ) {
+    fn emit_run_report(&self, plan: &ExecutionPlan, completed_step_evidences: &[StepEvidence]) {
         let runtime_calls = self
             .runtime_call_records
             .lock()
@@ -283,8 +283,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
         completed_steps: &[StepEvidence],
     ) {
         let failure_kind = classify_failure_kind(error, None);
-        let recovery_decision =
-            map_failure_to_recovery(&failure_kind, &RecoveryContext::default());
+        let recovery_decision = map_failure_to_recovery(&failure_kind, &RecoveryContext::default());
         let user_choice_required = matches!(
             recovery_decision,
             RecoveryDecision::SurfaceUserChoice | RecoveryDecision::RequestApproval
@@ -521,6 +520,8 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             let call_duration_ms = call_start.elapsed().as_millis() as u64;
             let ttft_ms = *ttft_cell.lock().unwrap();
             self.total_provider_duration_ms += call_duration_ms;
+            self.provider_call_duration_ms = call_duration_ms;
+            // TTFT: real time-to-first-token from streaming; fallback to full call duration if no text delta
             self.ttft_ms = ttft_ms.or(Some(call_duration_ms));
             if self.first_provider_call_ms == 0 {
                 self.first_provider_call_ms = call_duration_ms;
@@ -554,6 +555,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                     ttft_ms
                 ),
                 duration_ms: call_duration_ms,
+                ttft_ms,
                 status: RuntimeCallStatus::Success,
                 remediation_code: None,
             };
@@ -632,10 +634,13 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64,
-                    input_redacted_summary: serde_json::to_string(&redact_sensitive(&execution.input))
-                        .unwrap_or_default(),
+                    input_redacted_summary: serde_json::to_string(&redact_sensitive(
+                        &execution.input,
+                    ))
+                    .unwrap_or_default(),
                     output_summary: serde_json::to_string(&execution.output).unwrap_or_default(),
                     duration_ms: execution.duration_ms,
+                    ttft_ms: None,
                     status: tool_status.clone(),
                     remediation_code: execution.remediation.first().map(|r| r.code.clone()),
                 };
@@ -731,6 +736,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             input_tokens: usage.as_ref().map(|u| u.input_tokens),
             output_tokens: usage.as_ref().map(|u| u.output_tokens),
             ttft_ms: self.ttft_ms,
+            provider_call_duration_ms: self.provider_call_duration_ms,
             total_provider_duration_ms: self.total_provider_duration_ms,
             first_provider_call_ms: self.first_provider_call_ms,
             last_provider_call_ms: self.last_provider_call_ms,
@@ -829,7 +835,8 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 self.executor
                     .set_allowed_tools(Some(contract.allowed_tools.clone()));
             } else {
-                self.executor.set_allowed_tools(Some(step.allowed_tools.clone()));
+                self.executor
+                    .set_allowed_tools(Some(step.allowed_tools.clone()));
             }
 
             // Constrain tool filter to this step's max_side_effect and allowed_tools
@@ -863,7 +870,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                     if let Some(ref contract) = step.contract {
                         let mut missing_evidence: Vec<String> = Vec::new();
                         for required in &contract.success_evidence_required {
-                            let has_evidence = step.evidence.as_ref().map_or(false, |e| {
+                            let has_evidence = step.evidence.as_ref().is_some_and(|e| {
                                 e.artifact_refs.iter().any(|a| a.contains(required))
                                     || e.tool_executions.iter().any(|t| t.contains(required))
                                     || e.context_refs.iter().any(|c| c.contains(required))
@@ -916,17 +923,19 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         step_id: step.step_id.clone(),
                         artifact_refs: vec![text.clone()],
                         tool_executions: vec![],
-                        provider_usage: self.last_usage.as_ref().map(|usage| ProviderUsageSummary {
-                            model: self
-                                .provider
-                                .models()
-                                .into_iter()
-                                .next()
-                                .unwrap_or_else(|| "unknown".to_string()),
-                            prompt_tokens: usage.input_tokens as u32,
-                            completion_tokens: usage.output_tokens as u32,
-                            total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
-                            duration_ms: self.last_provider_call_ms,
+                        provider_usage: self.last_usage.as_ref().map(|usage| {
+                            ProviderUsageSummary {
+                                model: self
+                                    .provider
+                                    .models()
+                                    .into_iter()
+                                    .next()
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                prompt_tokens: usage.input_tokens as u32,
+                                completion_tokens: usage.output_tokens as u32,
+                                total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
+                                duration_ms: self.last_provider_call_ms,
+                            }
                         }),
                         context_refs: step.required_context.clone(),
                         completion_time_ms: self.total_provider_duration_ms,
@@ -954,17 +963,19 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         context_hash: String::new(),
                         artifact_refs: vec![final_text.clone()],
                         tool_effects: vec![],
-                        provider_usage: self.last_usage.as_ref().map(|usage| ProviderUsageSummary {
-                            model: self
-                                .provider
-                                .models()
-                                .into_iter()
-                                .next()
-                                .unwrap_or_else(|| "unknown".to_string()),
-                            prompt_tokens: usage.input_tokens as u32,
-                            completion_tokens: usage.output_tokens as u32,
-                            total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
-                            duration_ms: self.last_provider_call_ms,
+                        provider_usage: self.last_usage.as_ref().map(|usage| {
+                            ProviderUsageSummary {
+                                model: self
+                                    .provider
+                                    .models()
+                                    .into_iter()
+                                    .next()
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                prompt_tokens: usage.input_tokens as u32,
+                                completion_tokens: usage.output_tokens as u32,
+                                total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
+                                duration_ms: self.last_provider_call_ms,
+                            }
                         }),
                         budget_spent: 0,
                         approval_refs: vec![],
@@ -1236,11 +1247,16 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution_plan::{ExecutionStepState, PlanStatus, StepEvidence, StepFailureAction, StepStatus};
-    use crate::provider::{LlmResponse, openai_compat::OpenAiCompatProvider};
-    use crate::recovery::{classify_failure_kind, map_failure_to_recovery, FailureKind, RecoveryContext, RecoveryDecision};
+    use crate::execution_plan::{
+        ExecutionStepState, PlanStatus, StepEvidence, StepFailureAction, StepStatus,
+    };
+    use crate::provider::{openai_compat::OpenAiCompatProvider, LlmResponse};
+    use crate::recovery::{
+        classify_failure_kind, map_failure_to_recovery, FailureKind, RecoveryContext,
+        RecoveryDecision,
+    };
     use crate::tool_registry::{
-        default_writing_tool_registry, ToolDescriptor, ToolSideEffectLevel, ToolStage, ToolRegistry,
+        default_writing_tool_registry, ToolDescriptor, ToolRegistry, ToolSideEffectLevel, ToolStage,
     };
     use async_trait::async_trait;
 
@@ -1437,6 +1453,7 @@ mod tests {
             input_tokens: Some(10000),
             output_tokens: Some(2000),
             ttft_ms: Some(320),
+            provider_call_duration_ms: 3000,
             total_provider_duration_ms: 4500,
             first_provider_call_ms: 1500,
             last_provider_call_ms: 3000,
@@ -1545,9 +1562,15 @@ mod tests {
             _request: LlmRequest,
             on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
         ) -> Result<LlmResponse, String> {
-            let count = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let count = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Some(ref err) = self.fail_with {
-                if count >= self.fail_after_calls.load(std::sync::atomic::Ordering::SeqCst) {
+                if count
+                    >= self
+                        .fail_after_calls
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                {
                     return Err(err.clone());
                 }
             }
@@ -1578,7 +1601,10 @@ mod tests {
         }
 
         fn estimate_tokens(&self, messages: &[LlmMessage]) -> u64 {
-            messages.iter().map(|m| m.content.as_ref().map(|c| c.chars().count()).unwrap_or(0) as u64 / 3 + 8).sum()
+            messages
+                .iter()
+                .map(|m| m.content.as_ref().map(|c| c.chars().count()).unwrap_or(0) as u64 / 3 + 8)
+                .sum()
         }
 
         fn context_window_tokens(&self) -> u64 {
@@ -1639,9 +1665,16 @@ mod tests {
         };
 
         let result = agent.run_with_plan(&mut plan, "write a chapter").await;
-        assert!(result.is_err(), "expected provider budget to block the call");
+        assert!(
+            result.is_err(),
+            "expected provider budget to block the call"
+        );
         let err = result.unwrap_err();
-        assert!(err.contains("budget") || err.contains("ceiling"), "expected budget error, got: {}", err);
+        assert!(
+            err.contains("budget") || err.contains("ceiling"),
+            "expected budget error, got: {}",
+            err
+        );
 
         // Verify FailureKind and RecoveryDecision
         let kind = classify_failure_kind(&err, None);
@@ -1683,9 +1716,16 @@ mod tests {
         };
 
         let result = agent.run_with_plan(&mut plan, "write a chapter").await;
-        assert!(result.is_err(), "expected missing context to block provider call");
+        assert!(
+            result.is_err(),
+            "expected missing context to block provider call"
+        );
         let err = result.unwrap_err();
-        assert!(err.contains("missing") || err.contains("outline"), "expected context missing error, got: {}", err);
+        assert!(
+            err.contains("missing") || err.contains("outline"),
+            "expected context missing error, got: {}",
+            err
+        );
 
         let kind = classify_failure_kind(&err, None);
         assert_eq!(kind, FailureKind::ContextMissing);
@@ -1729,7 +1769,11 @@ mod tests {
         let result = agent.run_with_plan(&mut plan, "write a chapter").await;
         assert!(result.is_err(), "expected transient failure");
         let err = result.unwrap_err();
-        assert!(err.contains("429") || err.contains("rate limit"), "expected 429 error, got: {}", err);
+        assert!(
+            err.contains("429") || err.contains("rate limit"),
+            "expected 429 error, got: {}",
+            err
+        );
 
         let kind = classify_failure_kind(&err, None);
         assert_eq!(kind, FailureKind::ProviderTransient);
@@ -1770,9 +1814,16 @@ mod tests {
         };
 
         let result = agent.run_with_plan(&mut plan, "save the chapter").await;
-        assert!(result.is_err(), "expected save conflict to surface user choice");
+        assert!(
+            result.is_err(),
+            "expected save conflict to surface user choice"
+        );
         let err = result.unwrap_err();
-        assert!(err.contains("conflict") || err.contains("mismatch"), "expected save conflict error, got: {}", err);
+        assert!(
+            err.contains("conflict") || err.contains("mismatch"),
+            "expected save conflict error, got: {}",
+            err
+        );
 
         // Verify SurfaceUserChoice decision (do NOT auto-overwrite)
         let kind = classify_failure_kind(&err, None);
@@ -1799,7 +1850,9 @@ mod tests {
                     max_side_effect: ToolSideEffectLevel::Read,
                     success_signals: vec![],
                     on_failure: StepFailureAction::Stop,
-                    status: StepStatus::Completed { evidence: vec!["ok".to_string()] },
+                    status: StepStatus::Completed {
+                        evidence: vec!["ok".to_string()],
+                    },
                     step_state: ExecutionStepState::Completed,
                     recovery_action: None,
                     contract: None,
@@ -1836,14 +1889,26 @@ mod tests {
         // Resume the plan - step-0 is already completed, so it should be skipped
         let result = agent.resume_plan(&mut plan, "continue drafting").await;
         // The mock provider returns "draft text" which will succeed
-        assert!(result.is_ok(), "expected resume to succeed for remaining steps");
+        assert!(
+            result.is_ok(),
+            "expected resume to succeed for remaining steps"
+        );
 
         // Verify step-0 remained completed (was skipped)
-        assert!(matches!(plan.steps[0].step_state, ExecutionStepState::Completed));
-        assert!(matches!(&plan.steps[0].status, StepStatus::Completed { .. }));
+        assert!(matches!(
+            plan.steps[0].step_state,
+            ExecutionStepState::Completed
+        ));
+        assert!(matches!(
+            &plan.steps[0].status,
+            StepStatus::Completed { .. }
+        ));
 
         // Verify step-1 was executed and completed
-        assert!(matches!(&plan.steps[1].status, StepStatus::Completed { .. }));
+        assert!(matches!(
+            &plan.steps[1].status,
+            StepStatus::Completed { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1869,7 +1934,9 @@ mod tests {
                     max_side_effect: ToolSideEffectLevel::Read,
                     success_signals: vec![],
                     on_failure: StepFailureAction::Stop,
-                    status: StepStatus::Completed { evidence: vec!["ok".to_string()] },
+                    status: StepStatus::Completed {
+                        evidence: vec!["ok".to_string()],
+                    },
                     step_state: ExecutionStepState::Completed,
                     recovery_action: None,
                     contract: None,
@@ -1915,8 +1982,9 @@ mod tests {
 
         // Verify that a RecoveryBundle event was emitted
         let emitted = events.lock().unwrap();
-        let event_kinds: Vec<String> = emitted.iter().map(|e| {
-            match e {
+        let event_kinds: Vec<String> = emitted
+            .iter()
+            .map(|e| match e {
                 AgentLoopEvent::PlanStarted { .. } => "PlanStarted".to_string(),
                 AgentLoopEvent::StepStarted { .. } => "StepStarted".to_string(),
                 AgentLoopEvent::StepFailed { .. } => "StepFailed".to_string(),
@@ -1926,8 +1994,8 @@ mod tests {
                 AgentLoopEvent::RecoveryBundle { .. } => "RecoveryBundle".to_string(),
                 AgentLoopEvent::Error { .. } => "Error".to_string(),
                 _ => "Other".to_string(),
-            }
-        }).collect();
+            })
+            .collect();
         eprintln!("Event kinds: {:?}", event_kinds);
         let recovery_bundle_events: Vec<_> = emitted
             .iter()

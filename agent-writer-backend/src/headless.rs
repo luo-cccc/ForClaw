@@ -1802,14 +1802,12 @@ Output ONLY the JSON object, no explanation outside. Example:
                 Some(agent_harness_core::RecoveryBundle {
                     completed_steps: completed_steps.clone(),
                     failed_step: failed_step.clone(),
-                    failure_kind: serde_json::from_str(&format!("\"{}\"", failure_kind),
-                    )
-                    .unwrap_or(agent_harness_core::FailureKind::Unknown),
+                    failure_kind: serde_json::from_str(&format!("\"{}\"", failure_kind))
+                        .unwrap_or(agent_harness_core::FailureKind::Unknown),
                     input_context_summary: input_context_summary.clone(),
                     runtime_calls: runtime_calls.clone(),
-                    suggested_action: serde_json::from_str(&format!("\"{}\"", suggested_action),
-                    )
-                    .unwrap_or(agent_harness_core::RecoveryDecision::SurfaceUserChoice),
+                    suggested_action: serde_json::from_str(&format!("\"{}\"", suggested_action))
+                        .unwrap_or(agent_harness_core::RecoveryDecision::SurfaceUserChoice),
                     user_choice_required: *user_choice_required,
                 })
             } else {
@@ -1891,7 +1889,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             events: Vec::new(),
             provider_budget: None,
             recovery_bundle: None,
-                run_report: None,
+            run_report: None,
         })
     }
 
@@ -2377,11 +2375,9 @@ Output ONLY the JSON object, no explanation outside. Example:
                 "quality_report".to_string(),
                 true,
             ),
-            CheckpointPhase::ProviderCallBefore | CheckpointPhase::ProviderCallAfter => (
-                vec!["context_built".to_string()],
-                "draft".to_string(),
-                true,
-            ),
+            CheckpointPhase::ProviderCallBefore | CheckpointPhase::ProviderCallAfter => {
+                (vec!["context_built".to_string()], "draft".to_string(), true)
+            }
             CheckpointPhase::SavePrepared => (
                 vec![
                     "context_built".to_string(),
@@ -6106,11 +6102,25 @@ mod tests {
     use super::*;
 
     fn temp_backend() -> HeadlessBackend {
-        let temp_dir = std::env::temp_dir().join(format!("forge-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "forge-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
         let _ = std::fs::remove_dir_all(&temp_dir);
         let config = HeadlessConfig {
             data_dir: temp_dir,
-            project_id: Some(format!("test-proj-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis())),
+            project_id: Some(format!(
+                "test-proj-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            )),
             project_name: Some("Test Project".to_string()),
         };
         HeadlessBackend::open(config).unwrap()

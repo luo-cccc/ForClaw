@@ -53,7 +53,25 @@ pub(crate) fn classify_error(_tool_name: &str, error: &str) -> ErrorKind {
     ErrorKind::Backend
 }
 
-pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Result<Value, String> {
+#[derive(Debug, Clone)]
+pub(crate) struct ClassifiedError {
+    pub kind: ErrorKind,
+    pub message: String,
+}
+
+impl From<String> for ClassifiedError {
+    fn from(message: String) -> Self {
+        Self {
+            kind: ErrorKind::Backend,
+            message,
+        }
+    }
+}
+
+pub(crate) async fn call_tool(
+    backend: &HeadlessBackend,
+    params: Value,
+) -> Result<Value, ClassifiedError> {
     let call: ToolCallParams = match serde_json::from_value(params) {
         Ok(c) => c,
         Err(error) => {
@@ -69,7 +87,7 @@ pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Resul
         call.arguments
     };
 
-    let result = match call.name.as_str() {
+    let result: Result<Value, String> = match call.name.as_str() {
         "forge_backend_call" => {
             let action = arguments
                 .get("action")
@@ -271,7 +289,10 @@ pub(crate) async fn call_tool(backend: &HeadlessBackend, params: Value) -> Resul
         Ok(value) => Ok(tool_result(value, false)),
         Err(error) => {
             let kind = classify_error(&call.name, &error);
-            Ok(tool_error_result(kind, error))
+            Err(ClassifiedError {
+                kind,
+                message: error,
+            })
         }
     }
 }

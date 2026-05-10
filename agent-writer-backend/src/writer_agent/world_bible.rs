@@ -216,19 +216,19 @@ pub fn preflight_world_bible(
         }
 
         // Check 2: no evidence on hard constraint source
-        if constraint.severity == ConstraintSeverity::Hard {
-            if source.map(|a| !a.has_evidence()).unwrap_or(true) {
-                warnings.push(PreflightWarning {
-                    code: "hard_without_evidence".into(),
-                    severity: ConstraintSeverity::Warning,
-                    message: format!(
-                        "Hard constraint '{}' lacks evidence on its source asset.",
-                        constraint.id
-                    ),
-                    source_asset_id: constraint.source_asset_id.clone(),
-                    suggested_action: "add_evidence_or_downgrade_to_warning".into(),
-                });
-            }
+        if constraint.severity == ConstraintSeverity::Hard
+            && source.map(|a| !a.has_evidence()).unwrap_or(true)
+        {
+            warnings.push(PreflightWarning {
+                code: "hard_without_evidence".into(),
+                severity: ConstraintSeverity::Warning,
+                message: format!(
+                    "Hard constraint '{}' lacks evidence on its source asset.",
+                    constraint.id
+                ),
+                source_asset_id: constraint.source_asset_id.clone(),
+                suggested_action: "add_evidence_or_downgrade_to_warning".into(),
+            });
         }
 
         // Check 3: empty trigger/required terms on actionable constraint kinds
@@ -287,7 +287,10 @@ pub struct WorldConsistencyViolation {
 /// Proposed rules are downgraded to Warning severity.
 pub fn compile_canon_constraints(assets: &[WorldAsset]) -> Vec<CanonConstraint> {
     let mut constraints = Vec::new();
-    for asset in assets.iter().filter(|a| matches!(a.kind, WorldAssetKind::Rule)) {
+    for asset in assets
+        .iter()
+        .filter(|a| matches!(a.kind, WorldAssetKind::Rule))
+    {
         let severity = if asset.can_hard_enforce() {
             ConstraintSeverity::Hard
         } else {
@@ -354,7 +357,9 @@ pub fn compile_scene_contract(
             .unwrap_or(false);
         let a_score = a.0 + if a_hard { 0.1 } else { 0.0 };
         let b_score = b.0 + if b_hard { 0.1 } else { 0.0 };
-        b_score.partial_cmp(&a_score).unwrap_or(std::cmp::Ordering::Equal)
+        b_score
+            .partial_cmp(&a_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let selected: Vec<CanonConstraint> = scored
@@ -363,10 +368,8 @@ pub fn compile_scene_contract(
         .map(|(_, c)| (*c).clone())
         .collect();
 
-    let evidence_refs: Vec<EvidenceRef> = selected
-        .iter()
-        .flat_map(|c| c.evidence.clone())
-        .collect();
+    let evidence_refs: Vec<EvidenceRef> =
+        selected.iter().flat_map(|c| c.evidence.clone()).collect();
 
     SceneContract {
         chapter_id: chapter_id.to_string(),
@@ -437,10 +440,7 @@ pub fn validate_world_consistency(
                                 ),
                                 text_excerpt: excerpt,
                                 evidence: constraint.evidence.clone(),
-                                suggested_fix: format!(
-                                    "在触发 '{}' 时确保支付代价",
-                                    trigger
-                                ),
+                                suggested_fix: format!("在触发 '{}' 时确保支付代价", trigger),
                             });
                         }
                     }
@@ -448,18 +448,23 @@ pub fn validate_world_consistency(
             }
             CanonConstraintKind::HierarchyLimit => {
                 // Simplified: if both a low-tier identity and a high-tier action appear, warn
-                let low_tier = constraint.trigger_terms.iter().any(|t| {
-                    text_lower.contains(&t.to_lowercase())
-                });
-                let high_action = constraint.forbidden_terms.iter().any(|t| {
-                    text_lower.contains(&t.to_lowercase())
-                });
+                let low_tier = constraint
+                    .trigger_terms
+                    .iter()
+                    .any(|t| text_lower.contains(&t.to_lowercase()));
+                let high_action = constraint
+                    .forbidden_terms
+                    .iter()
+                    .any(|t| text_lower.contains(&t.to_lowercase()));
                 if low_tier && high_action {
                     violations.push(WorldConsistencyViolation {
                         constraint_id: constraint.id.clone(),
                         severity: effective.clone(),
                         kind: CanonConstraintKind::HierarchyLimit,
-                        message: format!("层级限制可能被突破: {:?} 尝试 {:?}", constraint.trigger_terms, constraint.forbidden_terms),
+                        message: format!(
+                            "层级限制可能被突破: {:?} 尝试 {:?}",
+                            constraint.trigger_terms, constraint.forbidden_terms
+                        ),
                         text_excerpt: chapter_text.chars().take(200).collect(),
                         evidence: constraint.evidence.clone(),
                         suggested_fix: "确认角色层级是否足以执行该动作，或提供例外理由".to_string(),
@@ -750,7 +755,8 @@ mod tests {
             sample_asset("ice_rule", WorldAssetKind::Rule, true),
         ];
         let constraints = compile_canon_constraints(&assets);
-        let contract = compile_scene_contract("ch1", "fire scene", &assets, &constraints, &[], None);
+        let contract =
+            compile_scene_contract("ch1", "fire scene", &assets, &constraints, &[], None);
         // fire_rule should be selected because its trigger term "fire_rule" loosely matches "fire scene"
         assert!(!contract.active_constraints.is_empty());
     }
@@ -758,8 +764,9 @@ mod tests {
     #[test]
     fn forbidden_claim_detected() {
         let asset = sample_asset("forbidden", WorldAssetKind::Rule, true);
-        let constraints = compile_canon_constraints(&[asset.clone()]);
-        let contract = compile_scene_contract("ch1", "test", &[asset.clone()], &constraints, &[], None);
+        let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
+        let contract =
+            compile_scene_contract("ch1", "test", std::slice::from_ref(&asset), &constraints, &[], None);
         let violations = validate_world_consistency("this text contains tag1", &contract, &[asset]);
         assert!(!violations.is_empty());
         assert_eq!(violations[0].kind, CanonConstraintKind::ForbiddenClaim);
@@ -768,8 +775,9 @@ mod tests {
     #[test]
     fn proposed_rule_never_hard_violation() {
         let asset = sample_asset("proposed_rule", WorldAssetKind::Rule, false);
-        let constraints = compile_canon_constraints(&[asset.clone()]);
-        let contract = compile_scene_contract("ch1", "test", &[asset.clone()], &constraints, &[], None);
+        let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
+        let contract =
+            compile_scene_contract("ch1", "test", std::slice::from_ref(&asset), &constraints, &[], None);
         let violations = validate_world_consistency("this text contains tag1", &contract, &[asset]);
         assert!(!violations.is_empty());
         assert_eq!(violations[0].severity, ConstraintSeverity::Warning);
@@ -777,8 +785,8 @@ mod tests {
 
     #[test]
     fn required_cost_skipped_detected() {
-        let mut asset = sample_asset("cost_rule", WorldAssetKind::Rule, true);
-        let mut constraint = CanonConstraint {
+        let asset = sample_asset("cost_rule", WorldAssetKind::Rule, true);
+        let constraint = CanonConstraint {
             id: "c1".to_string(),
             kind: CanonConstraintKind::RequiredCost,
             summary: "using fire requires mana".to_string(),
@@ -803,18 +811,19 @@ mod tests {
             continuity_anchors: Vec::new(),
             required_costs: Vec::new(),
         };
-        let violations = validate_world_consistency("he used fire", &contract, &[asset.clone()]);
+        let violations = validate_world_consistency("he used fire", &contract, std::slice::from_ref(&asset));
         assert!(!violations.is_empty());
         assert_eq!(violations[0].kind, CanonConstraintKind::RequiredCost);
 
         // When cost is paid, no violation
-        let no_violations = validate_world_consistency("he used fire and paid mana", &contract, &[asset]);
+        let no_violations =
+            validate_world_consistency("he used fire and paid mana", &contract, &[asset]);
         assert!(no_violations.is_empty());
     }
 
     #[test]
     fn hierarchy_limit_detected_when_low_tier_high_action() {
-        let mut asset = sample_asset("hierarchy_rule", WorldAssetKind::Rule, true);
+        let asset = sample_asset("hierarchy_rule", WorldAssetKind::Rule, true);
         let constraint = CanonConstraint {
             id: "c1".to_string(),
             kind: CanonConstraintKind::HierarchyLimit,
@@ -852,9 +861,11 @@ mod tests {
     #[test]
     fn violation_includes_source_evidence() {
         let asset = sample_asset("forbidden", WorldAssetKind::Rule, true);
-        let constraints = compile_canon_constraints(&[asset.clone()]);
-        let contract = compile_scene_contract("ch1", "test", &[asset.clone()], &constraints, &[], None);
-        let violations = validate_world_consistency("this text contains tag1", &contract, &[asset.clone()]);
+        let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
+        let contract =
+            compile_scene_contract("ch1", "test", std::slice::from_ref(&asset), &constraints, &[], None);
+        let violations =
+            validate_world_consistency("this text contains tag1", &contract, std::slice::from_ref(&asset));
         assert!(!violations.is_empty());
         // Evidence should be preserved from constraint -> violation
         assert!(
@@ -884,7 +895,7 @@ mod tests {
             applies_to: Vec::new(),
             expected_consequence: String::new(),
         }];
-        let warnings = preflight_world_bible(&[proposed.clone()], &constraints);
+        let warnings = preflight_world_bible(std::slice::from_ref(&proposed), &constraints);
         assert!(
             warnings.iter().any(|w| w.code == "proposed_as_hard"),
             "preflight should warn when proposed asset compiles to hard constraint"
@@ -895,7 +906,7 @@ mod tests {
     fn preflight_catches_hard_without_evidence() {
         let mut asset = sample_asset("no_evidence", WorldAssetKind::Rule, true);
         asset.evidence.clear(); // Remove evidence
-        // Manually construct a Hard constraint to test preflight logic
+                                // Manually construct a Hard constraint to test preflight logic
         let constraints = vec![CanonConstraint {
             id: "c1".to_string(),
             kind: CanonConstraintKind::ForbiddenClaim,
@@ -919,8 +930,8 @@ mod tests {
     #[test]
     fn preflight_allows_approved_with_evidence() {
         let asset = sample_asset("approved_rule", WorldAssetKind::Rule, true);
-        let constraints = compile_canon_constraints(&[asset.clone()]);
-        let warnings = preflight_world_bible(&[asset.clone()], &constraints);
+        let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
+        let warnings = preflight_world_bible(std::slice::from_ref(&asset), &constraints);
         assert!(
             warnings.is_empty(),
             "preflight should have no warnings for fully approved, evidenced rule"
@@ -931,8 +942,8 @@ mod tests {
     fn preflight_warns_empty_forbidden_terms() {
         let mut asset = sample_asset("empty_rule", WorldAssetKind::Rule, true);
         asset.tags.clear(); // This makes forbidden_terms empty in compiled constraint
-        let constraints = compile_canon_constraints(&[asset.clone()]);
-        let warnings = preflight_world_bible(&[asset.clone()], &constraints);
+        let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
+        let warnings = preflight_world_bible(std::slice::from_ref(&asset), &constraints);
         assert!(
             warnings.iter().any(|w| w.code == "empty_forbidden_terms"),
             "preflight should warn about empty forbidden terms"
@@ -948,13 +959,11 @@ mod tests {
             mission: "test".to_string(),
             required_facts: vec![],
             active_constraints: vec![],
-            required_state_deltas: vec![
-                crate::chapter_generation::StateDelta {
-                    delta_type: "character_knowledge".to_string(),
-                    description: "ignorant -> knows the truth".to_string(),
-                    source: "hero".to_string(),
-                },
-            ],
+            required_state_deltas: vec![crate::chapter_generation::StateDelta {
+                delta_type: "character_knowledge".to_string(),
+                description: "ignorant -> knows the truth".to_string(),
+                source: "hero".to_string(),
+            }],
             allowed_reveals: vec![],
             blocked_reveals: vec![],
             evidence_refs: vec![],
@@ -984,10 +993,8 @@ mod tests {
             evidence_excerpt: "they shook hands".to_string(),
         }];
         // Current text reverts to the before-state without any transition marker
-        let regressions = check_state_regression(
-            "Alice and Bob were strangers again.",
-            &prior_deltas,
-        );
+        let regressions =
+            check_state_regression("Alice and Bob were strangers again.", &prior_deltas);
         assert_eq!(regressions.len(), 1);
         assert_eq!(regressions[0].entity_id, "alice_bob");
         assert_eq!(regressions[0].prior_after_state, "friends");

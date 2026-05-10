@@ -213,3 +213,23 @@ fn smoke_forge_agent_domain_profile() {
     assert_eq!(sc["ok"], true);
     assert_eq!(sc["data"]["id"].as_str(), Some("longform_writing"));
 }
+
+#[test]
+fn smoke_forge_agent_kernel_status() {
+    let (_child, mut stdout, mut stdin) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    call_tool(
+        &mut stdin,
+        "forge_agent_kernel_status",
+        serde_json::json!({}),
+    );
+
+    let response = read_response(&mut stdout);
+    let sc = &response["result"]["structuredContent"];
+    assert_eq!(sc["ok"], true, "agent kernel status should succeed");
+    assert!(
+        sc["data"].is_object() || sc["data"].is_null(),
+        "agent kernel status should return object or null"
+    );
+}
