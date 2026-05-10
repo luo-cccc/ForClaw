@@ -316,6 +316,21 @@ pub struct WriterAgentTraceSnapshot {
     pub product_metrics_trend: WriterProductMetricsTrend,
     pub metacognitive_snapshot: WriterMetacognitiveSnapshot,
     pub execution_plan: Option<agent_harness_core::ExecutionPlan>,
+    /// A2: Step-level runtime summary aggregating tool/provider counts, durations, and failures.
+    pub step_runtime_summary: Option<StepRuntimeSummary>,
+}
+
+/// A2: Step-level aggregation in trace — per-step tool count, provider count,
+/// total duration, and failure types.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepRuntimeSummary {
+    pub step_id: String,
+    pub tool_count: u32,
+    pub provider_count: u32,
+    pub total_duration_ms: u64,
+    pub failure_types: Vec<String>,
+    pub remediation_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

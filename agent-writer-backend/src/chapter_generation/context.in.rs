@@ -260,8 +260,9 @@ pub async fn build_chapter_context(
                     })
                 })
                 .collect();
-            for (node, handle) in previous_nodes.iter().zip(fulltext_futures) {
-                if let Ok(Some(full)) = handle.await {
+            let fulltext_results = futures_util::future::join_all(fulltext_futures).await;
+            for (node, result) in previous_nodes.iter().zip(fulltext_results) {
+                if let Ok(Some(full)) = result {
                     let snippet = snippet_text(&full, 1200);
                     previous_text.push_str(&format!(
                         "\n\n## Previous chapter fulltext: {} (risk upgrade)\n{}",
@@ -545,6 +546,19 @@ pub async fn build_chapter_context(
         }
     }
 
+    // P15: Inject the 3-8 most relevant canon constraints into the draft prompt.
+    // Limits injection count by severity and relevance to avoid rigid writing.
+    {
+        let constraint_block = build_canon_constraint_prompt_block(
+            &target.summary,
+            &lore_entries,
+            memory.as_ref(),
+        );
+        if !constraint_block.is_empty() {
+            prompt_context = format!("{}\n{}\n", constraint_block, prompt_context);
+        }
+    }
+
     let intent_artifact = build_chapter_intent_artifact(instruction, &target);
     let selected_evidence = build_selected_evidence_artifact(&sources);
     let rule_stack = build_chapter_rule_stack(&chapter_contract);
@@ -759,6 +773,8 @@ pub async fn build_chapter_context(
         author_voice_snapshot,
         required_story_anchors,
         required_state_deltas,
+        scene_contract: None,
+        world_assets: Vec::new(),
     })
 }
 
@@ -1744,4 +1760,119 @@ pub fn build_chapter_generation_spine(
     spine.hot_buffer = format!("Target: {}", target.title);
 
     spine
+}
+
+/// P15: Build a canon constraint prompt block injecting the 3-8 most relevant constraints
+/// for this chapter. Constraints are selected from world assets and memory canon entities
+/// based on relevance to the target beat summary. Limits injection to avoid rigid writing.
+fn build_canon_constraint_prompt_block(
+    target_summary: &str,
+    lore_entries: &[storage::LoreEntry],
+    memory: Option<&crate::writer_agent::memory::WriterMemory>,
+) -> String {
+    let mut constraints: Vec<(String, crate::writer_agent::world_bible::ConstraintSeverity)> = Vec::new();
+
+    // Collect constraints from lore entries that look like rules
+    for entry in lore_entries.iter().filter(|e| {
+        e.keyword.contains("规则")
+            || e.keyword.contains("门规")
+            || e.keyword.contains("代价")
+            || e.keyword.contains("禁")
+    }) {
+        let severity = if entry.keyword.contains("禁") || entry.keyword.contains("不可") {
+            crate::writer_agent::world_bible::ConstraintSeverity::Hard
+        } else {
+            crate::writer_agent::world_bible::ConstraintSeverity::Warning
+        };
+        constraints.push((
+            format!("- [{}] {}: {}",
+                match severity {
+                    crate::writer_agent::world_bible::ConstraintSeverity::Hard => "硬约束",
+                    _ => "提醒",
+                },
+                entry.keyword,
+                entry.content.chars().take(120).collect::<String>()
+            ),
+            severity,
+        ));
+    }
+
+    // Collect from memory canon entities if available
+    if let Some(mem) = memory {
+        if let Ok(entities) = mem.list_canon_entities() {
+            for entity in entities.iter().filter(|e| {
+                e.kind.contains("rule")
+                    || e.kind.contains("规则")
+                    || e.kind.contains("limit")
+                    || e.kind.contains("限制")
+            }) {
+                let severity = if entity.confidence >= 0.9 {
+                    crate::writer_agent::world_bible::ConstraintSeverity::Hard
+                } else {
+                    crate::writer_agent::world_bible::ConstraintSeverity::Warning
+                };
+                constraints.push((
+                    format!(
+                        "- [{}] {} ({}): {}",
+                        match severity {
+                            crate::writer_agent::world_bible::ConstraintSeverity::Hard => "硬约束",
+                            _ => "提醒",
+                        },
+                        entity.name,
+                        entity.kind,
+                        entity.summary.chars().take(120).collect::<String>()
+                    ),
+                    severity,
+                ));
+            }
+        }
+    }
+
+    if constraints.is_empty() {
+        return String::new();
+    }
+
+    // Score relevance to target summary
+    let summary_lower = target_summary.to_lowercase();
+    let mut scored: Vec<(f32, (String, crate::writer_agent::world_bible::ConstraintSeverity))> = constraints
+        .into_iter()
+        .map(|(text, severity)| {
+            let mut score = 0.0f32;
+            let text_lower = text.to_lowercase();
+            for word in summary_lower.split_whitespace() {
+                if word.chars().count() >= 2 && text_lower.contains(word) {
+                    score += 1.0;
+                }
+            }
+            // Hard constraints get a small tie-breaker bonus
+            if matches!(severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard) {
+                score += 0.1;
+            }
+            (score, (text, severity))
+        })
+        .collect();
+
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Limit to 3-8 constraints based on relevance; only include if score > 0
+    let selected: Vec<String> = scored
+        .into_iter()
+        .filter(|(score, _)| *score > 0.0)
+        .take(8)
+        .map(|(_, (text, _))| text)
+        .collect();
+
+    if selected.len() < 3 {
+        // Not enough relevant constraints — skip injection to avoid noise
+        return String::new();
+    }
+
+    format!(
+        "## 本章设定约束（{}条）\n{}\n\n",
+        selected.len(),
+        selected.join("\n")
+    )
 }

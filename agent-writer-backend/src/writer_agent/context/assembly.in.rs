@@ -4,9 +4,10 @@ use crate::writer_agent::memory::{
 };
 
 /// Assembles a ContextPack under strict budget constraints.
+/// The source_provider closure returns (content, elapsed_ms, retrieval_status).
 pub fn assemble_context_pack(
     task: AgentTask,
-    source_provider: &dyn Fn(ContextSource) -> Option<String>,
+    source_provider: &dyn Fn(ContextSource) -> Option<(String, u64, String)>,
     total_budget: usize,
 ) -> WritingContextPack {
     let priorities = task.source_priorities();
@@ -16,7 +17,7 @@ pub fn assemble_context_pack(
     let mut raw_sources = Vec::new();
 
     for (source, priority, budget) in priorities {
-        if let Some(raw) = source_provider(source.clone()) {
+        if let Some((raw, elapsed_ms, retrieval_status)) = source_provider(source.clone()) {
             raw_sources.push(SourceDraft {
                 source,
                 priority,
@@ -24,6 +25,8 @@ pub fn assemble_context_pack(
                 raw,
                 required_budget: 0,
                 consumed: 0,
+                elapsed_ms,
+                retrieval_status,
             });
         }
     }
@@ -61,8 +64,8 @@ pub fn assemble_context_pack(
             truncated: draft.raw.chars().count() > draft.consumed,
             priority: draft.priority,
             evidence_ref: None,
-            elapsed_ms: 0,
-            retrieval_status: String::new(),
+            elapsed_ms: draft.elapsed_ms,
+            retrieval_status: draft.retrieval_status.clone(),
         });
     }
 
@@ -97,8 +100,8 @@ pub fn assemble_context_pack(
                 truncated: draft.raw.chars().count() > draft.consumed,
                 priority: draft.priority,
                 evidence_ref: None,
-                elapsed_ms: 0,
-                retrieval_status: String::new(),
+                elapsed_ms: draft.elapsed_ms,
+                retrieval_status: draft.retrieval_status.clone(),
             });
         }
     }
@@ -142,7 +145,16 @@ pub fn assemble_context_pack_from_map(
     source_contents: std::collections::HashMap<ContextSource, String>,
     total_budget: usize,
 ) -> WritingContextPack {
-    assemble_context_pack(task, &|source| source_contents.get(&source).cloned(), total_budget)
+    assemble_context_pack(
+        task,
+        &|source| {
+            source_contents
+                .get(&source)
+                .cloned()
+                .map(|content| (content, 0, "sync".to_string()))
+        },
+        total_budget,
+    )
 }
 
 pub fn append_context_source_with_budget(
@@ -191,7 +203,7 @@ pub fn append_context_source_with_budget(
         priority,
         evidence_ref,
         elapsed_ms: 0,
-        retrieval_status: String::new(),
+        retrieval_status: "sync".to_string(),
     });
     pack.sources
         .sort_by_key(|right| std::cmp::Reverse(right.priority));
@@ -222,6 +234,8 @@ struct SourceDraft {
     raw: String,
     required_budget: usize,
     consumed: usize,
+    elapsed_ms: u64,
+    retrieval_status: String,
 }
 
 fn source_inclusion_reason(task: &AgentTask, draft: &SourceDraft) -> String {
@@ -283,20 +297,46 @@ pub fn query_story_os(
         .and_then(chapter_number_from_title);
     let active_volume = chapter_number
         .and_then(|number| memory.find_volume_for_chapter(&observation.project_id, number).ok().flatten());
+
+    let t0 = std::time::Instant::now();
     let book_state = memory.get_book_state(&observation.project_id).ok().flatten();
+    let book_state_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let volume_snapshots = related_volume_snapshots(
         &observation.project_id,
         active_volume.as_ref(),
         memory,
     );
-    let arc_snapshots = related_arc_snapshots(&observation.project_id, active_volume.as_ref(), memory);
+    let volume_snapshots_elapsed = t0.elapsed().as_millis() as u64;
 
+    let t0 = std::time::Instant::now();
+    let arc_snapshots = related_arc_snapshots(&observation.project_id, active_volume.as_ref(), memory);
+    let arc_snapshots_elapsed = t0.elapsed().as_millis() as u64;
+
+    // Time each source retrieval and capture status.
+    let t0 = std::time::Instant::now();
     let project_brief = build_project_brief(&observation.project_id, memory);
+    let project_brief_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let chapter_mission = build_chapter_mission(&observation.project_id, observation, memory);
+    let chapter_mission_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let next_beat = build_next_beat(&observation.project_id, observation, memory);
+    let next_beat_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let result_feedback = build_result_feedback(&observation.project_id, observation, memory);
+    let result_feedback_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let decisions = memory.list_recent_decisions(6).unwrap_or_default();
+    let decisions_elapsed = t0.elapsed().as_millis() as u64;
+
     let all_open_promises = memory.get_open_promise_summaries().unwrap_or_default();
+
     let open_promises =
         prefilter_promises_for_story_os(observation, active_volume.as_ref(), &all_open_promises);
     let decision_slice = build_decision_slice(&decisions);
@@ -307,9 +347,19 @@ pub fn query_story_os(
         &result_feedback,
         &decision_slice,
     );
+
+    let t0 = std::time::Instant::now();
     let canon_slice = build_canon_slice(observation, memory, &relevance, &open_promises);
+    let canon_slice_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let promise_slice = build_promise_slice(observation, &open_promises, &relevance, &decisions, memory);
+    let promise_slice_elapsed = t0.elapsed().as_millis() as u64;
+
+    let t0 = std::time::Instant::now();
     let author_style = build_style_slice(memory);
+    let author_style_elapsed = t0.elapsed().as_millis() as u64;
+
     let book_state_text = build_book_state_context(book_state.as_ref());
     let arc_snapshot_text = build_arc_snapshot_context(&arc_snapshots);
     let volume_snapshot_text = build_volume_snapshot_context(&volume_snapshots);
@@ -320,28 +370,40 @@ pub fn query_story_os(
         observation.prefix.clone()
     };
     let cursor_suffix = observation.suffix.clone();
+
+    let t0 = std::time::Instant::now();
     let reader_compensation =
         build_reader_compensation_context(&observation.project_id, observation, memory);
+    let reader_compensation_elapsed = t0.elapsed().as_millis() as u64;
+
+    // Helper to wrap a source with timing and status.
+    fn timed_source(content: String, elapsed_ms: u64) -> Option<(String, u64, String)> {
+        if content.trim().is_empty() {
+            None
+        } else {
+            Some((content, elapsed_ms, "ok".to_string()))
+        }
+    }
 
     assemble_context_pack(
         task,
         &|source| match source {
-            ContextSource::CursorPrefix => non_empty(cursor_prefix.clone()),
-            ContextSource::CursorSuffix => non_empty(cursor_suffix.clone()),
-            ContextSource::SelectedText => non_empty(selected_text.clone()),
-            ContextSource::ProjectBrief => non_empty(project_brief.clone()),
-            ContextSource::BookState => non_empty(book_state_text.clone()),
-            ContextSource::ArcSnapshot => non_empty(arc_snapshot_text.clone()),
-            ContextSource::VolumeSnapshot => non_empty(volume_snapshot_text.clone()),
-            ContextSource::ChapterMission => non_empty(chapter_mission.clone()),
-            ContextSource::NextBeat => non_empty(next_beat.clone()),
-            ContextSource::ResultFeedback => non_empty(result_feedback.clone()),
-            ContextSource::CanonSlice => non_empty(canon_slice.clone()),
-            ContextSource::PromiseSlice => non_empty(promise_slice.clone()),
-            ContextSource::DecisionSlice => non_empty(decision_slice.clone()),
-            ContextSource::AuthorStyle => non_empty(author_style.clone()),
+            ContextSource::CursorPrefix => timed_source(cursor_prefix.clone(), 0),
+            ContextSource::CursorSuffix => timed_source(cursor_suffix.clone(), 0),
+            ContextSource::SelectedText => timed_source(selected_text.clone(), 0),
+            ContextSource::ProjectBrief => timed_source(project_brief.clone(), project_brief_elapsed),
+            ContextSource::BookState => timed_source(book_state_text.clone(), book_state_elapsed),
+            ContextSource::ArcSnapshot => timed_source(arc_snapshot_text.clone(), arc_snapshots_elapsed),
+            ContextSource::VolumeSnapshot => timed_source(volume_snapshot_text.clone(), volume_snapshots_elapsed),
+            ContextSource::ChapterMission => timed_source(chapter_mission.clone(), chapter_mission_elapsed),
+            ContextSource::NextBeat => timed_source(next_beat.clone(), next_beat_elapsed),
+            ContextSource::ResultFeedback => timed_source(result_feedback.clone(), result_feedback_elapsed),
+            ContextSource::CanonSlice => timed_source(canon_slice.clone(), canon_slice_elapsed),
+            ContextSource::PromiseSlice => timed_source(promise_slice.clone(), promise_slice_elapsed),
+            ContextSource::DecisionSlice => timed_source(decision_slice.clone(), decisions_elapsed),
+            ContextSource::AuthorStyle => timed_source(author_style.clone(), author_style_elapsed),
             ContextSource::StoryImpactRadius => None,
-            ContextSource::ReaderCompensation => non_empty(reader_compensation.clone()),
+            ContextSource::ReaderCompensation => timed_source(reader_compensation.clone(), reader_compensation_elapsed),
             _ => None,
         },
         total_budget,
@@ -760,5 +822,84 @@ mod parallel_retrieval_tests {
         );
 
         assert!(pack.total_chars <= 100, "pack should respect total_budget");
+    }
+
+    /// A4: Context sources carry elapsed_ms and retrieval_status through assembly.
+    #[test]
+    fn assembled_sources_carry_timing_and_status() {
+        let pack = assemble_context_pack(
+            AgentTask::GhostWriting,
+            &|source| match source {
+                ContextSource::ProjectBrief => {
+                    Some(("brief".to_string(), 12, "ok".to_string()))
+                }
+                ContextSource::ChapterMission => {
+                    Some(("mission".to_string(), 34, "ok".to_string()))
+                }
+                ContextSource::NextBeat => None,
+                _ => None,
+            },
+            10_000,
+        );
+
+        let brief = pack
+            .sources
+            .iter()
+            .find(|s| s.source == ContextSource::ProjectBrief);
+        assert!(brief.is_some(), "ProjectBrief should be present");
+        let brief = brief.unwrap();
+        assert_eq!(brief.elapsed_ms, 12);
+        assert_eq!(brief.retrieval_status, "ok");
+
+        let mission = pack
+            .sources
+            .iter()
+            .find(|s| s.source == ContextSource::ChapterMission);
+        assert!(mission.is_some(), "ChapterMission should be present");
+        let mission = mission.unwrap();
+        assert_eq!(mission.elapsed_ms, 34);
+        assert_eq!(mission.retrieval_status, "ok");
+
+        // NextBeat is absent — should not appear
+        assert!(
+            !pack.sources.iter().any(|s| s.source == ContextSource::NextBeat),
+            "absent NextBeat should not appear"
+        );
+    }
+
+    /// A4: Source timeout/failure does not swallow other sources.
+    #[test]
+    fn source_failure_does_not_swallow_others() {
+        let pack = assemble_context_pack(
+            AgentTask::GhostWriting,
+            &|source| match source {
+                ContextSource::ProjectBrief => {
+                    Some(("brief".to_string(), 5, "ok".to_string()))
+                }
+                ContextSource::ChapterMission => {
+                    Some(("mission".to_string(), 0, "timeout".to_string()))
+                }
+                ContextSource::NextBeat => None,
+                _ => None,
+            },
+            10_000,
+        );
+
+        assert_eq!(pack.sources.len(), 2);
+        assert!(pack
+            .sources
+            .iter()
+            .any(|s| s.source == ContextSource::ProjectBrief));
+        assert!(pack
+            .sources
+            .iter()
+            .any(|s| s.source == ContextSource::ChapterMission));
+
+        let mission = pack
+            .sources
+            .iter()
+            .find(|s| s.source == ContextSource::ChapterMission)
+            .unwrap();
+        assert_eq!(mission.retrieval_status, "timeout");
     }
 }

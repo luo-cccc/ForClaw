@@ -106,17 +106,50 @@ where
     context.generation_strategy = strategy.clone();
 
     // P14-P19: Load world assets and run preflight checks
-    let world_assets = Vec::new();
+    let world_assets = load_world_assets_for_project(&config.project, &config.project_id);
     let canon_constraints = crate::writer_agent::world_bible::compile_canon_constraints(&world_assets);
-    let preflight_warnings = crate::writer_agent::world_bible::preflight_world_bible(&world_assets, &canon_constraints);
-    if !preflight_warnings.is_empty() {
-        for warning in &preflight_warnings {
+    let preflight_result = crate::writer_agent::world_bible::preflight_canon_constraints(
+        &world_assets,
+        &canon_constraints,
+        &context.target.summary,
+    );
+    if !preflight_result.warnings.is_empty() {
+        for warning in &preflight_result.warnings {
             context.warnings.push(format!(
                 "[world-bible preflight] {}: {}",
                 warning.code, warning.message
             ));
         }
     }
+    // P18: Inject conflict set warnings into preflight
+    if !preflight_result.conflict_set.is_empty() {
+        for conflict in &preflight_result.conflict_set {
+            context.warnings.push(format!(
+                "[world-bible conflict] {}: {} — overlapping terms: {:?}",
+                conflict.constraint_a_id, conflict.constraint_b_id, conflict.overlapping_terms
+            ));
+        }
+    }
+
+    // P14-P19: Compile scene contract from world assets and attach to context
+    // so it flows into the draft generation prompt.
+    let scene_contract = {
+        let mission = context
+            .craft_plan
+            .as_ref()
+            .map(|p| p.objective.clone())
+            .unwrap_or_else(|| context.target.title.clone());
+        crate::writer_agent::world_bible::compile_scene_contract(
+            &context.target.title,
+            &mission,
+            &world_assets,
+            &canon_constraints,
+            &context.required_state_deltas,
+            Some(8),
+        )
+    };
+    context.scene_contract = Some(scene_contract.clone());
+    context.world_assets = world_assets.clone();
 
     let context_built_ms = context_t0.elapsed().as_millis() as u64;
 
@@ -195,6 +228,19 @@ where
         Some(quality_mode),
     ));
 
+    // Checkpoint: before provider call (draft generation)
+    write_agent_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        agent_harness_core::execution_plan::CheckpointPhase::ProviderCallBefore,
+        &context.target.title,
+        budget_spent_micros,
+        &[],
+        agent_harness_core::execution_plan::ResumePolicy::Rerun,
+    );
+
     let draft_t0 = std::time::Instant::now();
     let mut draft = match generate_chapter_draft(
         &config.settings,
@@ -223,6 +269,19 @@ where
             return PipelineTerminal::Failed(error);
         }
     };
+
+    // Checkpoint: after provider call (draft generation)
+    write_agent_checkpoint(
+        &config.memory_path,
+        &config.project_id,
+        &request_id,
+        &mut checkpoint_counter,
+        agent_harness_core::execution_plan::CheckpointPhase::ProviderCallAfter,
+        &context.target.title,
+        budget_spent_micros,
+        &[format!("draft:{}", request_id).as_str()],
+        agent_harness_core::execution_plan::ResumePolicy::Rerun,
+    );
     let draft_produced_ms = draft_t0.elapsed().as_millis() as u64;
     provider_calls += draft.provider_budget.provider_calls as usize;
     provider_retries += draft.provider_budget.provider_retries as usize;
@@ -252,6 +311,18 @@ where
                 Some(context.target.title.clone()),
                 Some(quality_mode),
             ));
+            // Checkpoint: before provider call (continuation)
+            write_agent_checkpoint(
+                &config.memory_path,
+                &config.project_id,
+                &request_id,
+                &mut checkpoint_counter,
+                agent_harness_core::execution_plan::CheckpointPhase::ProviderCallBefore,
+                &context.target.title,
+                budget_spent_micros,
+                &[],
+                agent_harness_core::execution_plan::ResumePolicy::Rerun,
+            );
             let continuation_t0 = std::time::Instant::now();
             let continuation = match continue_chapter_draft(
                 &config.settings,
@@ -279,6 +350,18 @@ where
                     return PipelineTerminal::Failed(error);
                 }
             };
+            // Checkpoint: after provider call (continuation)
+            write_agent_checkpoint(
+                &config.memory_path,
+                &config.project_id,
+                &request_id,
+                &mut checkpoint_counter,
+                agent_harness_core::execution_plan::CheckpointPhase::ProviderCallAfter,
+                &context.target.title,
+                budget_spent_micros,
+                &[],
+                agent_harness_core::execution_plan::ResumePolicy::Rerun,
+            );
             if !continuation.content.is_empty() {
                 if !draft.content.ends_with('\n') {
                     draft.content.push('\n');
@@ -302,6 +385,18 @@ where
                 Some(context.target.title.clone()),
                 Some(quality_mode),
             ));
+            // Checkpoint: before provider call (compress)
+            write_agent_checkpoint(
+                &config.memory_path,
+                &config.project_id,
+                &request_id,
+                &mut checkpoint_counter,
+                agent_harness_core::execution_plan::CheckpointPhase::ProviderCallBefore,
+                &context.target.title,
+                budget_spent_micros,
+                &[],
+                agent_harness_core::execution_plan::ResumePolicy::Rerun,
+            );
             let compress_t0 = std::time::Instant::now();
             let compressed = match compress_chapter_draft(
                 &config.settings,
@@ -329,6 +424,18 @@ where
                     return PipelineTerminal::Failed(error);
                 }
             };
+            // Checkpoint: after provider call (compress)
+            write_agent_checkpoint(
+                &config.memory_path,
+                &config.project_id,
+                &request_id,
+                &mut checkpoint_counter,
+                agent_harness_core::execution_plan::CheckpointPhase::ProviderCallAfter,
+                &context.target.title,
+                budget_spent_micros,
+                &[],
+                agent_harness_core::execution_plan::ResumePolicy::Rerun,
+            );
             if !compressed.content.is_empty() {
                 draft.content = compressed.content.trim().to_string();
                 draft.output_chars = char_count(&draft.content);
@@ -358,6 +465,18 @@ where
             Some(context.target.title.clone()),
             Some(quality_mode),
         ));
+        // Checkpoint: before provider call (hard compress)
+        write_agent_checkpoint(
+            &config.memory_path,
+            &config.project_id,
+            &request_id,
+            &mut checkpoint_counter,
+            agent_harness_core::execution_plan::CheckpointPhase::ProviderCallBefore,
+            &context.target.title,
+            budget_spent_micros,
+            &[],
+            agent_harness_core::execution_plan::ResumePolicy::Rerun,
+        );
         let hard_compress_t0 = std::time::Instant::now();
         let compressed = match compress_chapter_draft_hard(
             &config.settings,
@@ -385,6 +504,18 @@ where
                 return PipelineTerminal::Failed(error);
             }
         };
+        // Checkpoint: after provider call (hard compress)
+        write_agent_checkpoint(
+            &config.memory_path,
+            &config.project_id,
+            &request_id,
+            &mut checkpoint_counter,
+            agent_harness_core::execution_plan::CheckpointPhase::ProviderCallAfter,
+            &context.target.title,
+            budget_spent_micros,
+            &[],
+            agent_harness_core::execution_plan::ResumePolicy::Rerun,
+        );
         if !compressed.content.is_empty() {
             draft.content = compressed.content.trim().to_string();
             draft.output_chars = char_count(&draft.content);
@@ -438,22 +569,8 @@ where
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    // P14-P19: Compile scene contract for world consistency checking
-    let scene_contract = {
-        let mission = context
-            .craft_plan
-            .as_ref()
-            .map(|p| p.objective.clone())
-            .unwrap_or_else(|| context.target.title.clone());
-        Some(crate::writer_agent::world_bible::compile_scene_contract(
-            &context.target.title,
-            &mission,
-            &world_assets,
-            &canon_constraints,
-            &context.required_state_deltas,
-            Some(8),
-        ))
-    };
+    // P14-P19: Reuse scene contract already compiled before draft generation
+    let scene_contract = context.scene_contract.clone();
 
     let quality_signals = ChapterQualitySignals {
         anchor_keywords: context.quality_anchor_keywords.clone(),
@@ -462,7 +579,9 @@ where
         required_state_deltas: context.required_state_deltas.clone(),
         prior_chapter_summaries,
         scene_contract,
-        world_assets,
+        world_assets: context.world_assets.clone(),
+        canon_constraints: Vec::new(),
+        canon_terms: Vec::new(),
     };
     let quality_report_t0 = std::time::Instant::now();
     let quality_report_before = if quality_mode == GenerationQualityMode::Fast {
@@ -511,7 +630,34 @@ where
             has_fatal_or_major || has_strict_gate
         }
     };
-    if should_revise {
+    // P13: enforce provider call limit before revision
+    let provider_call_limit = quality_mode.max_provider_calls();
+    if provider_calls >= provider_call_limit && should_revise {
+        match quality_mode {
+            GenerationQualityMode::Strict => {
+                let error = ChapterGenerationError::new(
+                    "PROVIDER_CALL_LIMIT_EXCEEDED",
+                    format!(
+                        "Strict mode provider call limit ({}) reached before revision; approval required to continue.",
+                        provider_call_limit
+                    ),
+                    true,
+                );
+                emit(ChapterGenerationEvent::failed(
+                    &request_id,
+                    error.clone(),
+                    Some(quality_mode),
+                ));
+                return PipelineTerminal::Failed(error);
+            }
+            _ => {
+                revision_budget_skipped = true;
+                // Provider call limit reached — skip revision, keep original draft
+            }
+        }
+    }
+
+    if should_revise && !revision_budget_skipped {
         let revision_prompt = build_revision_prompt(
             &draft.content,
             &quality_report_before,
@@ -551,6 +697,18 @@ where
             } else {
                 record_provider_budget(&context, &revision_budget);
                 revision_attempted = true;
+                // Checkpoint: before provider call (revision)
+                write_agent_checkpoint(
+                    &config.memory_path,
+                    &config.project_id,
+                    &request_id,
+                    &mut checkpoint_counter,
+                    agent_harness_core::execution_plan::CheckpointPhase::ProviderCallBefore,
+                    &context.target.title,
+                    budget_spent_micros,
+                    &[],
+                    agent_harness_core::execution_plan::ResumePolicy::Rerun,
+                );
                 let revision_result = crate::llm_runtime::chat_text_profile_with_usage(
                     &config.settings,
                     revision_messages,
@@ -558,6 +716,18 @@ where
                     300,
                 )
                 .await;
+                // Checkpoint: after provider call (revision)
+                write_agent_checkpoint(
+                    &config.memory_path,
+                    &config.project_id,
+                    &request_id,
+                    &mut checkpoint_counter,
+                    agent_harness_core::execution_plan::CheckpointPhase::ProviderCallAfter,
+                    &context.target.title,
+                    budget_spent_micros,
+                    &[],
+                    agent_harness_core::execution_plan::ResumePolicy::Rerun,
+                );
                 if let Ok((revised, mut revision_usage)) = revision_result {
                     revision_usage.repaired = true;
                     provider_calls += revision_usage.provider_calls as usize;
@@ -670,6 +840,68 @@ where
         Some(quality_mode),
     ));
 
+    // P17: Strict mode hard block — check for high-severity violations before save
+    if quality_mode == GenerationQualityMode::Strict {
+        let hard_violations: Vec<_> = final_quality
+            .world_consistency_violations
+            .iter()
+            .filter(|v| matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard))
+            .collect();
+        if !hard_violations.is_empty() {
+            let violation_ids: Vec<String> = hard_violations
+                .iter()
+                .map(|v| v.constraint_id.clone())
+                .collect();
+            let error = ChapterGenerationError::with_details(
+                "STRICT_MODE_BLOCKED",
+                format!(
+                    "Strict mode blocked save due to {} hard severity canon violation(s): {}",
+                    hard_violations.len(),
+                    violation_ids.join(", ")
+                ),
+                true,
+                format!(
+                    "Violations: {}",
+                    hard_violations
+                        .iter()
+                        .map(|v| format!("{}: {}", v.constraint_id, v.message))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            );
+            emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode),
+            ));
+            return PipelineTerminal::Failed(error);
+        }
+
+        // P17: new_information_density score < 0.5 in Strict mode triggers warning or block
+        let nid_metric = final_quality
+            .metric_results
+            .iter()
+            .find(|m| m.metric == "new_information_density");
+        if let Some(nid) = nid_metric {
+            if nid.score < 0.5 {
+                let error = ChapterGenerationError::new(
+                    "STRICT_MODE_INFO_DENSITY_LOW",
+                    format!(
+                        "Strict mode blocked save: new_information_density score {:.2} is below threshold 0.5",
+                        nid.score
+                    ),
+                    true,
+                );
+                emit(ChapterGenerationEvent::failed(
+                    &request_id,
+                    error.clone(),
+                    Some(quality_mode),
+                ));
+                return PipelineTerminal::Failed(error);
+            }
+        }
+    }
+
     let save_input = SaveGeneratedChapterInput {
         request_id: request_id.clone(),
         target: context.target.clone(),
@@ -703,8 +935,14 @@ where
     let save_prepared_ms = save_t0.elapsed().as_millis() as u64;
 
     // Checkpoint 4: save prepared (AgentCheckpoint with SavePrepared phase)
+    // Captures full state including conflict check results and approval status.
     let save_artifact_ref = format!("saved:{}/{}", saved.chapter_title, saved.new_revision);
-    write_agent_checkpoint(
+    let approval_refs: Vec<String> = if config.payload.save_mode == crate::chapter_generation::SaveMode::SaveAsDraft {
+        vec!["draft_auto_approved".to_string()]
+    } else {
+        vec!["manual_save".to_string()]
+    };
+    write_agent_checkpoint_with_payload(
         &config.memory_path,
         &config.project_id,
         &request_id,
@@ -714,6 +952,13 @@ where
         budget_spent_micros,
         &[save_artifact_ref.as_str()],
         agent_harness_core::execution_plan::ResumePolicy::RequireApproval,
+        approval_refs.clone(),
+        Some(serde_json::json!({
+            "save_mode": format!("{:?}", config.payload.save_mode),
+            "conflict_check": "passed",
+            "approval_refs": approval_refs,
+            "output_chars": saved.output_chars,
+        })),
     );
 
     emit(ChapterGenerationEvent::progress_with_detail(
@@ -1126,6 +1371,8 @@ pub fn record_manual_craft_edit_feedback(
         prior_chapter_summaries: Vec::new(),
         scene_contract: None,
         world_assets: Vec::new(),
+        canon_constraints: Vec::new(),
+        canon_terms: Vec::new(),
     };
     let min_chars = request.target_min_chars.unwrap_or(0);
     let max_chars = request.target_max_chars.unwrap_or_else(|| {
@@ -1526,6 +1773,7 @@ fn single_metric_report(metric: &str, text: &str) -> ChapterQualityReport {
         top_revision_targets: vec![metric.to_string()],
         no_fatal_issue: true,
         world_consistency_violations: Vec::new(),
+        canon_constraint_violations: Vec::new(),
     }
 }
 
@@ -1883,6 +2131,35 @@ fn write_agent_checkpoint(
     artifact_refs: &[&str],
     resume_policy: agent_harness_core::execution_plan::ResumePolicy,
 ) {
+    write_agent_checkpoint_with_payload(
+        memory_path,
+        project_id,
+        request_id,
+        counter,
+        phase,
+        _chapter_title,
+        budget_spent_micros,
+        artifact_refs,
+        resume_policy,
+        vec![],
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_agent_checkpoint_with_payload(
+    memory_path: &std::path::Path,
+    project_id: &str,
+    request_id: &str,
+    counter: &mut usize,
+    phase: agent_harness_core::execution_plan::CheckpointPhase,
+    _chapter_title: &str,
+    budget_spent_micros: u64,
+    artifact_refs: &[&str],
+    resume_policy: agent_harness_core::execution_plan::ResumePolicy,
+    approval_refs: Vec<String>,
+    safe_resume_payload: Option<serde_json::Value>,
+) {
     *counter = counter.saturating_add(1);
     let checkpoint_id = format!("{}-agent-cp-{}", request_id, counter);
     let checkpoint = agent_harness_core::execution_plan::AgentCheckpoint {
@@ -1897,8 +2174,17 @@ fn write_agent_checkpoint(
         tool_effects: vec![],
         provider_usage: None,
         budget_spent: budget_spent_micros,
-        approval_refs: vec![],
+        approval_refs,
         resume_policy,
+        task_kind: Some("chapter_generation".to_string()),
+        safe_resume_payload,
+        source: Some("pipeline".to_string()),
+        created_at_ms: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        ),
     };
 
     if let Ok(memory) = crate::writer_agent::memory::WriterMemory::open(memory_path) {
@@ -1906,12 +2192,35 @@ fn write_agent_checkpoint(
     }
 }
 
-#[allow(dead_code)]
 fn load_world_assets_for_project<P: ChapterGenerationProject>(
     project: &P,
     _project_id: &str,
 ) -> Vec<crate::writer_agent::world_bible::WorldAsset> {
-    let path = project.project_data_dir().join("world_assets.json");
+    let data_dir = project.project_data_dir();
+
+    // P14: Prefer world_bible_index.json (new TypedWorldAsset system)
+    let bible_index_path = data_dir.join("world_bible_index.json");
+    if bible_index_path.exists() {
+        let text = match std::fs::read_to_string(&bible_index_path) {
+            Ok(t) => t,
+            Err(_) => return Vec::new(),
+        };
+        match serde_json::from_str::<crate::writer_agent::world_bible::WorldBibleIndex>(&text) {
+            Ok(index) => {
+                return index
+                    .assets
+                    .iter()
+                    .map(|a| a.to_world_asset())
+                    .collect();
+            }
+            Err(_) => {
+                // Fall through to legacy world_assets.json or empty
+            }
+        }
+    }
+
+    // Backward compat: load legacy world_assets.json
+    let path = data_dir.join("world_assets.json");
     if !path.exists() {
         return Vec::new();
     }

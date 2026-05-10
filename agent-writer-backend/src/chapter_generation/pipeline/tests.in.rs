@@ -405,4 +405,32 @@ mod tests {
         assert_eq!(bad_patterns.len(), 1);
         assert_eq!(bad_patterns[0].correction, "让对话改变选择。");
     }
+
+    #[test]
+    fn quality_mode_fast_provider_call_limit_is_three() {
+        use crate::chapter_generation::GenerationQualityMode;
+        assert_eq!(GenerationQualityMode::Fast.max_provider_calls(), 3);
+    }
+
+    #[test]
+    fn quality_mode_balanced_provider_call_limit_is_five() {
+        use crate::chapter_generation::GenerationQualityMode;
+        assert_eq!(GenerationQualityMode::Balanced.max_provider_calls(), 5);
+    }
+
+    #[test]
+    fn quality_mode_strict_provider_call_limit_is_seven() {
+        use crate::chapter_generation::GenerationQualityMode;
+        assert_eq!(GenerationQualityMode::Strict.max_provider_calls(), 7);
+    }
+
+    #[test]
+    fn quality_mode_limits_are_ordered_fast_lt_balanced_lt_strict() {
+        use crate::chapter_generation::GenerationQualityMode;
+        let fast = GenerationQualityMode::Fast.max_provider_calls();
+        let balanced = GenerationQualityMode::Balanced.max_provider_calls();
+        let strict = GenerationQualityMode::Strict.max_provider_calls();
+        assert!(fast < balanced, "Fast limit should be lower than Balanced");
+        assert!(balanced < strict, "Balanced limit should be lower than Strict");
+    }
 }

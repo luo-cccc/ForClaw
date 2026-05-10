@@ -11,6 +11,84 @@ pub struct ExecutionPlan {
     pub steps: Vec<ExecutionStep>,
     pub status: PlanStatus,
     pub created_at_ms: u64,
+    /// ID of the most recently written checkpoint for this plan.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_checkpoint_id: Option<String>,
+}
+
+/// A structured success signal that can be evaluated against step evidence.
+/// Replaces free-form string signals with rule-based checks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StepSignal {
+    /// Check that the step produced an artifact matching the given name/pattern.
+    ArtifactProduced { artifact_name: String },
+    /// Check that the step called a specific read-only validation tool.
+    ReadOnlyCheckCalled { tool_name: String },
+    /// Check that the step received explicit author approval.
+    AuthorApproval { approval_ref: String },
+    /// Custom signal checked by name match against evidence.
+    Custom { name: String },
+}
+
+impl StepSignal {
+    /// Evaluate this signal against the provided step evidence.
+    /// Returns `true` if the signal is satisfied by the evidence.
+    pub fn evaluate(&self, evidence: &StepEvidence) -> bool {
+        match self {
+            StepSignal::ArtifactProduced { artifact_name } => evidence
+                .artifact_refs
+                .iter()
+                .any(|a| a.contains(artifact_name)),
+            StepSignal::ReadOnlyCheckCalled { tool_name } => evidence
+                .tool_executions
+                .iter()
+                .any(|t| t.contains(tool_name)),
+            StepSignal::AuthorApproval { approval_ref } => evidence
+                .artifact_refs
+                .iter()
+                .any(|a| a.contains(approval_ref)),
+            StepSignal::Custom { name } => {
+                evidence.artifact_refs.iter().any(|a| a.contains(name))
+                    || evidence.tool_executions.iter().any(|t| t.contains(name))
+                    || evidence.context_refs.iter().any(|c| c.contains(name))
+            }
+        }
+    }
+
+    /// Human-readable description of what this signal checks.
+    pub fn description(&self) -> String {
+        match self {
+            StepSignal::ArtifactProduced { artifact_name } => {
+                format!("artifact '{}' produced", artifact_name)
+            }
+            StepSignal::ReadOnlyCheckCalled { tool_name } => {
+                format!("read-only check '{}' called", tool_name)
+            }
+            StepSignal::AuthorApproval { approval_ref } => {
+                format!("author approval '{}' received", approval_ref)
+            }
+            StepSignal::Custom { name } => format!("custom signal '{}' satisfied", name),
+        }
+    }
+}
+
+/// Evaluate a list of success signals against step evidence.
+/// Returns `Ok(())` if all signals are satisfied, or `Err` with missing signal descriptions.
+pub fn evaluate_success_signals(
+    signals: &[StepSignal],
+    evidence: &StepEvidence,
+) -> Result<(), Vec<String>> {
+    let missing: Vec<String> = signals
+        .iter()
+        .filter(|s| !s.evaluate(evidence))
+        .map(|s| s.description())
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing)
+    }
 }
 
 /// Contract that defines the expected inputs, allowed tools, and success criteria
@@ -25,6 +103,9 @@ pub struct StepContract {
     pub max_side_effect: ToolSideEffectLevel,
     pub provider_allowed: bool,
     pub success_evidence_required: Vec<String>,
+    /// Structured success signals evaluated against step evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_signals: Vec<StepSignal>,
     pub failure_policy: StepFailureAction,
 }
 
@@ -56,6 +137,9 @@ pub struct ProviderUsageSummary {
 /// Unified durable checkpoint for agent execution.
 /// Written at step boundaries and key operation points to enable
 /// resume after interruption.
+///
+/// Supersedes `LongTaskCheckpoint` from `agent-writer-backend`. Backward
+/// compatibility is maintained via `From`/`Into` conversions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCheckpoint {
@@ -73,6 +157,18 @@ pub struct AgentCheckpoint {
     pub budget_spent: u64,
     pub approval_refs: Vec<String>,
     pub resume_policy: ResumePolicy,
+    /// Backward-compat: task kind for legacy `LongTaskCheckpoint` mapping.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub task_kind: Option<String>,
+    /// Backward-compat: safe-resume payload for legacy `LongTaskCheckpoint` mapping.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub safe_resume_payload: Option<serde_json::Value>,
+    /// Source of the checkpoint (e.g. "agent_loop", "pipeline").
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+    /// Timestamp when the checkpoint was created (ms since epoch).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub created_at_ms: Option<u64>,
 }
 
 /// Phase of execution at which a checkpoint was captured.
@@ -111,7 +207,9 @@ pub struct ExecutionStep {
     pub required_context: Vec<String>,
     pub allowed_tools: Vec<String>,
     pub max_side_effect: ToolSideEffectLevel,
-    pub success_signals: Vec<String>,
+    /// Structured success signals for rule-based step completion checks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_signals: Vec<StepSignal>,
     pub on_failure: StepFailureAction,
     pub status: StepStatus,
     #[serde(default)]
@@ -122,6 +220,9 @@ pub struct ExecutionStep {
     pub contract: Option<StepContract>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub evidence: Option<StepEvidence>,
+    /// Whether a checkpoint was written for this step during execution.
+    #[serde(default)]
+    pub checkpoint_written: bool,
 }
 
 impl ExecutionStep {
@@ -166,6 +267,7 @@ impl Default for ExecutionStep {
             recovery_action: None,
             contract: None,
             evidence: None,
+            checkpoint_written: false,
         }
     }
 }
@@ -338,6 +440,58 @@ impl ExecutionPlan {
         }
         false
     }
+
+    /// Resume an incomplete plan, recovering running/blocked steps according to their contract.
+    ///
+    /// - Terminal steps (Completed, Failed, Skipped) are left as-is.
+    /// - Running steps are reset to Ready (will be re-executed).
+    /// - Blocked steps are reset to Ready if their contract allows recovery,
+    ///   otherwise they remain Blocked.
+    /// - Planned steps are left as Planned.
+    pub fn resume(&mut self) {
+        for step in &mut self.steps {
+            if step.is_terminal() {
+                continue;
+            }
+            match step.step_state {
+                ExecutionStepState::Running => {
+                    step.status = StepStatus::Ready;
+                    step.step_state = ExecutionStepState::Ready;
+                }
+                ExecutionStepState::Blocked => {
+                    // Determine recovery policy from contract or step-level failure action
+                    let can_recover = step
+                        .contract
+                        .as_ref()
+                        .map(|c| {
+                            !matches!(
+                                c.failure_policy,
+                                StepFailureAction::Abort | StepFailureAction::Stop
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            !matches!(
+                                step.on_failure,
+                                StepFailureAction::Abort | StepFailureAction::Stop
+                            )
+                        });
+                    if can_recover {
+                        step.status = StepStatus::Ready;
+                        step.step_state = ExecutionStepState::Ready;
+                    }
+                    // else: remains blocked
+                }
+                ExecutionStepState::Ready | ExecutionStepState::Planned => {
+                    // Already in a resumable state
+                }
+                _ => {}
+            }
+        }
+        // Reset plan status if it was failed
+        if matches!(self.status, PlanStatus::Failed { .. }) {
+            self.status = PlanStatus::Running;
+        }
+    }
 }
 
 pub fn compile_plan(task: &TaskPacket, plan_id: &str, now_ms: u64) -> ExecutionPlan {
@@ -349,6 +503,7 @@ pub fn compile_plan(task: &TaskPacket, plan_id: &str, now_ms: u64) -> ExecutionP
         steps,
         status: PlanStatus::Pending,
         created_at_ms: now_ms,
+        last_checkpoint_id: None,
     }
 }
 
@@ -617,8 +772,12 @@ fn agent_checkpoint_serialization_roundtrip() {
             duration_ms: 1200,
         }),
         budget_spent: 2500,
-        approval_refs: vec![],
+        approval_refs: vec!["approval-1".to_string()],
         resume_policy: ResumePolicy::Skip,
+        task_kind: Some("chapter_generation".to_string()),
+        safe_resume_payload: Some(serde_json::json!({"step": "draft"})),
+        source: Some("pipeline".to_string()),
+        created_at_ms: Some(1_700_000_000_000),
     };
     let json = serde_json::to_string(&cp).unwrap();
     let decoded: AgentCheckpoint = serde_json::from_str(&json).unwrap();
@@ -627,6 +786,10 @@ fn agent_checkpoint_serialization_roundtrip() {
     assert_eq!(decoded.resume_policy, ResumePolicy::Skip);
     assert_eq!(decoded.budget_spent, 2500);
     assert_eq!(decoded.artifact_refs, vec!["draft.txt"]);
+    assert_eq!(decoded.approval_refs, vec!["approval-1"]);
+    assert_eq!(decoded.task_kind, Some("chapter_generation".to_string()));
+    assert_eq!(decoded.source, Some("pipeline".to_string()));
+    assert_eq!(decoded.created_at_ms, Some(1_700_000_000_000));
 }
 
 #[test]
@@ -709,6 +872,35 @@ fn deserialize_old_format_without_new_fields_uses_defaults() {
     let decoded: ExecutionPlan = serde_json::from_str(old_json).unwrap();
     assert_eq!(decoded.steps[0].step_state, ExecutionStepState::Planned);
     assert!(decoded.steps[0].recovery_action.is_none());
+    assert!(!decoded.steps[0].checkpoint_written);
+    assert!(decoded.last_checkpoint_id.is_none());
+}
+
+#[test]
+fn execution_step_checkpoint_written_field_defaults_false() {
+    let step = ExecutionStep::default();
+    assert!(!step.checkpoint_written);
+}
+
+#[test]
+fn execution_plan_last_checkpoint_id_roundtrip() {
+    let task = TaskPacket::new("t-cp", "test", TaskScope::Chapter, 1);
+    let mut plan = compile_plan(&task, "p-cp", 1);
+    plan.last_checkpoint_id = Some("cp-123".to_string());
+    let json = serde_json::to_string(&plan).unwrap();
+    let decoded: ExecutionPlan = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.last_checkpoint_id, Some("cp-123".to_string()));
+}
+
+#[test]
+fn execution_step_checkpoint_written_roundtrip() {
+    let step = ExecutionStep {
+        checkpoint_written: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&step).unwrap();
+    let decoded: ExecutionStep = serde_json::from_str(&json).unwrap();
+    assert!(decoded.checkpoint_written);
 }
 
 #[test]
@@ -1037,6 +1229,7 @@ fn step_contract_serialization_roundtrip() {
         max_side_effect: ToolSideEffectLevel::Read,
         provider_allowed: false,
         success_evidence_required: vec!["chapter_text".to_string()],
+        success_signals: vec![],
         failure_policy: StepFailureAction::Stop,
     };
     let json = serde_json::to_string(&contract).unwrap();
@@ -1087,6 +1280,7 @@ fn execution_step_with_contract_and_evidence() {
             max_side_effect: ToolSideEffectLevel::Read,
             provider_allowed: false,
             success_evidence_required: vec!["output".to_string()],
+            success_signals: vec![],
             failure_policy: StepFailureAction::Stop,
         }),
         ..Default::default()
@@ -1127,6 +1321,7 @@ fn plan_resume_skips_terminal_steps_with_contract() {
         max_side_effect: ToolSideEffectLevel::Read,
         provider_allowed: false,
         success_evidence_required: vec![],
+        success_signals: vec![],
         failure_policy: StepFailureAction::Stop,
     });
 
@@ -1145,6 +1340,7 @@ fn plan_resume_skips_terminal_steps_with_contract() {
         max_side_effect: ToolSideEffectLevel::ProviderCall,
         provider_allowed: true,
         success_evidence_required: vec!["draft".to_string()],
+        success_signals: vec![],
         failure_policy: StepFailureAction::Retry { max_retries: 1 },
     });
 
@@ -1189,4 +1385,391 @@ fn deserialize_old_format_without_contract_and_evidence() {
     assert_eq!(decoded.steps[0].step_state, ExecutionStepState::Planned);
     assert!(decoded.steps[0].contract.is_none());
     assert!(decoded.steps[0].evidence.is_none());
+}
+
+// --- A1: StepSignal and evaluate_success_signals tests ---
+
+#[test]
+fn step_signal_artifact_produced_matches() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec!["draft.txt".to_string(), "outline.json".to_string()],
+        tool_executions: vec![],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signal = StepSignal::ArtifactProduced {
+        artifact_name: "draft".to_string(),
+    };
+    assert!(signal.evaluate(&evidence));
+}
+
+#[test]
+fn step_signal_artifact_produced_no_match() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec!["outline.json".to_string()],
+        tool_executions: vec![],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signal = StepSignal::ArtifactProduced {
+        artifact_name: "draft".to_string(),
+    };
+    assert!(!signal.evaluate(&evidence));
+}
+
+#[test]
+fn step_signal_read_only_check_called_matches() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec![],
+        tool_executions: vec!["run_quality_diagnostics".to_string()],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signal = StepSignal::ReadOnlyCheckCalled {
+        tool_name: "quality".to_string(),
+    };
+    assert!(signal.evaluate(&evidence));
+}
+
+#[test]
+fn step_signal_author_approval_matches() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec!["approval_chapter_3".to_string()],
+        tool_executions: vec![],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signal = StepSignal::AuthorApproval {
+        approval_ref: "chapter_3".to_string(),
+    };
+    assert!(signal.evaluate(&evidence));
+}
+
+#[test]
+fn step_signal_custom_matches_any_field() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec![],
+        tool_executions: vec![],
+        provider_usage: None,
+        context_refs: vec!["canon_ref".to_string()],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signal = StepSignal::Custom {
+        name: "canon".to_string(),
+    };
+    assert!(signal.evaluate(&evidence));
+}
+
+#[test]
+fn evaluate_success_signals_all_pass() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec!["draft.txt".to_string()],
+        tool_executions: vec!["run_quality_diagnostics".to_string()],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signals = vec![
+        StepSignal::ArtifactProduced {
+            artifact_name: "draft".to_string(),
+        },
+        StepSignal::ReadOnlyCheckCalled {
+            tool_name: "quality".to_string(),
+        },
+    ];
+    assert!(evaluate_success_signals(&signals, &evidence).is_ok());
+}
+
+#[test]
+fn evaluate_success_signals_reports_missing() {
+    let evidence = StepEvidence {
+        step_id: "s1".to_string(),
+        artifact_refs: vec!["draft.txt".to_string()],
+        tool_executions: vec![],
+        provider_usage: None,
+        context_refs: vec![],
+        completion_time_ms: 100,
+        context_hash: String::new(),
+    };
+    let signals = vec![
+        StepSignal::ArtifactProduced {
+            artifact_name: "draft".to_string(),
+        },
+        StepSignal::ReadOnlyCheckCalled {
+            tool_name: "quality".to_string(),
+        },
+    ];
+    let result = evaluate_success_signals(&signals, &evidence);
+    assert!(result.is_err());
+    let missing = result.unwrap_err();
+    assert_eq!(missing.len(), 1);
+    assert!(missing[0].contains("quality"));
+}
+
+#[test]
+fn step_signal_description_readable() {
+    assert_eq!(
+        StepSignal::ArtifactProduced {
+            artifact_name: "draft".to_string(),
+        }
+        .description(),
+        "artifact 'draft' produced"
+    );
+    assert_eq!(
+        StepSignal::ReadOnlyCheckCalled {
+            tool_name: "lint".to_string(),
+        }
+        .description(),
+        "read-only check 'lint' called"
+    );
+    assert_eq!(
+        StepSignal::AuthorApproval {
+            approval_ref: "ch3".to_string(),
+        }
+        .description(),
+        "author approval 'ch3' received"
+    );
+}
+
+#[test]
+fn step_signal_serialization_roundtrip() {
+    let signals = vec![
+        StepSignal::ArtifactProduced {
+            artifact_name: "draft.txt".to_string(),
+        },
+        StepSignal::ReadOnlyCheckCalled {
+            tool_name: "validate".to_string(),
+        },
+        StepSignal::AuthorApproval {
+            approval_ref: "author-ok".to_string(),
+        },
+        StepSignal::Custom {
+            name: "my_signal".to_string(),
+        },
+    ];
+    for signal in &signals {
+        let json = serde_json::to_string(signal).unwrap();
+        let decoded: StepSignal = serde_json::from_str(&json).unwrap();
+        assert_eq!(*signal, decoded);
+    }
+}
+
+#[test]
+fn plan_resume_resets_running_steps() {
+    let task = TaskPacket::new("t-resume-running", "test", TaskScope::Chapter, 1);
+    let mut plan = compile_plan(&task, "p-resume-running", 1);
+
+    // Step 0: completed
+    plan.steps[0].status = StepStatus::Completed { evidence: vec![] };
+    plan.steps[0].step_state = ExecutionStepState::Completed;
+
+    // Step 1: running (interrupted)
+    plan.steps[1].status = StepStatus::Running;
+    plan.steps[1].step_state = ExecutionStepState::Running;
+
+    plan.status = PlanStatus::Failed {
+        failed_step: "step-1".to_string(),
+        reason: "interrupted".to_string(),
+    };
+
+    plan.resume();
+
+    // Step 0 stays completed
+    assert_eq!(plan.steps[0].step_state, ExecutionStepState::Completed);
+    // Step 1 reset to Ready
+    assert_eq!(plan.steps[1].step_state, ExecutionStepState::Ready);
+    assert_eq!(plan.steps[1].status, StepStatus::Ready);
+    // Plan status reset to Running
+    assert_eq!(plan.status, PlanStatus::Running);
+}
+
+#[test]
+fn plan_resume_recover_blocked_step_with_retry_policy() {
+    let task = TaskPacket::new("t-resume-blocked", "test", TaskScope::Chapter, 1);
+    let mut plan = compile_plan(&task, "p-resume-blocked", 1);
+
+    // Step 0: completed
+    plan.steps[0].status = StepStatus::Completed { evidence: vec![] };
+    plan.steps[0].step_state = ExecutionStepState::Completed;
+
+    // Step 1: blocked with Retry policy in contract
+    plan.steps[1].status = StepStatus::Blocked {
+        reason: "rate limited".to_string(),
+        context_summary: vec![],
+        recovery_suggestion: "retry".to_string(),
+    };
+    plan.steps[1].step_state = ExecutionStepState::Blocked;
+    plan.steps[1].contract = Some(StepContract {
+        step_id: "step-1".to_string(),
+        input_summary: "draft".to_string(),
+        required_context: vec![],
+        allowed_tools: vec![],
+        max_side_effect: ToolSideEffectLevel::ProviderCall,
+        provider_allowed: true,
+        success_evidence_required: vec![],
+        success_signals: vec![],
+        failure_policy: StepFailureAction::Retry { max_retries: 2 },
+    });
+
+    plan.status = PlanStatus::Failed {
+        failed_step: "step-1".to_string(),
+        reason: "rate limited".to_string(),
+    };
+
+    plan.resume();
+
+    // Step 1 should be recovered to Ready (Retry policy allows recovery)
+    assert_eq!(plan.steps[1].step_state, ExecutionStepState::Ready);
+    assert_eq!(plan.steps[1].status, StepStatus::Ready);
+}
+
+#[test]
+fn plan_resume_keeps_blocked_step_with_abort_policy() {
+    let task = TaskPacket::new("t-resume-abort", "test", TaskScope::Chapter, 1);
+    let mut plan = compile_plan(&task, "p-resume-abort", 1);
+
+    // Step 0: completed
+    plan.steps[0].status = StepStatus::Completed { evidence: vec![] };
+    plan.steps[0].step_state = ExecutionStepState::Completed;
+
+    // Step 1: blocked with Abort policy in contract
+    plan.steps[1].status = StepStatus::Blocked {
+        reason: "save conflict".to_string(),
+        context_summary: vec![],
+        recovery_suggestion: "manual resolve".to_string(),
+    };
+    plan.steps[1].step_state = ExecutionStepState::Blocked;
+    plan.steps[1].contract = Some(StepContract {
+        step_id: "step-1".to_string(),
+        input_summary: "save".to_string(),
+        required_context: vec![],
+        allowed_tools: vec![],
+        max_side_effect: ToolSideEffectLevel::Write,
+        provider_allowed: false,
+        success_evidence_required: vec![],
+        success_signals: vec![],
+        failure_policy: StepFailureAction::Abort,
+    });
+
+    plan.status = PlanStatus::Failed {
+        failed_step: "step-1".to_string(),
+        reason: "save conflict".to_string(),
+    };
+
+    plan.resume();
+
+    // Step 1 should remain Blocked (Abort policy prevents recovery)
+    assert_eq!(plan.steps[1].step_state, ExecutionStepState::Blocked);
+    assert!(matches!(plan.steps[1].status, StepStatus::Blocked { .. }));
+}
+
+#[test]
+fn plan_resume_uses_step_level_on_failure_when_no_contract() {
+    let task = TaskPacket::new("t-resume-no-contract", "test", TaskScope::Chapter, 1);
+    let mut plan = compile_plan(&task, "p-resume-no-contract", 1);
+
+    // Step 0: completed
+    plan.steps[0].status = StepStatus::Completed { evidence: vec![] };
+    plan.steps[0].step_state = ExecutionStepState::Completed;
+
+    // Step 1: blocked, no contract, but step-level on_failure is Skip (recoverable)
+    plan.steps[1].status = StepStatus::Blocked {
+        reason: "missing context".to_string(),
+        context_summary: vec!["outline".to_string()],
+        recovery_suggestion: "load outline".to_string(),
+    };
+    plan.steps[1].step_state = ExecutionStepState::Blocked;
+    plan.steps[1].on_failure = StepFailureAction::Skip;
+    // No contract
+
+    plan.status = PlanStatus::Failed {
+        failed_step: "step-1".to_string(),
+        reason: "missing context".to_string(),
+    };
+
+    plan.resume();
+
+    // Step 1 should be recovered because on_failure is Skip (not Abort/Stop)
+    assert_eq!(plan.steps[1].step_state, ExecutionStepState::Ready);
+    assert_eq!(plan.steps[1].status, StepStatus::Ready);
+}
+
+#[test]
+fn step_contract_with_success_signals_serialization_roundtrip() {
+    let contract = StepContract {
+        step_id: "step-1".to_string(),
+        input_summary: "draft chapter".to_string(),
+        required_context: vec!["outline".to_string()],
+        allowed_tools: vec!["generate_bounded_continuation".to_string()],
+        max_side_effect: ToolSideEffectLevel::ProviderCall,
+        provider_allowed: true,
+        success_evidence_required: vec!["chapter_text".to_string()],
+        success_signals: vec![
+            StepSignal::ArtifactProduced {
+                artifact_name: "chapter_draft".to_string(),
+            },
+            StepSignal::ReadOnlyCheckCalled {
+                tool_name: "validate_quality".to_string(),
+            },
+        ],
+        failure_policy: StepFailureAction::Retry { max_retries: 1 },
+    };
+    let json = serde_json::to_string(&contract).unwrap();
+    let decoded: StepContract = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.success_signals.len(), 2);
+    assert_eq!(
+        decoded.success_signals[0],
+        StepSignal::ArtifactProduced {
+            artifact_name: "chapter_draft".to_string(),
+        }
+    );
+    assert_eq!(
+        decoded.success_signals[1],
+        StepSignal::ReadOnlyCheckCalled {
+            tool_name: "validate_quality".to_string(),
+        }
+    );
+}
+
+#[test]
+fn deserialize_old_format_with_string_success_signals_defaults_to_empty() {
+    // Old format had success_signals as Vec<String>; new format is Vec<StepSignal>.
+    // serde should handle the empty array case gracefully.
+    let old_json = r#"{
+        "planId": "old-plan",
+        "taskId": "old-task",
+        "status": "pending",
+        "createdAtMs": 1,
+        "steps": [
+            {
+                "stepId": "step-0",
+                "index": 0,
+                "goal": "old goal",
+                "requiredContext": [],
+                "allowedTools": [],
+                "maxSideEffect": "read",
+                "successSignals": [],
+                "onFailure": "stop",
+                "status": "planned"
+            }
+        ]
+    }"#;
+    let decoded: ExecutionPlan = serde_json::from_str(old_json).unwrap();
+    assert!(decoded.steps[0].success_signals.is_empty());
 }

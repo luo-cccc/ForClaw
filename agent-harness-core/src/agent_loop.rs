@@ -5,8 +5,8 @@ use crate::context_window_guard::{
     evaluate_context_window, ContextWindowInfo, ContextWindowSource,
 };
 use crate::execution_plan::{
-    AgentCheckpoint, CheckpointPhase, ExecutionPlan, ExecutionStep, PlanStatus,
-    ProviderUsageSummary, ResumePolicy, StepEvidence, StepFailureAction, StepStatus,
+    evaluate_success_signals, AgentCheckpoint, CheckpointPhase, ExecutionPlan, ExecutionStep,
+    PlanStatus, ProviderUsageSummary, ResumePolicy, StepEvidence, StepFailureAction, StepStatus,
 };
 use crate::provider::{LlmMessage, LlmRequest, Provider, StreamEvent};
 use crate::recovery::{
@@ -191,6 +191,12 @@ pub struct ProviderCallContext {
 
 pub type ProviderCallGuard = Arc<dyn Fn(ProviderCallContext) -> Result<(), String> + Send + Sync>;
 
+/// Callback for writing durable checkpoints during plan execution.
+/// The host runtime supplies this to persist checkpoints to storage.
+pub type CheckpointWriter = Arc<
+    dyn Fn(&AgentCheckpoint) -> Result<(), String> + Send + Sync,
+>;
+
 /// The core agent execution loop.
 /// Generic over Provider and ToolHandler — fully testable with mocks.
 /// Ported from Claw Code `ConversationRuntime<C,T>` pattern.
@@ -201,6 +207,7 @@ pub struct AgentLoop<P: Provider, H: ToolHandler> {
     pub messages: Vec<LlmMessage>,
     pub on_event: Option<EventCallback>,
     pub provider_call_guard: Option<ProviderCallGuard>,
+    pub checkpoint_writer: Option<CheckpointWriter>,
     pub last_usage: Option<crate::provider::UsageInfo>,
     pub ttft_ms: Option<u64>,
     pub provider_call_duration_ms: u64,
@@ -209,6 +216,8 @@ pub struct AgentLoop<P: Provider, H: ToolHandler> {
     pub last_provider_call_ms: u64,
     /// Collected runtime call records for report generation.
     pub runtime_call_records: Mutex<Vec<RuntimeCallRecord>>,
+    /// Deterministic hash of the context pack used for this run.
+    pub context_hash: String,
 }
 
 impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
@@ -225,6 +234,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             messages: Vec::new(),
             on_event: None,
             provider_call_guard: None,
+            checkpoint_writer: None,
             last_usage: None,
             ttft_ms: None,
             provider_call_duration_ms: 0,
@@ -232,6 +242,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             first_provider_call_ms: 0,
             last_provider_call_ms: 0,
             runtime_call_records: Mutex::new(Vec::new()),
+            context_hash: String::new(),
         }
     }
 
@@ -241,6 +252,21 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 
     pub fn set_provider_call_guard(&mut self, guard: ProviderCallGuard) {
         self.provider_call_guard = Some(guard);
+    }
+
+    pub fn set_checkpoint_writer(&mut self, writer: CheckpointWriter) {
+        self.checkpoint_writer = Some(writer);
+    }
+
+    /// Write a checkpoint if a checkpoint_writer is configured.
+    fn write_checkpoint(&self, checkpoint: &AgentCheckpoint) {
+        if let Some(ref writer) = self.checkpoint_writer {
+            if let Err(e) = writer(checkpoint) {
+                self.emit(AgentLoopEvent::Error {
+                    message: format!("Checkpoint write failed: {}", e),
+                });
+            }
+        }
     }
 
     fn emit(&self, event: AgentLoopEvent) {
@@ -536,6 +562,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                 call_id: format!("provider-call-{}-{}", rounds, rounds),
                 call_type: RuntimeCallType::ProviderCall,
                 step_id: format!("round-{}", rounds),
+                task_id: None,
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -630,6 +657,7 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                     call_id: format!("tool-call-{}-{}", total_tool_calls, total_tool_calls),
                     call_type: RuntimeCallType::ToolCall,
                     step_id: format!("round-{}", rounds),
+                    task_id: None,
                     timestamp_ms: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -755,11 +783,15 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 
     /// Resume an incomplete plan from the first non-terminal step.
     /// Completed, Failed, and Skipped steps are skipped.
+    /// Running steps are reset to Ready for re-execution.
+    /// Blocked steps are recovered according to their contract failure policy.
     pub async fn resume_plan(
         &mut self,
         plan: &mut ExecutionPlan,
         user_message: &str,
     ) -> Result<String, String> {
+        // Apply contract-aware resume: recover running/blocked steps
+        plan.resume();
         self.run_plan_inner(plan, user_message, true).await
     }
 
@@ -814,21 +846,31 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
             });
 
             // Checkpoint: step started
-            let _step_started_checkpoint = AgentCheckpoint {
+            let step_started_checkpoint = AgentCheckpoint {
                 checkpoint_id: format!("{}-{}-started", plan.plan_id, step.step_id),
                 task_id: plan.task_id.clone(),
                 plan_id: plan.plan_id.clone(),
                 step_id: step.step_id.clone(),
                 phase: CheckpointPhase::StepStarted,
                 input_hash: String::new(),
-                context_hash: String::new(),
+                context_hash: self.context_hash.clone(),
                 artifact_refs: vec![],
                 tool_effects: vec![],
                 provider_usage: None,
                 budget_spent: 0,
                 approval_refs: vec![],
                 resume_policy: ResumePolicy::Rerun,
+                task_kind: Some("agent_loop".to_string()),
+                safe_resume_payload: None,
+                source: Some("agent_loop".to_string()),
+                created_at_ms: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                ),
             };
+            self.write_checkpoint(&step_started_checkpoint);
 
             // If a StepContract exists, validate it and set up the executor whitelist.
             if let Some(ref contract) = step.contract {
@@ -866,15 +908,39 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
 
             match step_result {
                 Ok(text) => {
+                    // Generate StepEvidence from usage info
+                    let evidence = StepEvidence {
+                        step_id: step.step_id.clone(),
+                        artifact_refs: vec![text.clone()],
+                        tool_executions: vec![],
+                        provider_usage: self.last_usage.as_ref().map(|usage| {
+                            ProviderUsageSummary {
+                                model: self
+                                    .provider
+                                    .models()
+                                    .into_iter()
+                                    .next()
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                prompt_tokens: usage.input_tokens as u32,
+                                completion_tokens: usage.output_tokens as u32,
+                                total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
+                                duration_ms: self.last_provider_call_ms,
+                            }
+                        }),
+                        context_refs: step.required_context.clone(),
+                        completion_time_ms: self.total_provider_duration_ms,
+                        context_hash: self.context_hash.clone(),
+                    };
+                    step.evidence = Some(evidence.clone());
+
                     // Check required evidence from contract
                     if let Some(ref contract) = step.contract {
                         let mut missing_evidence: Vec<String> = Vec::new();
                         for required in &contract.success_evidence_required {
-                            let has_evidence = step.evidence.as_ref().is_some_and(|e| {
-                                e.artifact_refs.iter().any(|a| a.contains(required))
-                                    || e.tool_executions.iter().any(|t| t.contains(required))
-                                    || e.context_refs.iter().any(|c| c.contains(required))
-                            });
+                            let has_evidence = evidence
+                                .artifact_refs.iter().any(|a| a.contains(required))
+                                    || evidence.tool_executions.iter().any(|t| t.contains(required))
+                                    || evidence.context_refs.iter().any(|c| c.contains(required));
                             if !has_evidence {
                                 missing_evidence.push(required.clone());
                             }
@@ -916,32 +982,51 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                             self.emit_run_report(plan, &completed_step_evidences);
                             return Err(reason);
                         }
-                    }
 
-                    // Generate StepEvidence from usage info
-                    let evidence = StepEvidence {
-                        step_id: step.step_id.clone(),
-                        artifact_refs: vec![text.clone()],
-                        tool_executions: vec![],
-                        provider_usage: self.last_usage.as_ref().map(|usage| {
-                            ProviderUsageSummary {
-                                model: self
-                                    .provider
-                                    .models()
-                                    .into_iter()
-                                    .next()
-                                    .unwrap_or_else(|| "unknown".to_string()),
-                                prompt_tokens: usage.input_tokens as u32,
-                                completion_tokens: usage.output_tokens as u32,
-                                total_tokens: (usage.input_tokens + usage.output_tokens) as u32,
-                                duration_ms: self.last_provider_call_ms,
-                            }
-                        }),
-                        context_refs: step.required_context.clone(),
-                        completion_time_ms: self.total_provider_duration_ms,
-                        context_hash: String::new(),
-                    };
-                    step.evidence = Some(evidence);
+                        // Evaluate structured success signals against the evidence
+                        let signals = if !contract.success_signals.is_empty() {
+                            contract.success_signals.as_slice()
+                        } else {
+                            step.success_signals.as_slice()
+                        };
+                        if let Err(missing_signals) = evaluate_success_signals(signals, &evidence) {
+                            let reason = format!(
+                                "Step completed but missing required success signals: {:?}",
+                                missing_signals
+                            );
+                            steps_failed += 1;
+                            step.status = StepStatus::Failed {
+                                reason: reason.clone(),
+                                input_context_summary: vec![step.goal.clone()],
+                                recovery_suggestion: format!(
+                                    "Ensure the step satisfies all success signals: {:?}",
+                                    signals.iter().map(|s| s.description()).collect::<Vec<_>>()
+                                ),
+                            };
+                            self.emit(AgentLoopEvent::StepFailed {
+                                step_id: step.step_id.clone(),
+                                reason: reason.clone(),
+                                action: "abort".into(),
+                                input_context_summary: vec![step.goal.clone()],
+                                recovery_suggestion: format!(
+                                    "Ensure the step satisfies all success signals: {:?}",
+                                    signals.iter().map(|s| s.description()).collect::<Vec<_>>()
+                                ),
+                            });
+                            plan.status = PlanStatus::Failed {
+                                failed_step: step.step_id.clone(),
+                                reason: reason.clone(),
+                            };
+                            self.emit(AgentLoopEvent::PlanCompleted {
+                                plan_id: plan.plan_id.clone(),
+                                steps_completed,
+                                steps_failed,
+                                steps_skipped,
+                            });
+                            self.emit_run_report(plan, &completed_step_evidences);
+                            return Err(reason);
+                        }
+                    }
 
                     steps_completed += 1;
                     completed_step_ids.push(step.step_id.clone());
@@ -952,15 +1037,16 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                     step.status = StepStatus::Completed {
                         evidence: vec!["step completed with evidence".to_string()],
                     };
+                    step.checkpoint_written = true;
                     // Checkpoint: step completed
-                    let _step_completed_checkpoint = AgentCheckpoint {
+                    let step_completed_checkpoint = AgentCheckpoint {
                         checkpoint_id: format!("{}-{}-completed", plan.plan_id, step.step_id),
                         task_id: plan.task_id.clone(),
                         plan_id: plan.plan_id.clone(),
                         step_id: step.step_id.clone(),
                         phase: CheckpointPhase::StepCompleted,
                         input_hash: String::new(),
-                        context_hash: String::new(),
+                        context_hash: self.context_hash.clone(),
                         artifact_refs: vec![final_text.clone()],
                         tool_effects: vec![],
                         provider_usage: self.last_usage.as_ref().map(|usage| {
@@ -980,7 +1066,18 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         budget_spent: 0,
                         approval_refs: vec![],
                         resume_policy: ResumePolicy::Skip,
+                        task_kind: Some("agent_loop".to_string()),
+                        safe_resume_payload: None,
+                        source: Some("agent_loop".to_string()),
+                        created_at_ms: Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                        ),
                     };
+                    plan.last_checkpoint_id = Some(step_completed_checkpoint.checkpoint_id.clone());
+                    self.write_checkpoint(&step_completed_checkpoint);
 
                     self.emit(AgentLoopEvent::StepCompleted {
                         step_id: step.step_id.clone(),
@@ -999,21 +1096,32 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                         StepFailureAction::Abort => ResumePolicy::Abort,
                         _ => ResumePolicy::Abort,
                     };
-                    let _step_failed_checkpoint = AgentCheckpoint {
+                    let step_failed_checkpoint = AgentCheckpoint {
                         checkpoint_id: format!("{}-{}-failed", plan.plan_id, step.step_id),
                         task_id: plan.task_id.clone(),
                         plan_id: plan.plan_id.clone(),
                         step_id: step.step_id.clone(),
                         phase: CheckpointPhase::StepStarted,
                         input_hash: String::new(),
-                        context_hash: String::new(),
+                        context_hash: self.context_hash.clone(),
                         artifact_refs: vec![],
                         tool_effects: vec![],
                         provider_usage: None,
                         budget_spent: 0,
                         approval_refs: vec![],
-                        resume_policy: failure_policy,
+                        resume_policy: failure_policy.clone(),
+                        task_kind: Some("agent_loop".to_string()),
+                        safe_resume_payload: None,
+                        source: Some("agent_loop".to_string()),
+                        created_at_ms: Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                        ),
                     };
+                    plan.last_checkpoint_id = Some(step_failed_checkpoint.checkpoint_id.clone());
+                    self.write_checkpoint(&step_failed_checkpoint);
 
                     match &step.on_failure {
                         StepFailureAction::Skip => {
@@ -1659,9 +1767,11 @@ mod tests {
                 recovery_action: None,
                 contract: None,
                 evidence: None,
+                checkpoint_written: false,
             }],
             status: PlanStatus::Pending,
             created_at_ms: 1,
+            last_checkpoint_id: None,
         };
 
         let result = agent.run_with_plan(&mut plan, "write a chapter").await;
@@ -1710,9 +1820,11 @@ mod tests {
                 recovery_action: None,
                 contract: None,
                 evidence: None,
+                checkpoint_written: false,
             }],
             status: PlanStatus::Pending,
             created_at_ms: 1,
+            last_checkpoint_id: None,
         };
 
         let result = agent.run_with_plan(&mut plan, "write a chapter").await;
@@ -1760,9 +1872,11 @@ mod tests {
                 recovery_action: None,
                 contract: None,
                 evidence: None,
+                checkpoint_written: false,
             }],
             status: PlanStatus::Pending,
             created_at_ms: 1,
+            last_checkpoint_id: None,
         };
 
         // The run will fail because the mock provider always fails after the threshold
@@ -1808,9 +1922,11 @@ mod tests {
                 recovery_action: None,
                 contract: None,
                 evidence: None,
+                checkpoint_written: false,
             }],
             status: PlanStatus::Pending,
             created_at_ms: 1,
+            last_checkpoint_id: None,
         };
 
         let result = agent.run_with_plan(&mut plan, "save the chapter").await;
@@ -1865,6 +1981,7 @@ mod tests {
                         completion_time_ms: 500,
                         context_hash: "hash0".to_string(),
                     }),
+                    checkpoint_written: true,
                 },
                 ExecutionStep {
                     step_id: "step-1".to_string(),
@@ -1880,10 +1997,12 @@ mod tests {
                     recovery_action: None,
                     contract: None,
                     evidence: None,
+                    checkpoint_written: false,
                 },
             ],
             status: PlanStatus::Running,
             created_at_ms: 1,
+            last_checkpoint_id: None,
         };
 
         // Resume the plan - step-0 is already completed, so it should be skipped
@@ -1949,6 +2068,7 @@ mod tests {
                         completion_time_ms: 500,
                         context_hash: "hash0".to_string(),
                     }),
+                    checkpoint_written: true,
                 },
                 ExecutionStep {
                     step_id: "step-1".to_string(),
@@ -1964,10 +2084,12 @@ mod tests {
                     recovery_action: None,
                     contract: None,
                     evidence: None,
+                    checkpoint_written: false,
                 },
             ],
             status: PlanStatus::Running,
             created_at_ms: 1,
+            last_checkpoint_id: None,
         };
 
         // Capture emitted events to verify RecoveryBundle
@@ -2026,5 +2148,43 @@ mod tests {
         } else {
             panic!("Expected RecoveryBundle event");
         }
+    }
+
+    #[tokio::test]
+    async fn context_hash_propagates_to_step_evidence_and_checkpoint() {
+        let provider = Arc::new(MockProvider::new("gpt-4", "draft text"));
+        let mut agent = make_agent_with_mock_provider(provider.clone());
+        agent.context_hash = "abc123".to_string();
+
+        let mut plan = ExecutionPlan {
+            plan_id: "plan-hash".to_string(),
+            task_id: "task-1".to_string(),
+            steps: vec![ExecutionStep {
+                step_id: "step-0".to_string(),
+                index: 0,
+                goal: "preflight".to_string(),
+                required_context: vec![],
+                allowed_tools: vec![],
+                max_side_effect: ToolSideEffectLevel::Read,
+                success_signals: vec![],
+                on_failure: StepFailureAction::Stop,
+                status: StepStatus::Ready,
+                step_state: ExecutionStepState::Ready,
+                recovery_action: None,
+                contract: None,
+                evidence: None,
+                checkpoint_written: false,
+            }],
+            status: PlanStatus::Pending,
+            created_at_ms: 1,
+            last_checkpoint_id: None,
+        };
+
+        let result = agent.run_with_plan(&mut plan, "write a chapter").await;
+        assert!(result.is_ok());
+
+        // Step evidence should carry the context hash
+        let evidence = plan.steps[0].evidence.as_ref().unwrap();
+        assert_eq!(evidence.context_hash, "abc123");
     }
 }

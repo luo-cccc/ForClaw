@@ -79,7 +79,7 @@ Aim for {} Chinese characters, keep the output within {}-{} Chinese characters, 
         Some(600),
         context.craft_rule_stats.as_ref(),
         &context.craft_memory_prompt_samples,
-        None,
+        context.scene_contract.as_ref(),
     );
 
     let system_prompt = if !craft_packet.chapter_discipline.is_empty() {
@@ -651,6 +651,13 @@ pub fn save_generated_chapter(
                 &conflict,
                 crate::agent_runtime::now_ms(),
             ))),
+        }),
+        SaveDecision::Blocked { reason, remediation, violations } => Err(ChapterGenerationError {
+            code: "SAVE_BLOCKED".to_string(),
+            message: format!("Save blocked: {}", reason),
+            recoverable: true,
+            details: Some(format!("Remediation: {}. Violations: {:?}", remediation, violations)),
+            evidence: None,
         }),
     }
 }

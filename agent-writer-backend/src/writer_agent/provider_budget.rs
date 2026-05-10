@@ -299,6 +299,62 @@ pub fn evaluate_provider_budget(
     }
 }
 
+/// A2: Convert a WriterProviderBudgetReport into a RuntimeCallRecord.
+/// Bridges provider budget data into the unified runtime call audit system.
+pub fn provider_call_record_from_budget_report(
+    call_id: impl Into<String>,
+    step_id: impl Into<String>,
+    report: &WriterProviderBudgetReport,
+    timestamp_ms: u64,
+    duration_ms: u64,
+    ttft_ms: Option<u64>,
+) -> agent_harness_core::RuntimeCallRecord {
+    use agent_harness_core::{
+        FailureRemediation, RuntimeCallRecord, RuntimeCallStatus, RuntimeCallType,
+    };
+    let status = match report.decision {
+        WriterProviderBudgetDecision::Allowed | WriterProviderBudgetDecision::Warn => {
+            RuntimeCallStatus::Success
+        }
+        WriterProviderBudgetDecision::ApprovalRequired => RuntimeCallStatus::Blocked {
+            reason: format!(
+                "Provider budget approval required: {} tokens, {} micros",
+                report.estimated_total_tokens, report.estimated_cost_micros
+            ),
+        },
+        WriterProviderBudgetDecision::Blocked => RuntimeCallStatus::Blocked {
+            reason: "Provider budget blocked: zero tokens or empty prompt".to_string(),
+        },
+    };
+    let remediation_code = if report.approval_required {
+        Some(FailureRemediation::RequestApproval.code().to_string())
+    } else {
+        None
+    };
+    RuntimeCallRecord {
+        call_id: call_id.into(),
+        call_type: RuntimeCallType::ProviderCall,
+        step_id: step_id.into(),
+        task_id: Some(format!("{:?}", report.task)),
+        timestamp_ms,
+        input_redacted_summary: format!(
+            "model={} input_tokens={} output_tokens={}",
+            report.model, report.estimated_input_tokens, report.requested_output_tokens
+        ),
+        output_summary: format!(
+            "total_tokens={} cost_micros={} calls={} retries={}",
+            report.estimated_total_tokens,
+            report.estimated_cost_micros,
+            report.provider_calls,
+            report.provider_retries
+        ),
+        duration_ms,
+        ttft_ms,
+        status,
+        remediation_code,
+    }
+}
+
 pub fn estimate_provider_cost_micros(model: &str, input_tokens: u64, output_tokens: u64) -> u64 {
     let lower = model.to_ascii_lowercase();
     let (input_per_million_micros, output_per_million_micros) = if lower.contains("gpt-4o") {
@@ -470,5 +526,79 @@ mod tests {
             report.calibration_fallback_reason,
             Some("input_chars not provided; using static token estimate".to_string())
         );
+    }
+
+    // ── A2: ProviderCallRecord bridging tests ──
+
+    #[test]
+    fn provider_call_record_from_allowed_budget() {
+        let request = WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ChapterGeneration,
+            "gpt-4o",
+            1_000,
+            500,
+        );
+        let report = evaluate_provider_budget(request);
+        assert_eq!(report.decision, WriterProviderBudgetDecision::Allowed);
+
+        let record = provider_call_record_from_budget_report(
+            "call-1", "step-0", &report, 1_000, 200, Some(50),
+        );
+        assert_eq!(record.call_id, "call-1");
+        assert_eq!(record.step_id, "step-0");
+        assert_eq!(record.call_type, agent_harness_core::RuntimeCallType::ProviderCall);
+        assert!(
+            matches!(record.status, agent_harness_core::RuntimeCallStatus::Success),
+            "expected success for allowed budget, got: {:?}",
+            record.status
+        );
+        assert_eq!(record.remediation_code, None);
+        assert!(record.input_redacted_summary.contains("gpt-4o"));
+        assert!(record.output_summary.contains("total_tokens"));
+    }
+
+    #[test]
+    fn provider_call_record_from_blocked_budget_has_remediation() {
+        let mut request = WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ChapterGeneration,
+            "gpt-4o",
+            100_000,
+            20_000,
+        );
+        request.max_total_tokens_without_approval = 10_000;
+        let report = evaluate_provider_budget(request);
+        assert_eq!(report.decision, WriterProviderBudgetDecision::ApprovalRequired);
+
+        let record = provider_call_record_from_budget_report(
+            "call-2", "step-1", &report, 2_000, 300, None,
+        );
+        assert!(
+            matches!(
+                record.status,
+                agent_harness_core::RuntimeCallStatus::Blocked { .. }
+            ),
+            "expected blocked for approval-required budget, got: {:?}",
+            record.status
+        );
+        assert_eq!(
+            record.remediation_code,
+            Some("request_approval".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_call_record_includes_task_id() {
+        let request = WriterProviderBudgetRequest::new(
+            WriterProviderBudgetTask::ExternalResearch,
+            "claude-3",
+            5_000,
+            2_000,
+        );
+        let report = evaluate_provider_budget(request);
+        let record = provider_call_record_from_budget_report(
+            "call-3", "step-2", &report, 3_000, 400, Some(80),
+        );
+        assert!(record.task_id.is_some());
+        assert!(record.task_id.as_ref().unwrap().contains("ExternalResearch"));
     }
 }

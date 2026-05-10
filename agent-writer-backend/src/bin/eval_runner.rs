@@ -83,6 +83,12 @@ struct EvalRunTrend {
     p95_latency_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     quality_warnings: Vec<QualityWarning>,
+    #[serde(default)]
+    state_delta_covered: usize,
+    #[serde(default)]
+    state_delta_weak: usize,
+    #[serde(default)]
+    state_delta_missing: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -191,6 +197,12 @@ struct ProfileSummary {
     p95_latency_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     quality_warnings: Vec<QualityWarning>,
+    #[serde(default)]
+    state_delta_covered: usize,
+    #[serde(default)]
+    state_delta_weak: usize,
+    #[serde(default)]
+    state_delta_missing: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1301,6 +1313,8 @@ fn run_negative_style_drift_eval(
         prior_chapter_summaries: Vec::new(),
         scene_contract: None,
         world_assets: Vec::new(),
+        canon_constraints: Vec::new(),
+        canon_terms: Vec::new(),
     };
     let report = evaluate_chapter_quality_with_signals(
         drifted_text,
@@ -1810,6 +1824,8 @@ fn quality_signals_from_fixture(fixture: &serde_json::Value) -> ChapterQualitySi
         prior_chapter_summaries: Vec::new(),
         scene_contract: None,
         world_assets: Vec::new(),
+        canon_constraints: Vec::new(),
+        canon_terms: Vec::new(),
     }
 }
 
@@ -2078,6 +2094,21 @@ fn compute_latency_percentiles_from_report(gate_report_path: &std::path::Path) -
     )
 }
 
+fn compute_state_delta_coverage_from_report(gate_report_path: &std::path::Path) -> (usize, usize, usize) {
+    let Ok(data) = std::fs::read_to_string(gate_report_path) else {
+        return (0, 0, 0);
+    };
+    let Ok(report) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return (0, 0, 0);
+    };
+    let coverage = report.get("stateDeltaCoverage");
+    (
+        coverage.and_then(|c| c["covered"].as_u64()).unwrap_or(0) as usize,
+        coverage.and_then(|c| c["weak"].as_u64()).unwrap_or(0) as usize,
+        coverage.and_then(|c| c["missing"].as_u64()).unwrap_or(0) as usize,
+    )
+}
+
 fn compute_min_max_chars(fixture: &serde_json::Value) -> (usize, usize) {
     let chapters = fixture["chapters"].as_object();
     let lengths: Vec<usize> = chapters
@@ -2333,6 +2364,9 @@ fn build_eval_run_trend(profile: &str, timestamp: String, results: &[EvalResult]
         p90_latency_ms: 0,
         p95_latency_ms: 0,
         quality_warnings: Vec::new(),
+        state_delta_covered: 0,
+        state_delta_weak: 0,
+        state_delta_missing: 0,
     }
 }
 
@@ -3087,6 +3121,55 @@ fn run_state_regression_eval(
     }
 }
 
+fn run_extraction_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
+    use agent_writer_lib::writer_agent::world_bible::parse_world_rules_from_markdown;
+
+    let expected = &task.expected;
+    let source_md = expected["source_markdown"].as_str().unwrap_or("");
+    let expected_asset_count_min = expected["expected_asset_count_min"].as_u64().unwrap_or(0) as usize;
+    let expected_rule_names: Vec<String> = expected["expected_rule_names"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    let expected_source_ref_non_empty = expected["expected_source_ref_non_empty"].as_bool().unwrap_or(false);
+
+    let rules = parse_world_rules_from_markdown("test.md", source_md);
+
+    let asset_count_ok = rules.len() >= expected_asset_count_min;
+    let names_ok = expected_rule_names.iter().all(|expected_name| {
+        rules.iter().any(|r| r.name.contains(expected_name) || r.summary.contains(expected_name))
+    });
+    let source_ref_ok = !expected_source_ref_non_empty || rules.iter().all(|r| {
+        !r.source_ref.excerpt.is_empty() && !r.source_ref.source_id.is_empty()
+    });
+
+    let status = if asset_count_ok && names_ok && source_ref_ok {
+        "pass"
+    } else {
+        "fail"
+    };
+
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: status.to_string(),
+        before: Some(serde_json::json!({ "expected_assets": expected_asset_count_min })),
+        after: Some(serde_json::json!({ "extracted_rules": rules.len() })),
+        delta: None,
+        message: format!(
+            "extraction: assets={}, names_ok={}, source_ref_ok={}",
+            rules.len(), names_ok, source_ref_ok
+        ),
+    }
+}
+
 fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendReport) {
     let fixture = load_fixture(profile);
     let all_tasks = load_tasks(profile);
@@ -3136,6 +3219,7 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
             "unsupported_world_claim" => run_unsupported_world_claim_eval(profile, task, &fixture),
             "hierarchy_confusion" => run_hierarchy_confusion_eval(profile, task, &fixture),
             "state_regression" => run_state_regression_eval(profile, task, &fixture),
+            "extraction" => run_extraction_eval(profile, task, &fixture),
             other => EvalResult {
                 profile: profile.to_string(),
                 task: task.task.clone(),
@@ -3200,6 +3284,10 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
     current_trend.p50_latency_ms = p50_ms;
     current_trend.p90_latency_ms = p90_ms;
     current_trend.p95_latency_ms = p95_ms;
+    let (covered, weak, missing) = compute_state_delta_coverage_from_report(&gate_path);
+    current_trend.state_delta_covered = covered;
+    current_trend.state_delta_weak = weak;
+    current_trend.state_delta_missing = missing;
     let previous_trend =
         previous_run.map(|run| build_eval_run_trend(profile, run.timestamp, &run.results));
     let trend_report = build_eval_trend_report(profile, current_trend, previous_trend);
@@ -3220,6 +3308,7 @@ fn compute_world_consistency_summary(results: &[EvalResult]) -> WorldConsistency
         "unsupported_world_claim",
         "hierarchy_confusion",
         "state_regression",
+        "extraction",
     ];
 
     let mut total_checks = 0usize;
@@ -3315,6 +3404,9 @@ fn main() {
                 p90_latency_ms: trend_report.current.p90_latency_ms,
                 p95_latency_ms: trend_report.current.p95_latency_ms,
                 quality_warnings: trend_report.current.quality_warnings.clone(),
+                state_delta_covered: trend_report.current.state_delta_covered,
+                state_delta_weak: trend_report.current.state_delta_weak,
+                state_delta_missing: trend_report.current.state_delta_missing,
             },
         );
         profile_trend_reports.insert(profile.to_string(), trend_report.clone());

@@ -13,6 +13,7 @@ futures-util = "0.3"
 async-trait = "0.1"
 jieba-rs = "0.7"
 uuid = { version = "1", features = ["v4"] }
+regex = "1"
 
 [lints]
 workspace = true

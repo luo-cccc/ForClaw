@@ -906,6 +906,18 @@ pub(crate) fn tools() -> Vec<Value> {
                 "required": ["assetId"]
             }),
         ),
+        tool(
+            "forge_world_bible_constraint_query",
+            "World Bible Constraint Query",
+            "Query a constraint by ID to retrieve its source reference, approval status, usage chapters, and conflicting rules.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "constraintId": { "type": "string", "description": "The ID of the canon constraint to query" }
+                },
+                "required": ["constraintId"]
+            }),
+        ),
     ];
     tools.sort_by(|left, right| {
         left["name"]
@@ -1003,6 +1015,7 @@ pub(crate) fn is_read_only_tool(name: &str) -> bool {
             | "forge_project_storage_diagnostics"
             | "forge_list_file_backups"
             | "forge_check_api_key"
+            | "forge_world_bible_constraint_query"
     )
 }
 

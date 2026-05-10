@@ -108,6 +108,7 @@ const BACKEND_ACTIONS: &[&str] = &[
     "list_world_assets",
     "approve_world_asset",
     "reject_world_asset",
+    "world_bible_constraint_query",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

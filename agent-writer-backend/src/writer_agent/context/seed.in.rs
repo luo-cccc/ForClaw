@@ -224,14 +224,6 @@ pub fn assemble_observation_context_with_default_budget(
     assemble_observation_context(task, observation, memory, total_budget)
 }
 
-fn non_empty(text: String) -> Option<String> {
-    if text.trim().is_empty() {
-        None
-    } else {
-        Some(text)
-    }
-}
-
 fn char_window(text: &str, start: usize, max_chars: usize) -> String {
     let remaining = text.chars().skip(start).collect::<String>();
     truncate_to_budget(&remaining, max_chars).0
@@ -453,11 +445,11 @@ mod tests {
 
     #[test]
     fn test_assemble_respects_budget() {
-        let provider = |s: ContextSource| -> Option<String> {
+        let provider = |s: ContextSource| -> Option<(String, u64, String)> {
             match s {
-                ContextSource::CursorPrefix => Some("前缀文本".repeat(100)),
-                ContextSource::CursorSuffix => Some("后缀".repeat(50)),
-                ContextSource::CanonSlice => Some("canon数据".repeat(80)),
+                ContextSource::CursorPrefix => Some(("前缀文本".repeat(100), 0, "ok".to_string())),
+                ContextSource::CursorSuffix => Some(("后缀".repeat(50), 0, "ok".to_string())),
+                ContextSource::CanonSlice => Some(("canon数据".repeat(80), 0, "ok".to_string())),
                 _ => None,
             }
         };
@@ -468,12 +460,12 @@ mod tests {
 
     #[test]
     fn test_required_sources_survive_tight_budget() {
-        let provider = |s: ContextSource| -> Option<String> {
+        let provider = |s: ContextSource| -> Option<(String, u64, String)> {
             match s {
-                ContextSource::CursorPrefix => Some("长前文。".repeat(500)),
-                ContextSource::CanonSlice => Some("林墨 weapon=寒影刀".repeat(20)),
-                ContextSource::PromiseSlice => Some("玉佩仍未交代下落。".repeat(20)),
-                ContextSource::DecisionSlice => Some("保持克制，不用大段自白。".repeat(20)),
+                ContextSource::CursorPrefix => Some(("长前文。".repeat(500), 0, "ok".to_string())),
+                ContextSource::CanonSlice => Some(("林墨 weapon=寒影刀".repeat(20), 0, "ok".to_string())),
+                ContextSource::PromiseSlice => Some(("玉佩仍未交代下落。".repeat(20), 0, "ok".to_string())),
+                ContextSource::DecisionSlice => Some(("保持克制，不用大段自白。".repeat(20), 0, "ok".to_string())),
                 _ => None,
             }
         };
@@ -501,11 +493,11 @@ mod tests {
 
     #[test]
     fn test_budget_report_records_dropped_sources() {
-        let provider = |s: ContextSource| -> Option<String> {
+        let provider = |s: ContextSource| -> Option<(String, u64, String)> {
             match s {
-                ContextSource::CursorPrefix => Some("长前文。".repeat(200)),
-                ContextSource::ChapterMission => Some("本章必须追查玉佩。".repeat(40)),
-                ContextSource::AuthorStyle => Some("对白保持克制，用动作暗示情绪。".repeat(40)),
+                ContextSource::CursorPrefix => Some(("长前文。".repeat(200), 0, "ok".to_string())),
+                ContextSource::ChapterMission => Some(("本章必须追查玉佩。".repeat(40), 0, "ok".to_string())),
+                ContextSource::AuthorStyle => Some(("对白保持克制，用动作暗示情绪。".repeat(40), 0, "ok".to_string())),
                 _ => None,
             }
         };

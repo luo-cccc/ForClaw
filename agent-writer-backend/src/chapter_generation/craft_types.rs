@@ -170,6 +170,10 @@ pub struct ChapterQualityReport {
     pub no_fatal_issue: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub world_consistency_violations: Vec<crate::writer_agent::world_bible::WorldConsistencyViolation>,
+    /// P15: Structured canon constraint violations with evidence excerpt,
+    /// violated rule, and suggested revision direction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub canon_constraint_violations: Vec<crate::writer_agent::world_bible::CanonConstraintViolation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

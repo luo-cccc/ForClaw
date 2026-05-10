@@ -37,6 +37,12 @@ pub const TAXONOMY_AUTHOR_VOICE: &str = "author_voice";
 pub const TAXONOMY_SCENE_PLAN: &str = "scene_plan";
 pub const TAXONOMY_UNKNOWN: &str = "unknown";
 
+// P18: evidence-bound retrieval taxonomy constants
+pub const TAXONOMY_RAW_EVIDENCE: &str = "raw_evidence";
+pub const TAXONOMY_APPROVED_RULE: &str = "approved_rule";
+pub const TAXONOMY_PROPOSED_RULE: &str = "proposed_rule";
+pub const TAXONOMY_AUTHOR_INSTRUCTION: &str = "author_instruction";
+
 /// Priority for deterministic source ordering (lower = higher priority).
 /// Core grounding sources first, volatile/auxiliary sources last.
 pub fn source_priority(source_type: &str) -> usize {

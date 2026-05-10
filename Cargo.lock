@@ -32,6 +32,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "jieba-rs",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

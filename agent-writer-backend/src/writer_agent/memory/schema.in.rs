@@ -1,4 +1,4 @@
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS canon_entities (
@@ -501,6 +501,19 @@ CREATE TABLE IF NOT EXISTS timeline_events (
     source_ref TEXT DEFAULT '',
     FOREIGN KEY (time_slice_id) REFERENCES story_time_slices(id)
 );
+
+CREATE TABLE IF NOT EXISTS state_ledger_deltas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    chapter_id TEXT NOT NULL,
+    delta_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    before_state TEXT DEFAULT '',
+    after_state TEXT DEFAULT '',
+    source_constraint_id TEXT DEFAULT '',
+    evidence_excerpt TEXT DEFAULT '',
+    created_at_ms INTEGER NOT NULL
+);
 "#;
 
 const INDEX_SCHEMA: &str = r#"
@@ -536,6 +549,8 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_ownership_holder ON knowledge_ownership
 CREATE INDEX IF NOT EXISTS idx_identity_layers_character ON identity_layers(character_id, valid_from_chapter);
 CREATE INDEX IF NOT EXISTS idx_scenes_chapter ON scenes(chapter_title);
 CREATE INDEX IF NOT EXISTS idx_chapter_time_mapping_chapter ON chapter_time_mapping(chapter_title);
+CREATE INDEX IF NOT EXISTS idx_state_ledger_project_chapter ON state_ledger_deltas(project_id, chapter_id);
+CREATE INDEX IF NOT EXISTS idx_state_ledger_project_entity ON state_ledger_deltas(project_id, entity_id);
 
 CREATE INDEX IF NOT EXISTS idx_rcp_project ON reader_compensation_profiles(project_id);
 CREATE INDEX IF NOT EXISTS idx_edl_project_state ON emotional_debt_lifecycles(project_id, current_state);
@@ -568,4 +583,21 @@ const SCHEMA_V20_ALTERS: &str = r#"
 ALTER TABLE character_state_versions ADD COLUMN time_slice_id INTEGER;
 ALTER TABLE character_relationships ADD COLUMN time_slice_id INTEGER;
 ALTER TABLE identity_layers ADD COLUMN time_slice_id INTEGER;
+"#;
+
+const SCHEMA_V21_ALTERS: &str = r#"
+CREATE TABLE IF NOT EXISTS state_ledger_deltas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    chapter_id TEXT NOT NULL,
+    delta_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    before_state TEXT DEFAULT '',
+    after_state TEXT DEFAULT '',
+    source_constraint_id TEXT DEFAULT '',
+    evidence_excerpt TEXT DEFAULT '',
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_state_ledger_project_chapter ON state_ledger_deltas(project_id, chapter_id);
+CREATE INDEX IF NOT EXISTS idx_state_ledger_project_entity ON state_ledger_deltas(project_id, entity_id);
 "#;

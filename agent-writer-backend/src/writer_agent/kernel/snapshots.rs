@@ -461,6 +461,9 @@ impl WriterAgentKernel {
             product_metrics_trend: self.product_metrics_trend(limit),
             metacognitive_snapshot: Default::default(),
             execution_plan: self.current_execution_plan.clone(),
+            step_runtime_summary: self.current_execution_plan.as_ref().and_then(|plan| {
+                build_step_runtime_summary_from_plan(plan)
+            }),
         };
         snapshot.metacognitive_snapshot =
             crate::writer_agent::metacognition::metacognitive_snapshot_from_trace(&snapshot);
@@ -503,6 +506,55 @@ impl WriterAgentKernel {
             .unwrap_or_default();
         product_metrics_trend_from_run_events(&events, limit.clamp(3, 12))
     }
+}
+
+/// A2: Build a StepRuntimeSummary from an ExecutionPlan.
+/// Aggregates per-step: tool count, provider count, total duration, failure types.
+fn build_step_runtime_summary_from_plan(
+    plan: &agent_harness_core::ExecutionPlan,
+) -> Option<super::StepRuntimeSummary> {
+    // Collect runtime call records from step evidence if available
+    let mut tool_count = 0u32;
+    let mut provider_count = 0u32;
+    let mut total_duration_ms = 0u64;
+    let mut failure_types = Vec::new();
+    let remediation_codes = Vec::new();
+
+    for step in &plan.steps {
+        // Count based on step status and evidence
+        if let Some(ref evidence) = step.evidence {
+            total_duration_ms += evidence.completion_time_ms;
+            tool_count += evidence.tool_executions.len() as u32;
+            if evidence.provider_usage.is_some() {
+                provider_count += 1;
+            }
+        }
+
+        // Extract failure info from step status
+        match &step.status {
+            agent_harness_core::StepStatus::Failed { reason, .. } => {
+                let kind = agent_harness_core::classify_failure_kind(reason, None);
+                failure_types.push(format!("{:?}", kind));
+            }
+            agent_harness_core::StepStatus::Blocked { reason, .. } => {
+                failure_types.push(format!("blocked: {}", reason));
+            }
+            _ => {}
+        }
+    }
+
+    // Deduplicate failure types
+    failure_types.sort();
+    failure_types.dedup();
+
+    Some(super::StepRuntimeSummary {
+        step_id: plan.plan_id.clone(),
+        tool_count,
+        provider_count,
+        total_duration_ms,
+        failure_types,
+        remediation_codes,
+    })
 }
 
 include!("snapshots/memory_reliability.in.rs");

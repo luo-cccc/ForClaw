@@ -127,6 +127,70 @@ impl LongTaskCheckpoint {
     }
 }
 
+// ── A3: Unified checkpoint conversions ──
+
+impl From<&LongTaskCheckpoint> for agent_harness_core::execution_plan::AgentCheckpoint {
+    fn from(cp: &LongTaskCheckpoint) -> Self {
+        use agent_harness_core::execution_plan::ResumePolicy;
+        let phase = checkpoint_phase_from_step(&cp.current_step);
+        Self {
+            checkpoint_id: cp.checkpoint_id.clone(),
+            task_id: cp.task_id.clone(),
+            plan_id: String::new(),
+            step_id: cp.current_step.clone(),
+            phase,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: cp.artifact_refs.clone(),
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: cp.budget_spent_micros,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::Rerun,
+            task_kind: Some(cp.task_kind.clone()),
+            safe_resume_payload: Some(cp.safe_resume_payload.clone()),
+            source: Some(cp.source.clone()),
+            created_at_ms: Some(cp.created_at_ms),
+        }
+    }
+}
+
+impl From<agent_harness_core::execution_plan::AgentCheckpoint> for LongTaskCheckpoint {
+    fn from(cp: agent_harness_core::execution_plan::AgentCheckpoint) -> Self {
+        let mut payload = cp.safe_resume_payload.unwrap_or_else(|| serde_json::json!({}));
+        if let serde_json::Value::Object(ref mut map) = payload {
+            map.insert("chapter_title".to_string(), serde_json::json!(cp.task_id.clone()));
+            map.insert("request_id".to_string(), serde_json::json!(cp.task_id));
+            map.insert("step".to_string(), serde_json::json!(cp.step_id));
+        }
+        Self {
+            checkpoint_id: cp.checkpoint_id,
+            task_id: cp.task_id,
+            task_kind: cp.task_kind.unwrap_or_else(|| "agent_checkpoint".to_string()),
+            current_step: cp.step_id,
+            safe_resume_payload: payload,
+            budget_spent_micros: cp.budget_spent,
+            artifact_refs: cp.artifact_refs,
+            source: cp.source.unwrap_or_default(),
+            created_at_ms: cp.created_at_ms.unwrap_or_else(crate::agent_runtime::now_ms),
+        }
+    }
+}
+
+/// Map a legacy `LongTaskCheckpoint.current_step` string to a `CheckpointPhase`.
+fn checkpoint_phase_from_step(step: &str) -> agent_harness_core::execution_plan::CheckpointPhase {
+    use agent_harness_core::execution_plan::CheckpointPhase;
+    match step {
+        "context_built" | "preflight" => CheckpointPhase::StepStarted,
+        "draft_produced" | "draft" => CheckpointPhase::StepCompleted,
+        "quality_report_produced" | "revision" => CheckpointPhase::StepCompleted,
+        "save_prepared" => CheckpointPhase::SavePrepared,
+        "write_before" => CheckpointPhase::WriteBefore,
+        "write_after" | "settled" | "saved" => CheckpointPhase::WriteAfter,
+        _ => CheckpointPhase::StepStarted,
+    }
+}
+
 /// Create a supervised sprint plan from a list of chapter titles.
 pub fn create_sprint_plan(
     sprint_id: &str,
@@ -561,6 +625,7 @@ mod tests {
             top_revision_targets: vec![],
             no_fatal_issue: true,
             world_consistency_violations: Vec::new(),
+            canon_constraint_violations: Vec::new(),
         };
         assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_err());
     }
@@ -578,6 +643,7 @@ mod tests {
             top_revision_targets: vec![],
             no_fatal_issue: true,
             world_consistency_violations: Vec::new(),
+            canon_constraint_violations: Vec::new(),
         };
         assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_ok());
     }
@@ -595,6 +661,7 @@ mod tests {
             top_revision_targets: vec![],
             no_fatal_issue: false,
             world_consistency_violations: Vec::new(),
+            canon_constraint_violations: Vec::new(),
         };
         assert!(check_sprint_quality_gate(&sprint, Some(&report)).is_err());
     }
@@ -672,5 +739,101 @@ mod tests {
         assert_eq!(cp.budget_spent_micros, 1_200_000);
         assert_eq!(cp.artifact_refs, vec!["a.txt"]);
         assert_eq!(cp.source, "test");
+    }
+
+    // ── A3: Unified checkpoint conversion tests ──
+
+    #[test]
+    fn long_task_to_agent_checkpoint_conversion() {
+        let lt = LongTaskCheckpoint::new(
+            "cp-1",
+            "task-1",
+            "chapter_generation",
+            "draft_produced",
+            serde_json::json!({"chapter_title": "Ch1", "request_id": "req-1"}),
+        )
+        .with_budget(2_500_000)
+        .with_artifacts(vec!["draft.txt".to_string()])
+        .with_source("pipeline");
+
+        let agent_cp: agent_harness_core::execution_plan::AgentCheckpoint = (&lt).into();
+        assert_eq!(agent_cp.checkpoint_id, "cp-1");
+        assert_eq!(agent_cp.task_id, "task-1");
+        assert_eq!(agent_cp.step_id, "draft_produced");
+        assert_eq!(agent_cp.budget_spent, 2_500_000);
+        assert_eq!(agent_cp.artifact_refs, vec!["draft.txt"]);
+        assert_eq!(agent_cp.task_kind, Some("chapter_generation".to_string()));
+        assert_eq!(agent_cp.source, Some("pipeline".to_string()));
+        assert_eq!(
+            agent_cp.phase,
+            agent_harness_core::execution_plan::CheckpointPhase::StepCompleted
+        );
+    }
+
+    #[test]
+    fn agent_to_long_task_checkpoint_conversion() {
+        let agent_cp = agent_harness_core::execution_plan::AgentCheckpoint {
+            checkpoint_id: "acp-1".to_string(),
+            task_id: "task-1".to_string(),
+            plan_id: "plan-1".to_string(),
+            step_id: "save_prepared".to_string(),
+            phase: agent_harness_core::execution_plan::CheckpointPhase::SavePrepared,
+            input_hash: "hash-in".to_string(),
+            context_hash: "hash-ctx".to_string(),
+            artifact_refs: vec!["saved:Ch1/rev-1".to_string()],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 3_000,
+            approval_refs: vec!["approval-1".to_string()],
+            resume_policy: agent_harness_core::execution_plan::ResumePolicy::RequireApproval,
+            task_kind: Some("chapter_generation".to_string()),
+            safe_resume_payload: Some(serde_json::json!({"extra": "data"})),
+            source: Some("pipeline".to_string()),
+            created_at_ms: Some(1_700_000_000_000),
+        };
+
+        let lt: LongTaskCheckpoint = agent_cp.into();
+        assert_eq!(lt.checkpoint_id, "acp-1");
+        assert_eq!(lt.task_id, "task-1");
+        assert_eq!(lt.task_kind, "chapter_generation");
+        assert_eq!(lt.current_step, "save_prepared");
+        assert_eq!(lt.budget_spent_micros, 3_000);
+        assert_eq!(lt.artifact_refs, vec!["saved:Ch1/rev-1"]);
+        assert_eq!(lt.source, "pipeline");
+        assert_eq!(lt.created_at_ms, 1_700_000_000_000);
+        // safe_resume_payload should have merged fields
+        assert_eq!(
+            lt.safe_resume_payload.get("chapter_title").and_then(|v| v.as_str()),
+            Some("task-1")
+        );
+        assert_eq!(
+            lt.safe_resume_payload.get("extra").and_then(|v| v.as_str()),
+            Some("data")
+        );
+    }
+
+    #[test]
+    fn checkpoint_phase_mapping_from_step() {
+        use agent_harness_core::execution_plan::CheckpointPhase;
+        assert_eq!(
+            checkpoint_phase_from_step("context_built"),
+            CheckpointPhase::StepStarted
+        );
+        assert_eq!(
+            checkpoint_phase_from_step("draft_produced"),
+            CheckpointPhase::StepCompleted
+        );
+        assert_eq!(
+            checkpoint_phase_from_step("save_prepared"),
+            CheckpointPhase::SavePrepared
+        );
+        assert_eq!(
+            checkpoint_phase_from_step("write_after"),
+            CheckpointPhase::WriteAfter
+        );
+        assert_eq!(
+            checkpoint_phase_from_step("unknown_step"),
+            CheckpointPhase::StepStarted
+        );
     }
 }

@@ -702,6 +702,7 @@ mod tests {
             ],
             status: PlanStatus::Completed,
             created_at_ms: 0,
+            last_checkpoint_id: None,
         }
     }
 
@@ -711,6 +712,7 @@ mod tests {
                 call_id: "c1".to_string(),
                 call_type: RuntimeCallType::ProviderCall,
                 step_id: "step-0".to_string(),
+                task_id: None,
                 timestamp_ms: 1000,
                 input_redacted_summary: "{\"model\":\"gpt-4\"}".to_string(),
                 output_summary: "ok".to_string(),
@@ -723,6 +725,7 @@ mod tests {
                 call_id: "c2".to_string(),
                 call_type: RuntimeCallType::ProviderCall,
                 step_id: "step-1".to_string(),
+                task_id: None,
                 timestamp_ms: 2500,
                 input_redacted_summary: "{\"model\":\"gpt-4\"}".to_string(),
                 output_summary: "ok".to_string(),
@@ -735,6 +738,7 @@ mod tests {
                 call_id: "c3".to_string(),
                 call_type: RuntimeCallType::ToolCall,
                 step_id: "step-1".to_string(),
+                task_id: None,
                 timestamp_ms: 2600,
                 input_redacted_summary: "{\"query\":\"test\"}".to_string(),
                 output_summary: "result".to_string(),
@@ -879,6 +883,7 @@ mod tests {
             call_id: "c4".to_string(),
             call_type: RuntimeCallType::ProviderCall,
             step_id: "step-0".to_string(),
+            task_id: None,
             timestamp_ms: 5000,
             input_redacted_summary: "{\"api_key\":\"sk-live-1234567890abcdef\"}".to_string(),
             output_summary: "ok".to_string(),

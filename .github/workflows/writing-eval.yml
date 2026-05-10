@@ -1,0 +1,26 @@
+name: Writing Eval
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  writing-eval:
+    name: Writing Evaluation Matrix
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run writing eval tests
+        run: cargo test -p agent-writer --test writing_eval_test

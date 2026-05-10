@@ -462,6 +462,7 @@ impl WriterAgentKernel {
                 "callId": record.call_id,
                 "callType": format!("{:?}", record.call_type),
                 "stepId": record.step_id,
+                "taskId": record.task_id,
                 "timestampMs": record.timestamp_ms,
                 "inputRedactedSummary": record.input_redacted_summary,
                 "outputSummary": record.output_summary,

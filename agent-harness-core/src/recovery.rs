@@ -10,6 +10,7 @@ pub struct RuntimeCallRecord {
     pub call_id: String,
     pub call_type: RuntimeCallType,
     pub step_id: String,
+    pub task_id: Option<String>,
     pub timestamp_ms: u64,
     pub input_redacted_summary: String,
     pub output_summary: String,
@@ -33,6 +34,72 @@ pub enum RuntimeCallStatus {
     Success,
     Failed { reason: String },
     Blocked { reason: String },
+}
+
+/// Structured remediation codes for tool/provider call failures.
+/// A2: Unified failure remediation taxonomy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureRemediation {
+    /// Tool not found or permission changed — refresh the tool inventory.
+    RefreshInventory,
+    /// Approval required but not provided — surface an approval request.
+    RequestApproval,
+    /// Context too large — shrink or truncate context before retry.
+    ShrinkContext,
+    /// Transient error (rate limit, timeout) — retry with backoff.
+    RetryTransient,
+    /// Unsafe write detected — abort and require explicit approval.
+    AbortUnsafeWrite,
+}
+
+impl FailureRemediation {
+    pub fn code(&self) -> &'static str {
+        match self {
+            FailureRemediation::RefreshInventory => "refresh_inventory",
+            FailureRemediation::RequestApproval => "request_approval",
+            FailureRemediation::ShrinkContext => "shrink_context",
+            FailureRemediation::RetryTransient => "retry_transient",
+            FailureRemediation::AbortUnsafeWrite => "abort_unsafe_write",
+        }
+    }
+
+    pub fn message(&self, tool_name: &str) -> String {
+        match self {
+            FailureRemediation::RefreshInventory => format!(
+                "Check the external agent/tool name for '{}', refresh the registry, and retry only if it appears in the allowed inventory.",
+                tool_name
+            ),
+            FailureRemediation::RequestApproval => format!(
+                "Surface an explicit approval request before retrying '{}', or choose a read-only/preview tool.",
+                tool_name
+            ),
+            FailureRemediation::ShrinkContext => format!(
+                "Reduce context size before retrying '{}'. Remove non-essential sources or truncate long artifacts.",
+                tool_name
+            ),
+            FailureRemediation::RetryTransient => format!(
+                "Transient failure for '{}'. Back off and retry with the same or narrower arguments.",
+                tool_name
+            ),
+            FailureRemediation::AbortUnsafeWrite => format!(
+                "'{}' attempted an unsafe write. Abort and surface an explicit approval request before retrying.",
+                tool_name
+            ),
+        }
+    }
+}
+
+/// Convert a remediation code string to a structured FailureRemediation if recognized.
+pub fn parse_failure_remediation(code: &str) -> Option<FailureRemediation> {
+    match code {
+        "refresh_inventory" => Some(FailureRemediation::RefreshInventory),
+        "request_approval" => Some(FailureRemediation::RequestApproval),
+        "shrink_context" => Some(FailureRemediation::ShrinkContext),
+        "retry_transient" => Some(FailureRemediation::RetryTransient),
+        "abort_unsafe_write" => Some(FailureRemediation::AbortUnsafeWrite),
+        _ => None,
+    }
 }
 
 /// Redact sensitive values (API keys, secrets, tokens) from a JSON value before
@@ -391,6 +458,7 @@ mod recovery_tests {
             call_id: "c1".into(),
             call_type: RuntimeCallType::ProviderCall,
             step_id: "step-0".into(),
+            task_id: Some("task-1".into()),
             timestamp_ms: 1_000,
             input_redacted_summary: "redacted".into(),
             output_summary: "ok".into(),
@@ -402,6 +470,7 @@ mod recovery_tests {
         let json = serde_json::to_string(&record).unwrap();
         assert!(json.contains("provider_call"), "json: {}", json);
         assert!(json.contains("success"), "json: {}", json);
+        assert!(json.contains("taskId"), "json: {}", json);
     }
 
     #[test]
@@ -607,6 +676,69 @@ mod recovery_tests {
         assert_eq!(
             classify_failure_kind("any error", Some("retry_transient")),
             FailureKind::ProviderTransient
+        );
+    }
+
+    // ── A2: FailureRemediation tests ──
+
+    #[test]
+    fn failure_remediation_codes_match_spec() {
+        assert_eq!(FailureRemediation::RefreshInventory.code(), "refresh_inventory");
+        assert_eq!(FailureRemediation::RequestApproval.code(), "request_approval");
+        assert_eq!(FailureRemediation::ShrinkContext.code(), "shrink_context");
+        assert_eq!(FailureRemediation::RetryTransient.code(), "retry_transient");
+        assert_eq!(FailureRemediation::AbortUnsafeWrite.code(), "abort_unsafe_write");
+    }
+
+    #[test]
+    fn failure_remediation_messages_include_tool_name() {
+        let msg = FailureRemediation::RequestApproval.message("write_file");
+        assert!(msg.contains("write_file"));
+        assert!(msg.contains("approval"));
+    }
+
+    #[test]
+    fn parse_failure_remediation_roundtrip() {
+        assert_eq!(
+            parse_failure_remediation("refresh_inventory"),
+            Some(FailureRemediation::RefreshInventory)
+        );
+        assert_eq!(
+            parse_failure_remediation("request_approval"),
+            Some(FailureRemediation::RequestApproval)
+        );
+        assert_eq!(
+            parse_failure_remediation("shrink_context"),
+            Some(FailureRemediation::ShrinkContext)
+        );
+        assert_eq!(
+            parse_failure_remediation("retry_transient"),
+            Some(FailureRemediation::RetryTransient)
+        );
+        assert_eq!(
+            parse_failure_remediation("abort_unsafe_write"),
+            Some(FailureRemediation::AbortUnsafeWrite)
+        );
+        assert_eq!(parse_failure_remediation("unknown_code"), None);
+    }
+
+    #[test]
+    fn failure_remediation_classifies_to_failure_kind() {
+        assert_eq!(
+            classify_failure_kind("any", Some("refresh_inventory")),
+            FailureKind::ToolSchema
+        );
+        assert_eq!(
+            classify_failure_kind("any", Some("request_approval")),
+            FailureKind::ToolPermission
+        );
+        assert_eq!(
+            classify_failure_kind("any", Some("retry_transient")),
+            FailureKind::ProviderTransient
+        );
+        assert_eq!(
+            classify_failure_kind("any", Some("abort_unsafe_write")),
+            FailureKind::UnsafeWrite
         );
     }
 }

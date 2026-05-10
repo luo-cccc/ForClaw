@@ -158,6 +158,7 @@ mod tests {
                 message: "Install the research adapter before retrying.".to_string(),
             }],
             duration_ms: 18,
+            approval_context: None,
         };
         let bundle = failure_bundle_from_subtask_tool_execution(
             WriterSubtaskKind::Research,

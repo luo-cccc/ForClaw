@@ -29,6 +29,9 @@ fn apply_schema_alters(conn: &Connection) -> SqlResult<()> {
     for stmt in SCHEMA_V20_ALTERS.split(';').filter(|s| !s.trim().is_empty()) {
         let _ = conn.execute_batch(&format!("{};", stmt));
     }
+    for stmt in SCHEMA_V21_ALTERS.split(';').filter(|s| !s.trim().is_empty()) {
+        let _ = conn.execute_batch(&format!("{};", stmt));
+    }
     Ok(())
 }
 
@@ -894,6 +897,28 @@ fn migrate_writer_memory_schema(conn: &Connection) -> SqlResult<()> {
 
     // v21 migration: craft memory feedback tables
     ensure_craft_tables(conn).map_err(rusqlite::Error::InvalidParameterName)?;
+
+    // v21 migration: state_ledger_deltas table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS state_ledger_deltas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            chapter_id TEXT NOT NULL,
+            delta_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            before_state TEXT DEFAULT '',
+            after_state TEXT DEFAULT '',
+            source_constraint_id TEXT DEFAULT '',
+            evidence_excerpt TEXT DEFAULT '',
+            created_at_ms INTEGER NOT NULL
+        );",
+    )?;
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_state_ledger_project_chapter ON state_ledger_deltas(project_id, chapter_id);",
+    );
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_state_ledger_project_entity ON state_ledger_deltas(project_id, entity_id);",
+    );
 
     Ok(())
 }

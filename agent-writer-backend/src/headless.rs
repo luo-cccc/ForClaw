@@ -896,6 +896,88 @@ impl HeadlessBackend {
         Ok(())
     }
 
+    /// P18: Query a constraint by ID and return structured metadata.
+    pub fn query_world_bible_constraint(
+        &self,
+        constraint_id: String,
+    ) -> Result<crate::writer_agent::world_bible::ConstraintQueryResult, String> {
+        let path = world_assets_path(&self.config.data_dir, &self.project.id)?;
+        let assets: Vec<WorldAsset> = read_json_array(&path)?;
+        let constraints = crate::writer_agent::world_bible::compile_canon_constraints(&assets);
+
+        let constraint = constraints
+            .iter()
+            .find(|c| c.id == constraint_id)
+            .ok_or_else(|| format!("Constraint '{}' not found", constraint_id))?;
+
+        let source_asset = assets.iter().find(|a| a.id == constraint.source_asset_id);
+        let approval_status = source_asset
+            .map(|a| format!("{:?}", a.approval_status))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Find conflicting rules
+        let conflict_set = crate::writer_agent::world_bible::build_conflict_set(&constraints);
+        let conflicting_rules: Vec<String> = conflict_set
+            .iter()
+            .filter(|c| c.constraint_a_id == constraint_id || c.constraint_b_id == constraint_id)
+            .map(|c| {
+                if c.constraint_a_id == constraint_id {
+                    c.constraint_b_id.clone()
+                } else {
+                    c.constraint_a_id.clone()
+                }
+            })
+            .collect();
+
+        // Find usage chapters: heuristic scan of chapter files for trigger terms
+        let chapters_dir = chapters_dir(&self.config.data_dir, &self.project.id)?;
+        let mut usage_chapters = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&chapters_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let content_lower = content.to_lowercase();
+                        let has_trigger = constraint.trigger_terms.iter().any(|t| {
+                            content_lower.contains(&t.to_lowercase())
+                        });
+                        let has_forbidden = constraint.forbidden_terms.iter().any(|t| {
+                            content_lower.contains(&t.to_lowercase())
+                        });
+                        if has_trigger || has_forbidden {
+                            let title = path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            usage_chapters.push(title);
+                        }
+                    }
+                }
+            }
+        }
+
+        let source_ref = constraint
+            .evidence
+            .first()
+            .map(|e| e.source_id.clone())
+            .unwrap_or_else(|| constraint.source_asset_id.clone());
+
+        Ok(crate::writer_agent::world_bible::ConstraintQueryResult {
+            constraint_id: constraint.id.clone(),
+            kind: format!("{:?}", constraint.kind),
+            summary: constraint.summary.clone(),
+            source_ref,
+            approval_status,
+            usage_chapters,
+            conflicting_rules,
+            severity: format!("{:?}", constraint.severity),
+            trigger_terms: constraint.trigger_terms.clone(),
+            forbidden_terms: constraint.forbidden_terms.clone(),
+            required_terms: constraint.required_terms.clone(),
+        })
+    }
+
     pub fn load_outline(&self) -> Result<Vec<OutlineNode>, String> {
         read_json_array(&outline_path(&self.config.data_dir, &self.project.id)?)
     }
@@ -2190,7 +2272,23 @@ Output ONLY the JSON object, no explanation outside. Example:
     }
 
     pub fn resume_sprint(&self) -> Result<Option<SprintProgress>, String> {
+        // Look up the latest batch_sprint checkpoint before acquiring the sprint lock.
+        let maybe_checkpoint = self
+            .lock_kernel()
+            .ok()
+            .and_then(|kernel| {
+                kernel
+                    .memory
+                    .read_latest_checkpoint(&self.project.id, "batch_sprint")
+                    .ok()
+                    .flatten()
+            });
         self.mutate_sprint(|plan| {
+            if let Some(checkpoint) = maybe_checkpoint {
+                crate::writer_agent::supervised_sprint::skip_saved_chapters_from_checkpoint(
+                    plan, &checkpoint,
+                );
+            }
             resume_sprint(plan);
             Ok(Some(sprint_progress(plan)))
         })
@@ -2282,10 +2380,10 @@ Output ONLY the JSON object, no explanation outside. Example:
     ) -> Result<ChapterGenerationResumePlan, String> {
         let kernel = self.lock_kernel()?;
 
-        // Try unified AgentCheckpoint first
+        // Try unified AgentCheckpoint first (look up by checkpoint_id)
         if let Ok(Some(agent_cp)) = kernel
             .memory
-            .get_latest_agent_checkpoint(&self.project.id, &checkpoint_id)
+            .get_agent_checkpoint_by_id(&self.project.id, &checkpoint_id)
         {
             return Self::build_resume_plan_from_agent_checkpoint(&agent_cp);
         }
@@ -2368,26 +2466,70 @@ Output ONLY the JSON object, no explanation outside. Example:
     ) -> Result<ChapterGenerationResumePlan, String> {
         use agent_harness_core::execution_plan::{CheckpointPhase, ResumePolicy};
 
+        // A3: resume_policy-aware resume logic
+        // Skip policy: skip completed step, resume from next
+        // Rerun policy: re-run the current step (re-do conflict/approval checks for write steps)
+        // RequireApproval: pause and request approval before resuming
+        // Abort: do not resume, return error
         let (completed_steps, resume_from_step, can_resume) = match checkpoint.phase {
-            CheckpointPhase::StepStarted => (vec![], "draft".to_string(), true),
-            CheckpointPhase::StepCompleted => (
-                vec!["context_built".to_string(), "draft_produced".to_string()],
-                "quality_report".to_string(),
-                true,
-            ),
-            CheckpointPhase::ProviderCallBefore | CheckpointPhase::ProviderCallAfter => {
-                (vec!["context_built".to_string()], "draft".to_string(), true)
+            CheckpointPhase::StepStarted => {
+                if checkpoint.resume_policy == ResumePolicy::Skip {
+                    (vec!["context_built".to_string()], "draft".to_string(), true)
+                } else {
+                    (vec![], "draft".to_string(), true)
+                }
             }
-            CheckpointPhase::SavePrepared => (
-                vec![
-                    "context_built".to_string(),
-                    "draft_produced".to_string(),
-                    "quality_report_produced".to_string(),
-                    "save_prepared".to_string(),
-                ],
-                "save".to_string(),
-                true,
-            ),
+            CheckpointPhase::StepCompleted => {
+                if checkpoint.resume_policy == ResumePolicy::Rerun {
+                    (
+                        vec!["context_built".to_string()],
+                        "draft".to_string(),
+                        true,
+                    )
+                } else {
+                    (
+                        vec!["context_built".to_string(), "draft_produced".to_string()],
+                        "quality_report".to_string(),
+                        true,
+                    )
+                }
+            }
+            CheckpointPhase::ProviderCallBefore | CheckpointPhase::ProviderCallAfter => {
+                if checkpoint.resume_policy == ResumePolicy::Skip {
+                    (
+                        vec!["context_built".to_string(), "draft_produced".to_string()],
+                        "quality_report".to_string(),
+                        true,
+                    )
+                } else {
+                    (vec!["context_built".to_string()], "draft".to_string(), true)
+                }
+            }
+            CheckpointPhase::SavePrepared => {
+                if checkpoint.resume_policy == ResumePolicy::Rerun {
+                    // Re-do conflict/approval checks for write steps
+                    (
+                        vec![
+                            "context_built".to_string(),
+                            "draft_produced".to_string(),
+                            "quality_report_produced".to_string(),
+                        ],
+                        "save".to_string(),
+                        true,
+                    )
+                } else {
+                    (
+                        vec![
+                            "context_built".to_string(),
+                            "draft_produced".to_string(),
+                            "quality_report_produced".to_string(),
+                            "save_prepared".to_string(),
+                        ],
+                        "save".to_string(),
+                        true,
+                    )
+                }
+            }
             CheckpointPhase::WriteBefore => (
                 vec![
                     "context_built".to_string(),
@@ -6257,5 +6399,243 @@ mod tests {
         assert_eq!(plan.resume_from_step, "context");
         assert_eq!(plan.warnings.len(), 1);
         assert!(plan.warnings[0].contains("not recognized"));
+    }
+
+    // ── A3: Resume policy-aware tests ──
+
+    #[test]
+    fn resume_agent_checkpoint_skip_policy() {
+        let backend = temp_backend();
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-skip".to_string(),
+            task_id: "task-skip".to_string(),
+            plan_id: "plan-skip".to_string(),
+            step_id: "draft_produced".to_string(),
+            phase: CheckpointPhase::StepCompleted,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec!["draft.txt".to_string()],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 1_000_000,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::Skip,
+            task_kind: Some("chapter_generation".to_string()),
+            safe_resume_payload: None,
+            source: Some("pipeline".to_string()),
+            created_at_ms: None,
+        };
+        let kernel = backend.lock_kernel().unwrap();
+        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        drop(kernel);
+
+        let plan = backend.resume_chapter_generation("acp-skip".to_string()).unwrap();
+        assert!(plan.can_resume);
+        assert_eq!(plan.checkpoint_id, "acp-skip");
+        assert_eq!(plan.resume_from_step, "quality_report");
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn resume_agent_checkpoint_rerun_policy() {
+        let backend = temp_backend();
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-rerun".to_string(),
+            task_id: "task-rerun".to_string(),
+            plan_id: "plan-rerun".to_string(),
+            step_id: "save_prepared".to_string(),
+            phase: CheckpointPhase::SavePrepared,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec!["saved:Ch1/rev-1".to_string()],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 2_000_000,
+            approval_refs: vec!["approval-1".to_string()],
+            resume_policy: ResumePolicy::Rerun,
+            task_kind: Some("chapter_generation".to_string()),
+            safe_resume_payload: None,
+            source: Some("pipeline".to_string()),
+            created_at_ms: None,
+        };
+        let kernel = backend.lock_kernel().unwrap();
+        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        drop(kernel);
+
+        let plan = backend.resume_chapter_generation("acp-rerun".to_string()).unwrap();
+        assert!(plan.can_resume);
+        assert_eq!(plan.checkpoint_id, "acp-rerun");
+        // Rerun policy on save_prepared should re-do conflict check
+        assert_eq!(plan.resume_from_step, "save");
+        assert!(plan.warnings.iter().any(|w| w.contains("rerun")));
+    }
+
+    #[test]
+    fn resume_agent_checkpoint_require_approval_policy() {
+        let backend = temp_backend();
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-approval".to_string(),
+            task_id: "task-approval".to_string(),
+            plan_id: "plan-approval".to_string(),
+            step_id: "save_prepared".to_string(),
+            phase: CheckpointPhase::SavePrepared,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec![],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 3_000_000,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::RequireApproval,
+            task_kind: Some("chapter_generation".to_string()),
+            safe_resume_payload: None,
+            source: Some("pipeline".to_string()),
+            created_at_ms: None,
+        };
+        let kernel = backend.lock_kernel().unwrap();
+        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        drop(kernel);
+
+        let plan = backend.resume_chapter_generation("acp-approval".to_string()).unwrap();
+        assert!(plan.can_resume);
+        assert_eq!(plan.checkpoint_id, "acp-approval");
+        assert!(plan.warnings.iter().any(|w| w.contains("approval")));
+    }
+
+    #[test]
+    fn resume_agent_checkpoint_abort_policy() {
+        let backend = temp_backend();
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-abort".to_string(),
+            task_id: "task-abort".to_string(),
+            plan_id: "plan-abort".to_string(),
+            step_id: "write_after".to_string(),
+            phase: CheckpointPhase::WriteAfter,
+            input_hash: String::new(),
+            context_hash: String::new(),
+            artifact_refs: vec![],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 4_000_000,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::Abort,
+            task_kind: Some("chapter_generation".to_string()),
+            safe_resume_payload: None,
+            source: Some("pipeline".to_string()),
+            created_at_ms: None,
+        };
+        let kernel = backend.lock_kernel().unwrap();
+        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        drop(kernel);
+
+        let plan = backend.resume_chapter_generation("acp-abort".to_string()).unwrap();
+        assert!(!plan.can_resume);
+        assert!(plan.warnings.iter().any(|w| w.contains("not recoverable")));
+    }
+
+    #[test]
+    fn resume_agent_checkpoint_provider_call_before_rerun() {
+        let backend = temp_backend();
+        use agent_harness_core::execution_plan::{
+            AgentCheckpoint, CheckpointPhase, ResumePolicy,
+        };
+        let cp = AgentCheckpoint {
+            checkpoint_id: "acp-provider-rerun".to_string(),
+            task_id: "task-provider".to_string(),
+            plan_id: "plan-provider".to_string(),
+            step_id: "draft".to_string(),
+            phase: CheckpointPhase::ProviderCallBefore,
+            input_hash: "hash-before".to_string(),
+            context_hash: "hash-ctx".to_string(),
+            artifact_refs: vec![],
+            tool_effects: vec![],
+            provider_usage: None,
+            budget_spent: 500_000,
+            approval_refs: vec![],
+            resume_policy: ResumePolicy::Rerun,
+            task_kind: Some("chapter_generation".to_string()),
+            safe_resume_payload: None,
+            source: Some("pipeline".to_string()),
+            created_at_ms: None,
+        };
+        let kernel = backend.lock_kernel().unwrap();
+        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        drop(kernel);
+
+        let plan = backend.resume_chapter_generation("acp-provider-rerun".to_string()).unwrap();
+        assert!(plan.can_resume);
+        assert_eq!(plan.checkpoint_id, "acp-provider-rerun");
+        // Rerun policy on ProviderCallBefore should resume from draft
+        assert_eq!(plan.resume_from_step, "draft");
+        assert!(plan.warnings.iter().any(|w| w.contains("rerun")));
+    }
+
+    #[test]
+    fn resume_sprint_skips_saved_chapters_from_checkpoint() {
+        let backend = temp_backend();
+        let titles: Vec<String> = (1..=5)
+            .map(|i| format!("Chapter {}", i))
+            .collect();
+        let plan = backend
+            .start_sprint(StartSprintRequest {
+                chapter_titles: titles.clone(),
+                require_approval_per_chapter: false,
+                max_chapters_per_session: None,
+                budget_ceiling_micros: None,
+            })
+            .unwrap();
+        assert_eq!(plan.total_chapters, 5);
+        assert_eq!(plan.current_index, 0);
+
+        // Pause the sprint so resume_sprint will actually resume it.
+        backend.pause_sprint().unwrap();
+
+        // Insert a batch_sprint checkpoint with saved_chapters for first 3 chapters.
+        let checkpoint = crate::writer_agent::supervised_sprint::LongTaskCheckpoint::new(
+            "cp-batch-1",
+            &plan.sprint_id,
+            "batch_sprint",
+            "paused",
+            serde_json::json!({
+                "saved_chapters": [
+                    "Chapter 1",
+                    "Chapter 2",
+                    "Chapter 3"
+                ]
+            }),
+        );
+        let kernel = backend.lock_kernel().unwrap();
+        kernel
+            .memory
+            .insert_long_task_checkpoint(&backend.project.id, &checkpoint)
+            .unwrap();
+        drop(kernel);
+
+        // Resume sprint — should skip the 3 saved chapters and continue from chapter 4.
+        let progress = backend.resume_sprint().unwrap().unwrap();
+        assert_eq!(progress.chapters_completed, 3);
+        assert_eq!(progress.chapters_remaining, 2);
+        assert_eq!(progress.current_chapter, Some("Chapter 4".to_string()));
+
+        // Verify the sprint plan was persisted with the updated index.
+        let updated_plan = backend.sprint_plan().unwrap().unwrap();
+        assert_eq!(updated_plan.current_index, 3);
+        assert_eq!(updated_plan.chapters[0].status, "settled");
+        assert_eq!(updated_plan.chapters[1].status, "settled");
+        assert_eq!(updated_plan.chapters[2].status, "settled");
+        assert_eq!(updated_plan.chapters[3].status, "pending");
+        assert_eq!(updated_plan.chapters[4].status, "pending");
     }
 }

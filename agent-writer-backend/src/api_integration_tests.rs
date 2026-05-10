@@ -811,6 +811,27 @@ async fn real_author_session_thirty_chapter_gate() {
         }));
     }
 
+    // Compute state delta coverage across chapters
+    let mut state_delta_covered = 0usize;
+    let mut state_delta_weak = 0usize;
+    let mut state_delta_missing = 0usize;
+    for report in &chapter_reports {
+        let ch = report["chapter"].as_u64().unwrap_or(0) as usize;
+        let draft_text = drafts.get(ch.saturating_sub(1)).map(|s| s.as_str()).unwrap_or("");
+        // Heuristic: count state-change markers in draft text
+        let has_state_change = ["发现", "知道", "变成", "失去", "得到", "改变", "意识到", "决定"]
+            .iter()
+            .any(|marker| draft_text.contains(marker));
+        let has_transition = draft_text.contains("->") || draft_text.contains("不再") || draft_text.contains("已经");
+        if has_state_change && has_transition {
+            state_delta_covered += 1;
+        } else if has_state_change || has_transition {
+            state_delta_weak += 1;
+        } else {
+            state_delta_missing += 1;
+        }
+    }
+
     // Compute latency percentiles
     let p50_latency = percentile(&chapter_latency_ms, 0.50);
     let p90_latency = percentile(&chapter_latency_ms, 0.90);
@@ -842,6 +863,11 @@ async fn real_author_session_thirty_chapter_gate() {
         "repairRate": repair_rate,
         "duplicatePreviewGroups": duplicate_preview_groups,
         "qualityWarnings": quality_warnings,
+        "stateDeltaCoverage": {
+            "covered": state_delta_covered,
+            "weak": state_delta_weak,
+            "missing": state_delta_missing
+        },
         "errors": errors,
         "chapters": chapter_reports,
     });

@@ -188,6 +188,26 @@ fn action_codes_for_missing_sources(
     actions
 }
 
+/// P15: Generate action codes for canon constraint preflight issues.
+/// Maps preflight warning codes to actionable recovery steps.
+pub fn action_codes_for_canon_preflight(
+    missing_key_canon: &[String],
+    rule_conflicts: &[String],
+    has_unapproved_hard: bool,
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    if !missing_key_canon.is_empty() && !actions.contains(&"fetch_canon_constraint".to_string()) {
+        actions.push("fetch_canon_constraint".to_string());
+    }
+    if !rule_conflicts.is_empty() && !actions.contains(&"resolve_rule_conflict".to_string()) {
+        actions.push("resolve_rule_conflict".to_string());
+    }
+    if has_unapproved_hard && !actions.contains(&"approve_world_rule".to_string()) {
+        actions.push("approve_world_rule".to_string());
+    }
+    actions
+}
+
 #[cfg(test)]
 mod context_quality_tests {
     use super::*;

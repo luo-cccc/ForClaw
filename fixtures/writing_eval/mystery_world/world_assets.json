@@ -1,0 +1,182 @@
+[
+  {
+    "id": "detective-agency-rule",
+    "kind": "rule",
+    "name": "侦探事务所保密规则",
+    "summary": "侦探事务所所有案件档案必须保密，未经授权不得向第三方透露调查进展或证据内容。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-001",
+        "excerpt": "侦探事务所章程第3条：所有案件档案属机密，泄露者承担法律责任",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["保密", "档案", "侦探事务所", "规则"]
+  },
+  {
+    "id": "evidence-chain-rule",
+    "kind": "rule",
+    "name": "证据链完整性规则",
+    "summary": "任何证据必须保持完整的获取、保存、移交记录，缺失任一环节的证据不得在正式调查中使用。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-002",
+        "excerpt": "刑侦手册：证据链三要素——获取记录、保存记录、移交记录，缺一不可",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["证据链", "完整性", "刑侦", "规则"]
+  },
+  {
+    "id": "suspect-interrogation-rule",
+    "kind": "rule",
+    "name": "嫌疑人审讯规则",
+    "summary": "审讯嫌疑人时必须有两名以上执法人员在场，单独审讯获得的口供无效。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-003",
+        "excerpt": "刑事诉讼法第118条：讯问犯罪嫌疑人必须由两名以上侦查人员进行",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["审讯", "嫌疑人", "执法", "规则"]
+  },
+  {
+    "id": "orphanage-fire-death-rule",
+    "kind": "rule",
+    "name": "孤儿院火灾死亡记录规则",
+    "summary": "1998年晨光孤儿院火灾官方记录七名儿童死亡，但实际死亡人数被隐瞒，任何声称官方记录完全准确的陈述均属违规。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-004",
+        "excerpt": "火灾调查报告被涂黑，陈默记得当晚至少有十二个孩子",
+        "confidence": 0.9
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["孤儿院", "火灾", "死亡记录", "隐瞒"]
+  },
+  {
+    "id": "scar-origin-rule",
+    "kind": "rule",
+    "name": "烫伤疤痕来源规则",
+    "summary": "尸体手腕上的烫伤疤痕来自孤儿院火灾中的金属门把，与火灾直接相关，任何声称疤痕与火灾无关的陈述均属违规。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-005",
+        "excerpt": "法医鉴定：疤痕形状与孤儿院金属门把烫伤痕迹完全吻合",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["疤痕", "烫伤", "孤儿院", "火灾"]
+  },
+  {
+    "id": "proposed-key-conspiracy",
+    "kind": "rule",
+    "name": "七把钥匙阴谋推测",
+    "summary": "推测七把铜钥匙是打开某个秘密设施的完整钥匙组，与孤儿院火灾真相有关。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-006",
+        "excerpt": "陈默在地下室找到六把钥匙，加上口袋里的07，七把齐了——推测与某个秘密设施有关",
+        "confidence": 0.4
+      }
+    ],
+    "approvalStatus": "proposed",
+    "tags": ["钥匙", "阴谋", "推测", "孤儿院"]
+  },
+  {
+    "id": "entity-chen-mo",
+    "kind": "entity",
+    "name": "陈默",
+    "summary": "刑警队长，十二年前从孤儿院火灾中幸存，左臂有烧伤疤痕。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-007",
+        "excerpt": "陈默，刑警队长，孤儿院火灾幸存者",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["陈默", "刑警", "幸存者", "主角"]
+  },
+  {
+    "id": "entity-orphanage",
+    "kind": "entity",
+    "name": "晨光孤儿院",
+    "summary": "1998年因电路短路引发火灾，官方记录七名儿童死亡，实际人数被隐瞒。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-008",
+        "excerpt": "晨光孤儿院1998年火灾，官方记录七人死亡",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["晨光孤儿院", "火灾", "1998年", "隐瞒"]
+  },
+  {
+    "id": "entity-copper-key",
+    "kind": "entity",
+    "name": "铜钥匙",
+    "summary": "刻有'07'的铜制钥匙，属于晨光孤儿院地下室的七把储物柜钥匙之一。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-009",
+        "excerpt": "铜钥匙刻有07，属于孤儿院地下室储物柜",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["铜钥匙", "07", "孤儿院", "地下室"]
+  },
+  {
+    "id": "relation-chen-orphanage",
+    "kind": "relation",
+    "name": "陈默与晨光孤儿院的关系",
+    "summary": "陈默是孤儿院火灾幸存者，对孤儿院有深刻的个人联系和创伤记忆。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-010",
+        "excerpt": "陈默十二年前从孤儿院火灾中幸存，左臂有烧伤疤痕",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["陈默", "孤儿院", "幸存者", "创伤"]
+  },
+  {
+    "id": "relation-scar-fire",
+    "kind": "relation",
+    "name": "疤痕与火灾的关系",
+    "summary": "尸体手腕上的烫伤疤痕直接来源于孤儿院火灾中的金属门把。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-011",
+        "excerpt": "疤痕形状与孤儿院金属门把烫伤痕迹完全吻合",
+        "confidence": 0.95
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["疤痕", "火灾", "金属门把", "关联"]
+  },
+  {
+    "id": "evidence-hierarchy",
+    "kind": "hierarchy",
+    "name": "证据等级体系",
+    "summary": "物证 > 书证 > 证人证言 > 推测。低等级证据不可单独推翻高等级证据。",
+    "evidence": [
+      {
+        "sourceId": "mystery-lore-012",
+        "excerpt": "刑侦证据等级：物证优先于书证，书证优先于证言",
+        "confidence": 0.9
+      }
+    ],
+    "approvalStatus": "approved",
+    "tags": ["证据", "等级", "物证", "书证", "证言"]
+  }
+]

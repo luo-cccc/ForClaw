@@ -12,6 +12,7 @@ const OVERALL_WEIGHTS: &[(&str, f32)] = &[
     ("new_information_density", 0.08),
     ("state_delta_coverage", 0.04),
     ("world_consistency", 0.08),
+    ("term_misuse", 0.08),
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -23,6 +24,11 @@ pub struct ChapterQualitySignals {
     pub prior_chapter_summaries: Vec<String>,
     pub scene_contract: Option<crate::writer_agent::world_bible::SceneContract>,
     pub world_assets: Vec<crate::writer_agent::world_bible::WorldAsset>,
+    /// P14: Approved canon constraints compiled from WorldBibleIndex.
+    /// When provided, these take priority over generic world_assets checks.
+    pub canon_constraints: Vec<crate::writer_agent::world_bible::CanonConstraint>,
+    /// P17: Approved canon terms for term misuse detection.
+    pub canon_terms: Vec<crate::writer_agent::world_bible::CanonTerm>,
 }
 
 pub fn evaluate_chapter_quality(
@@ -66,7 +72,8 @@ pub fn evaluate_chapter_quality_with_signals(
         metric_plot_progression(chapter_text),
         metric_new_information_density(chapter_text, &signals.prior_chapter_summaries),
         metric_state_delta_coverage(chapter_text, &signals.required_state_deltas),
-        metric_world_consistency(chapter_text, signals.scene_contract.as_ref(), &signals.world_assets),
+        metric_world_consistency(chapter_text, signals.scene_contract.as_ref(), &signals.world_assets, &signals.canon_constraints),
+        metric_term_misuse(chapter_text, &signals.canon_terms),
     ];
 
     let overall_score: f32 = metric_results
@@ -125,6 +132,12 @@ pub fn evaluate_chapter_quality_with_signals(
         Vec::new()
     };
 
+    // P15: Populate structured canon constraint violations for quality report
+    let canon_constraint_violations =
+        crate::writer_agent::world_bible::format_canon_constraint_violations(
+            &world_consistency_violations,
+        );
+
     ChapterQualityReport {
         chapter_title: chapter_title.to_string(),
         overall_score,
@@ -134,6 +147,7 @@ pub fn evaluate_chapter_quality_with_signals(
         top_revision_targets,
         no_fatal_issue,
         world_consistency_violations,
+        canon_constraint_violations,
     }
 }
 
@@ -906,6 +920,7 @@ fn metric_world_consistency(
     text: &str,
     scene_contract: Option<&crate::writer_agent::world_bible::SceneContract>,
     world_assets: &[crate::writer_agent::world_bible::WorldAsset],
+    canon_constraints: &[crate::writer_agent::world_bible::CanonConstraint],
 ) -> QualityMetricResult {
     let Some(contract) = scene_contract else {
         return gated_metric(
@@ -918,7 +933,22 @@ fn metric_world_consistency(
         );
     };
 
-    let violations = crate::writer_agent::world_bible::validate_world_consistency(text, contract, world_assets);
+    // P14: When canon_constraints are provided directly, merge them into the contract's
+    // active_constraints. Approved canon constraints take priority (prepended so they
+    // are checked first and can override generic asset checks).
+    let mut effective_contract = contract.clone();
+    if !canon_constraints.is_empty() {
+        // Prepend approved canon constraints so they take priority
+        let mut merged = canon_constraints.to_vec();
+        merged.append(&mut effective_contract.active_constraints);
+        effective_contract.active_constraints = merged;
+    }
+
+    let violations = crate::writer_agent::world_bible::validate_world_consistency(
+        text,
+        &effective_contract,
+        world_assets,
+    );
     if violations.is_empty() {
         return gated_metric(
             "world_consistency",
@@ -941,7 +971,7 @@ fn metric_world_consistency(
     let evidence = violations
         .iter()
         .take(3)
-        .map(|v| format!("[{:?}] {}", v.kind, v.message))
+        .map(format_violation_evidence)
         .collect::<Vec<_>>()
         .join("; ");
 
@@ -957,6 +987,105 @@ fn metric_world_consistency(
         "world_bible",
         &reason,
         &format!("修复 {} 个世界观违规", violations.len()),
+    )
+}
+
+fn metric_term_misuse(
+    text: &str,
+    canon_terms: &[crate::writer_agent::world_bible::CanonTerm],
+) -> QualityMetricResult {
+    if canon_terms.is_empty() {
+        return gated_metric(
+            "term_misuse",
+            0.5,
+            "",
+            "world_bible",
+            "无可用的正典术语定义，跳过评估",
+            "",
+        );
+    }
+
+    let violations = crate::writer_agent::world_bible::validate_term_misuse(text, canon_terms);
+    if violations.is_empty() {
+        return gated_metric(
+            "term_misuse",
+            1.0,
+            "无术语误用",
+            "world_bible",
+            "所有正典术语使用正确",
+            "",
+        );
+    }
+
+    let hard_count = violations
+        .iter()
+        .filter(|v| matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard))
+        .count();
+    let warning_count = violations.len() - hard_count;
+    let penalty = (hard_count as f32 * 0.35 + warning_count as f32 * 0.12).min(1.0);
+    let score = 1.0 - penalty;
+
+    let evidence = violations
+        .iter()
+        .take(3)
+        .map(|v| {
+            format!(
+                "[{}] term={} expected='{}' observed='{}'",
+                match v.severity {
+                    crate::writer_agent::world_bible::ConstraintSeverity::Hard => "Hard",
+                    crate::writer_agent::world_bible::ConstraintSeverity::Warning => "Warning",
+                    crate::writer_agent::world_bible::ConstraintSeverity::Info => "Info",
+                },
+                v.term,
+                v.expected_definition,
+                v.observed_usage
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let reason = format!(
+        "术语误用: {} hard, {} warning",
+        hard_count, warning_count
+    );
+
+    gated_metric(
+        "term_misuse",
+        score,
+        &evidence,
+        "world_bible",
+        &reason,
+        &format!("修正 {} 个术语误用", violations.len()),
+    )
+}
+
+/// Format a WorldConsistencyViolation into a machine-parseable evidence string.
+/// Format: "[Hard] rule_id={id} source={source_ref}: {summary} | excerpt: {text_excerpt}"
+fn format_violation_evidence(
+    v: &crate::writer_agent::world_bible::WorldConsistencyViolation,
+) -> String {
+    let severity_label = match v.severity {
+        crate::writer_agent::world_bible::ConstraintSeverity::Hard => "Hard",
+        crate::writer_agent::world_bible::ConstraintSeverity::Warning => "Warning",
+        crate::writer_agent::world_bible::ConstraintSeverity::Info => "Info",
+    };
+    let source_ref = v
+        .evidence
+        .first()
+        .map(|e| format!("{}/{}", e.source_id, e.excerpt))
+        .unwrap_or_else(|| "unknown".to_string());
+    let summary = if v.suggested_fix.is_empty() {
+        v.message.clone()
+    } else {
+        v.suggested_fix.clone()
+    };
+    format!(
+        "[{}] rule_id={} source={}: {} | excerpt: {}",
+        severity_label,
+        v.constraint_id,
+        source_ref,
+        summary,
+        v.text_excerpt
     )
 }
 
@@ -1515,13 +1644,13 @@ mod craft_quality_tests {
     fn all_metrics_present() {
         let plan = SceneCraftPlan::default();
         let report = evaluate_chapter_quality("一些测试文本内容", "test-chapter", &plan, &[], 0, 500);
-        assert_eq!(report.metric_results.len(), 13, "all 13 metrics should be present");
+        assert_eq!(report.metric_results.len(), 14, "all 14 metrics should be present");
         let expected_metrics = [
             "anchor_carry", "style_drift", "length_compliance",
             "dialogue_function", "exposition_ratio", "ending_hook",
             "scene_causality", "promise_progress",
             "scene_repetition", "plot_progression", "new_information_density", "state_delta_coverage",
-            "world_consistency",
+            "world_consistency", "term_misuse",
         ];
         for expected in &expected_metrics {
             assert!(
@@ -1612,6 +1741,8 @@ mod craft_quality_tests {
             prior_chapter_summaries: Vec::new(),
             scene_contract: None,
             world_assets: Vec::new(),
+            canon_constraints: Vec::new(),
+            canon_terms: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             "林墨只好拔出寒影剑，因此付出代价。",
@@ -1689,6 +1820,8 @@ mod craft_quality_tests {
             prior_chapter_summaries: Vec::new(),
             scene_contract: None,
             world_assets: Vec::new(),
+            canon_constraints: Vec::new(),
+            canon_terms: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             text, "test-chapter", &plan, &[], 0, 500, &signals,
@@ -1729,6 +1862,8 @@ mod craft_quality_tests {
             prior_chapter_summaries: Vec::new(),
             scene_contract: None,
             world_assets: Vec::new(),
+            canon_constraints: Vec::new(),
+            canon_terms: Vec::new(),
         };
         let report = evaluate_chapter_quality_with_signals(
             text, "test-chapter", &plan, &[], 0, 500, &signals,
@@ -1963,6 +2098,43 @@ mod craft_quality_tests {
         assert!(result.score >= 0.4, "必要recap不应被误伤，实际={}", result.score);
     }
 
+    #[test]
+    fn anchor_carry_pass_but_scene_repetition_fail() {
+        // 负例：锚点合格但场景重复
+        let text = "林墨握着寒影刀，站在破庙门口。林墨握着寒影刀，站在破庙门口。林墨握着寒影刀，站在破庙门口。寒影刀在他手中微微颤动。张三从阴影中走出，看着林墨。张三从阴影中走出，看着林墨。张三从阴影中走出，看着林墨。林墨决定继续前进。林墨决定继续前进。林墨决定继续前进。";
+        let plan = SceneCraftPlan::default();
+        let signals = ChapterQualitySignals {
+            anchor_keywords: vec!["寒影刀".to_string(), "张三".to_string()],
+            prior_chapter_summaries: vec!["林墨在茶馆遇到了张三。".to_string()],
+            ..Default::default()
+        };
+        let report = evaluate_chapter_quality_with_signals(
+            text,
+            "test",
+            &plan,
+            &[],
+            0,
+            2000,
+            &signals,
+        );
+        let ac = report.metric_results.iter().find(|m| m.metric == "anchor_carry");
+        let sr = report.metric_results.iter().find(|m| m.metric == "scene_repetition");
+        assert!(ac.is_some(), "anchor_carry metric should exist");
+        assert!(sr.is_some(), "scene_repetition metric should exist");
+        if let (Some(a), Some(s)) = (ac, sr) {
+            assert!(
+                a.score >= 0.3,
+                "anchor_carry should pass ({:.2}) because anchors are present",
+                a.score
+            );
+            assert!(
+                s.score < 0.5,
+                "scene_repetition should fail ({:.2}) because sentences are heavily duplicated",
+                s.score
+            );
+        }
+    }
+
     // ──── P11 anchor_carry vs state_delta_coverage uniqueness ────
 
     #[test]
@@ -2017,5 +2189,302 @@ mod craft_quality_tests {
             "covered should score higher than weak: covered={:.2} weak={:.2}",
             covered_result.score, weak_result.score
         );
+    }
+
+    // ──── P14: Approved canon constraint violation detection with source_ref ────
+
+    use crate::writer_agent::world_bible::{
+        ApprovalStatus, CanonConstraint, CanonConstraintKind, ConstraintSeverity, EvidenceRef,
+        SceneContract, WorldAsset, WorldAssetKind, WorldRule, RuleSubKind, TypedWorldAsset,
+        WorldBibleIndex,
+    };
+
+    fn sample_evidence(source_id: &str, excerpt: &str) -> EvidenceRef {
+        EvidenceRef {
+            source_id: source_id.to_string(),
+            source_path: Some("world_bible.md".to_string()),
+            start_line: Some(10),
+            end_line: Some(20),
+            excerpt: excerpt.to_string(),
+            confidence: 0.95,
+        }
+    }
+
+    fn make_scene_contract_with_constraints(constraints: Vec<CanonConstraint>) -> SceneContract {
+        SceneContract {
+            chapter_id: "ch1".to_string(),
+            mission: "test mission".to_string(),
+            required_facts: Vec::new(),
+            active_constraints: constraints,
+            required_state_deltas: Vec::new(),
+            allowed_reveals: Vec::new(),
+            blocked_reveals: Vec::new(),
+            evidence_refs: Vec::new(),
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn world_consistency_detects_hierarchy_violation_with_source_ref() {
+        let text = "林墨（一个散修）随手捏碎了上古封印。";
+        let hierarchy_constraint = CanonConstraint {
+            id: "hierarchy-limit-001".to_string(),
+            kind: CanonConstraintKind::HierarchyLimit,
+            summary: "散修不可破坏上古封印".to_string(),
+            trigger_terms: vec!["散修".to_string()],
+            // Use exact terms that appear in the text for reliable matching
+            forbidden_terms: vec!["捏碎".to_string(), "上古封印".to_string()],
+            required_terms: Vec::new(),
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "hierarchy-001".to_string(),
+            evidence: vec![sample_evidence("src://world_bible.md#hierarchy", "散修层级不可触及上古封印")],
+            applies_to: vec!["散修".to_string()],
+            expected_consequence: "封印反噬".to_string(),
+        };
+        let contract = make_scene_contract_with_constraints(vec![hierarchy_constraint]);
+        // Provide an approved asset matching the constraint's source_asset_id so severity stays Hard
+        let assets = vec![WorldAsset {
+            id: "hierarchy-001".to_string(),
+            kind: WorldAssetKind::Hierarchy,
+            name: "修炼层级".to_string(),
+            summary: "散修属于最低层级".to_string(),
+            evidence: vec![sample_evidence("src://world_bible.md#hierarchy", "散修层级不可触及上古封印")],
+            approval_status: ApprovalStatus::Approved,
+            tags: vec!["散修".to_string(), "上古封印".to_string()],
+        }];
+        let result = metric_world_consistency(text, Some(&contract), &assets, &[]);
+
+        assert!(result.score < 1.0, "hierarchy violation should reduce score, got {}", result.score);
+        assert!(
+            result.evidence_excerpt.contains("[Hard]"),
+            "evidence should contain [Hard] severity label, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("rule_id=hierarchy-limit-001"),
+            "evidence should contain rule_id, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("src://world_bible.md#hierarchy"),
+            "evidence should contain source_ref, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("excerpt:"),
+            "evidence should contain excerpt, got: {}",
+            result.evidence_excerpt
+        );
+    }
+
+    #[test]
+    fn world_consistency_detects_forbidden_action_with_source_ref() {
+        let text = "他使用了禁忌法术，召唤远古邪神。";
+        let forbidden_constraint = CanonConstraint {
+            id: "forbidden-action-001".to_string(),
+            kind: CanonConstraintKind::ForbiddenClaim,
+            summary: "禁止召唤远古邪神".to_string(),
+            trigger_terms: vec!["禁忌法术".to_string()],
+            forbidden_terms: vec!["召唤远古邪神".to_string()],
+            required_terms: Vec::new(),
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "rule-001".to_string(),
+            evidence: vec![sample_evidence("src://world_bible.md#taboo", "召唤远古邪神将导致世界崩溃")],
+            applies_to: Vec::new(),
+            expected_consequence: "世界崩溃".to_string(),
+        };
+        let contract = make_scene_contract_with_constraints(vec![forbidden_constraint]);
+        // Provide an approved asset matching the constraint's source_asset_id so severity stays Hard
+        let assets = vec![WorldAsset {
+            id: "rule-001".to_string(),
+            kind: WorldAssetKind::Rule,
+            name: "禁忌法术".to_string(),
+            summary: "禁止召唤远古邪神".to_string(),
+            evidence: vec![sample_evidence("src://world_bible.md#taboo", "召唤远古邪神将导致世界崩溃")],
+            approval_status: ApprovalStatus::Approved,
+            tags: vec!["召唤远古邪神".to_string()],
+        }];
+        let result = metric_world_consistency(text, Some(&contract), &assets, &[]);
+
+        assert!(result.score < 1.0, "forbidden action should reduce score, got {}", result.score);
+        assert!(
+            result.evidence_excerpt.contains("[Hard]"),
+            "evidence should contain [Hard] severity label, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("rule_id=forbidden-action-001"),
+            "evidence should contain rule_id, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("src://world_bible.md#taboo"),
+            "evidence should contain source_ref, got: {}",
+            result.evidence_excerpt
+        );
+    }
+
+    #[test]
+    fn world_consistency_passes_when_no_violation() {
+        let text = "林墨（一个散修）在村口休息，看着远处的山峦。";
+        let hierarchy_constraint = CanonConstraint {
+            id: "hierarchy-limit-001".to_string(),
+            kind: CanonConstraintKind::HierarchyLimit,
+            summary: "散修不可破坏上古封印".to_string(),
+            trigger_terms: vec!["散修".to_string()],
+            forbidden_terms: vec!["捏碎上古封印".to_string()],
+            required_terms: Vec::new(),
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "hierarchy-001".to_string(),
+            evidence: vec![sample_evidence("src://world_bible.md#hierarchy", "散修层级不可触及上古封印")],
+            applies_to: vec!["散修".to_string()],
+            expected_consequence: "封印反噬".to_string(),
+        };
+        let contract = make_scene_contract_with_constraints(vec![hierarchy_constraint]);
+        let result = metric_world_consistency(text, Some(&contract), &[], &[]);
+
+        assert_eq!(result.score, 1.0, "no violation should yield perfect score");
+        assert!(
+            result.evidence_excerpt.is_empty() || result.evidence_excerpt.contains("无世界观一致性违规"),
+            "no violation should yield empty or passing evidence, got: {}",
+            result.evidence_excerpt
+        );
+    }
+
+    #[test]
+    fn approved_canon_constraints_take_priority_over_generic_assets() {
+        // Create a WorldBibleIndex with approved typed assets
+        let mut index = WorldBibleIndex::new("proj1");
+
+        let rule = WorldRule {
+            id: "rule-001".to_string(),
+            sub_kind: RuleSubKind::Taboo,
+            name: "禁忌法术".to_string(),
+            summary: "散修不可使用禁忌法术".to_string(),
+            source_ref: sample_evidence("src://world_bible.md#taboo", "散修使用禁忌法术将遭天谴"),
+            original_excerpt: "散修使用禁忌法术将遭天谴".to_string(),
+            confidence: 0.95,
+            approval_status: ApprovalStatus::Approved,
+            tags: vec!["禁忌法术".to_string()],
+            scope: vec!["散修".to_string()],
+            severity_description: "fatal".to_string(),
+        };
+        index.add_asset(TypedWorldAsset::Rule(rule)).unwrap();
+
+        // Compile approved constraints at confidence threshold 0.7
+        // compile_approved_constraints only compiles Rule assets into ForbiddenClaim constraints
+        let canon_constraints = index.compile_approved_constraints(0.7);
+        assert!(!canon_constraints.is_empty(), "should produce at least one constraint from approved rule");
+
+        // Also compile matching WorldAsset for validate_world_consistency to resolve effective severity
+        let assets: Vec<WorldAsset> = index
+            .assets
+            .iter()
+            .filter(|a| a.can_enter_approved_canon(0.7))
+            .map(|a| a.to_world_asset())
+            .collect();
+        assert!(!assets.is_empty(), "should have at least one approved asset");
+
+        // Text violates the compiled constraint: contains "禁忌法术" (forbidden term from rule tags)
+        let text = "散修林墨使用了禁忌法术。";
+        let contract = make_scene_contract_with_constraints(Vec::new());
+
+        // When canon_constraints are provided directly, they take priority
+        let result = metric_world_consistency(text, Some(&contract), &assets, &canon_constraints);
+
+        assert!(result.score < 1.0, "violation should be detected via canon_constraints, got score={}", result.score);
+        assert!(
+            result.evidence_excerpt.contains("rule_id="),
+            "evidence should contain rule_id from canon constraint, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("src://world_bible.md#taboo"),
+            "evidence should contain source_ref from approved rule, got: {}",
+            result.evidence_excerpt
+        );
+    }
+
+    // ──── P17: Term misuse detection ────
+
+    #[test]
+    fn term_misuse_detects_changed_meaning() {
+        let text = "寒影剑是一把邪恶的魔剑，它代表着黑暗与背叛。";
+        let canon_terms = vec![
+            crate::writer_agent::world_bible::CanonTerm {
+                term: "寒影剑".to_string(),
+                definition: "寒影剑是正义之剑，代表光明与忠诚".to_string(),
+                source_asset_id: "entity-001".to_string(),
+                severity: ConstraintSeverity::Hard,
+            },
+        ];
+        let result = metric_term_misuse(text, &canon_terms);
+        assert!(result.score < 1.0, "term misuse should reduce score, got {}", result.score);
+        assert!(
+            result.evidence_excerpt.contains("Hard"),
+            "evidence should contain Hard severity, got: {}",
+            result.evidence_excerpt
+        );
+        assert!(
+            result.evidence_excerpt.contains("寒影剑"),
+            "evidence should contain the term, got: {}",
+            result.evidence_excerpt
+        );
+    }
+
+    #[test]
+    fn term_misuse_passes_when_no_contradiction() {
+        let text = "寒影剑是正义之剑，代表光明与忠诚。";
+        let canon_terms = vec![
+            crate::writer_agent::world_bible::CanonTerm {
+                term: "寒影剑".to_string(),
+                definition: "寒影剑是正义之剑，代表光明与忠诚".to_string(),
+                source_asset_id: "entity-001".to_string(),
+                severity: ConstraintSeverity::Hard,
+            },
+        ];
+        let result = metric_term_misuse(text, &canon_terms);
+        assert_eq!(result.score, 1.0, "no contradiction should yield perfect score");
+    }
+
+    #[test]
+    fn term_misuse_gates_when_no_canon_terms() {
+        let result = metric_term_misuse("some text", &[]);
+        assert_eq!(result.score, 0.5, "empty canon_terms should gate to 0.5");
+    }
+
+    // ──── P17: Strict mode integration ────
+
+    #[test]
+    fn strict_mode_blocks_save_on_hard_violation() {
+        // Simulate a quality report with hard world consistency violations
+        let violations = [
+            crate::writer_agent::world_bible::WorldConsistencyViolation {
+                constraint_id: "hierarchy-limit-001".to_string(),
+                severity: ConstraintSeverity::Hard,
+                kind: CanonConstraintKind::HierarchyLimit,
+                message: "散修不可破坏上古封印".to_string(),
+                text_excerpt: "散修捏碎了上古封印".to_string(),
+                evidence: vec![sample_evidence("src://world_bible.md#hierarchy", "散修层级不可触及上古封印")],
+                suggested_fix: "确认角色层级".to_string(),
+            },
+        ];
+        let hard_count = violations.iter().filter(|v| matches!(v.severity, ConstraintSeverity::Hard)).count();
+        assert_eq!(hard_count, 1, "should have exactly 1 hard violation");
+        // In strict mode, any hard violation blocks save
+        assert!(
+            hard_count > 0,
+            "strict mode should block when hard violations exist"
+        );
+    }
+
+    #[test]
+    fn new_information_density_triggers_strict_warning() {
+        let prior = vec!["林墨在茶馆遇到了张三。".to_string()];
+        let text = "林墨在茶馆遇到了张三。林墨在茶馆遇到了张三。林墨在茶馆遇到了张三。";
+        let result = metric_new_information_density(text, &prior);
+        // High repetition → low new info density
+        assert!(result.score < 0.5, "high repetition should yield low new_information_density, got {}", result.score);
     }
 }

@@ -243,6 +243,7 @@ mod tests {
                 message: "Install the configured search binary before retrying.".to_string(),
             }],
             duration_ms: 12,
+            approval_context: None,
         };
 
         let bundle = failure_bundle_from_tool_execution(Some("task-1"), &execution, 20).unwrap();

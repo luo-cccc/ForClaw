@@ -144,8 +144,8 @@ fn eval_xianxia_quality_evaluation_task() {
         min_score
     );
 
-    // All 13 metrics present
-    assert_eq!(report.metric_results.len(), 13);
+    // All 14 metrics present (including term_misuse)
+    assert_eq!(report.metric_results.len(), 14);
 
     // Verify requested metrics have scores
     for metric_name in metrics {
@@ -180,11 +180,11 @@ fn eval_matrix_has_three_profiles() {
 }
 
 #[test]
-fn eval_matrix_has_46_plus_tasks() {
+fn eval_matrix_has_66_plus_tasks() {
     let total = all_tasks().len();
     assert!(
-        total >= 46,
-        "eval matrix should have at least 46 tasks, got {}",
+        total >= 66,
+        "eval matrix should have at least 66 tasks, got {}",
         total
     );
 }
@@ -212,6 +212,7 @@ fn eval_matrix_covers_required_task_types() {
         "canon_required_cost",
         "canon_proposed_not_hard",
         "scene_contract_prompt",
+        "canon_constraint",
     ];
     for req in &required {
         assert!(
@@ -496,6 +497,8 @@ fn fixture_quality_signals() -> ChapterQualitySignals {
         prior_chapter_summaries: Vec::new(),
         scene_contract: None,
         world_assets: Vec::new(),
+        canon_constraints: Vec::new(),
+        canon_terms: Vec::new(),
     }
 }
 
@@ -630,6 +633,123 @@ fn eval_scifi_has_world_bible_task_coverage() {
 }
 
 #[test]
+fn eval_mystery_has_world_bible_task_coverage() {
+    let tasks = load_tasks("mystery");
+    assert!(tasks.iter().any(|t| t.task == "world_asset_contract"));
+    assert!(tasks.iter().any(|t| t.task == "canon_forbidden_claim"));
+    assert!(tasks.iter().any(|t| t.task == "canon_required_cost"));
+    assert!(tasks.iter().any(|t| t.task == "canon_proposed_not_hard"));
+    assert!(tasks.iter().any(|t| t.task == "scene_contract_prompt"));
+    assert!(tasks.iter().any(|t| t.task == "extraction"));
+}
+
+#[test]
+fn eval_matrix_has_30_plus_world_tasks() {
+    let mut world_bible_tasks = 0usize;
+    for profile in ["xianxia", "mystery", "scifi"] {
+        for task in load_tasks(profile) {
+            if matches!(
+                task.task.as_str(),
+                "world_asset_contract"
+                    | "canon_forbidden_claim"
+                    | "canon_required_cost"
+                    | "canon_proposed_not_hard"
+                    | "scene_contract_prompt"
+                    | "unsupported_world_claim"
+                    | "hierarchy_confusion"
+                    | "state_regression"
+                    | "canon_constraint"
+                    | "extraction"
+            ) {
+                world_bible_tasks += 1;
+            }
+        }
+    }
+    assert!(
+        world_bible_tasks >= 30,
+        "eval matrix should have at least 30 world-bible tasks, got {}",
+        world_bible_tasks
+    );
+}
+
+#[test]
+fn eval_mystery_world_assets_fixture_loads() {
+    use agent_writer_lib::writer_agent::world_bible::{compile_canon_constraints, WorldAsset, WorldAssetKind};
+    let path = fixture_dir().join("mystery_world").join("world_assets.json");
+    let text = std::fs::read_to_string(path).unwrap();
+    let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
+    assert!(
+        assets.len() >= 5,
+        "mystery_world should have at least 5 assets, got {}",
+        assets.len()
+    );
+    let constraints = compile_canon_constraints(&assets);
+    assert!(
+        !constraints.is_empty(),
+        "should compile at least one constraint from mystery rules"
+    );
+    // At least 5 typed rules
+    let rules: Vec<_> = assets.iter().filter(|a| a.kind == WorldAssetKind::Rule).collect();
+    assert!(rules.len() >= 5, "mystery should have at least 5 rules, got {}", rules.len());
+    // At least 3 entities
+    let entities: Vec<_> = assets.iter().filter(|a| a.kind == WorldAssetKind::Entity).collect();
+    assert!(
+        entities.len() >= 3,
+        "mystery should have at least 3 entities, got {}",
+        entities.len()
+    );
+    // At least 2 relations
+    let relations: Vec<_> = assets.iter().filter(|a| a.kind == WorldAssetKind::Relation).collect();
+    assert!(
+        relations.len() >= 2,
+        "mystery should have at least 2 relations, got {}",
+        relations.len()
+    );
+}
+
+#[test]
+fn eval_mystery_world_rules_md_parses() {
+    use agent_writer_lib::writer_agent::world_bible::parse_world_rules_from_markdown;
+    let path = fixture_dir().join("mystery_world").join("world_rules.md");
+    let text = std::fs::read_to_string(path).unwrap();
+    let rules = parse_world_rules_from_markdown("mystery_world/world_rules.md", &text);
+    assert!(
+        rules.len() >= 5,
+        "mystery world_rules.md should parse to at least 5 rules, got {}",
+        rules.len()
+    );
+    for rule in &rules {
+        assert!(!rule.source_ref.excerpt.is_empty());
+        assert!(!rule.source_ref.source_id.is_empty());
+    }
+}
+
+#[test]
+fn run_extraction_eval_validates_markdown_to_world_asset() {
+    use agent_writer_lib::writer_agent::world_bible::parse_world_rules_from_markdown;
+    let md = r#"# Test Rules
+
+## Section A
+- Rule one about detectives.
+- Rule two about evidence.
+
+## Section B
+- Rule three about suspects.
+"#;
+    let rules = parse_world_rules_from_markdown("test.md", md);
+    assert!(rules.len() >= 3, "should extract at least 3 rules");
+    assert!(rules.iter().any(|r| r.summary.contains("detectives")));
+    assert!(rules.iter().any(|r| r.summary.contains("evidence")));
+    assert!(rules.iter().any(|r| r.summary.contains("suspects")));
+    // All should have source_ref
+    for rule in &rules {
+        assert!(!rule.source_ref.source_id.is_empty());
+        assert!(!rule.source_ref.excerpt.is_empty());
+        assert_eq!(rule.approval_status, agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Proposed);
+    }
+}
+
+#[test]
 fn eval_world_asset_proposed_rule_downgraded() {
     use agent_writer_lib::writer_agent::world_bible::{
         compile_canon_constraints, ConstraintSeverity, WorldAsset,
@@ -650,4 +770,293 @@ fn eval_world_asset_proposed_rule_downgraded() {
             "proposed rule should be downgraded to Warning"
         );
     }
+}
+
+#[test]
+fn eval_xianxia_state_delta_trace_eval_runner_verification() {
+    let fixture = load_fixture("xianxia");
+    let chapter_text = fixture["chapters"]["第三章"].as_str().unwrap();
+    let plan = SceneCraftPlan::default();
+    let mut signals = fixture_quality_signals();
+    signals.required_state_deltas = vec![
+        agent_writer_lib::chapter_generation::StateDelta {
+            delta_type: "knowledge".to_string(),
+            description: "发现、代价".to_string(),
+            source: "eval:test".to_string(),
+        },
+        agent_writer_lib::chapter_generation::StateDelta {
+            delta_type: "relationship".to_string(),
+            description: "信任、背叛、结盟".to_string(),
+            source: "eval:test".to_string(),
+        },
+    ];
+    let report = evaluate_chapter_quality_with_signals(
+        chapter_text,
+        "第三章",
+        &plan,
+        &[],
+        500,
+        3500,
+        &signals,
+    );
+    let sd = report
+        .metric_results
+        .iter()
+        .find(|m| m.metric == "state_delta_coverage")
+        .expect("state_delta_coverage metric should exist");
+    // With real fixture text and required deltas, the metric should compute a score
+    assert!(
+        sd.score > 0.0,
+        "state_delta_coverage should compute a non-zero score for real fixture text, got {:.2}",
+        sd.score
+    );
+    assert!(
+        !sd.reason.is_empty(),
+        "state_delta_coverage should provide a reason"
+    );
+}
+
+// ── P15: Canon Constraint Engine Eval Tests ──
+
+#[test]
+fn eval_xianxia_has_canon_constraint_task_coverage() {
+    let tasks = load_tasks("xianxia");
+    assert!(
+        tasks.iter().any(|t| t.task == "canon_constraint"),
+        "xianxia should have canon_constraint eval tasks"
+    );
+}
+
+#[test]
+fn eval_canon_constraint_detects_forbidden_action_violation() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        validate_world_consistency, CanonConstraint, CanonConstraintKind, ConstraintSeverity,
+        EvidenceRef, SceneContract, WorldAsset, WorldAssetKind,
+    };
+
+    let tasks: Vec<EvalTask> = load_tasks("xianxia")
+        .into_iter()
+        .filter(|t| t.task == "canon_constraint")
+        .collect();
+    assert!(
+        !tasks.is_empty(),
+        "should have canon_constraint tasks"
+    );
+
+    for task in tasks {
+        let expected = &task.expected;
+        let chapter_text = expected["chapter_text"].as_str().unwrap();
+        let should_detect = expected["should_detect"].as_bool().unwrap();
+        let constraint_kind = expected["constraint_kind"].as_str().unwrap();
+
+        // Build constraint from task spec
+        let constraint = match constraint_kind {
+            "ForbiddenAction" => {
+                let forbidden_term = expected["forbidden_term"].as_str().unwrap();
+                CanonConstraint {
+                    id: expected["expected_constraint_id"].as_str().unwrap_or("test").to_string(),
+                    kind: CanonConstraintKind::ForbiddenAction,
+                    summary: format!("禁止{}", forbidden_term),
+                    trigger_terms: vec![forbidden_term.to_string()],
+                    forbidden_terms: vec![forbidden_term.to_string()],
+                    required_terms: Vec::new(),
+                    severity: ConstraintSeverity::Hard,
+                    source_asset_id: "test-asset".to_string(),
+                    evidence: vec![EvidenceRef {
+                        source_id: "test".to_string(),
+                        source_path: None,
+                        start_line: None,
+                        end_line: None,
+                        excerpt: "test".to_string(),
+                        confidence: 0.95,
+                    }],
+                    applies_to: Vec::new(),
+                    expected_consequence: String::new(),
+                }
+            }
+            "HierarchyLimit" => {
+                let low_tier = expected["low_tier"].as_str().unwrap();
+                let high_action = expected["high_action"].as_str().unwrap();
+                CanonConstraint {
+                    id: "test-hierarchy".to_string(),
+                    kind: CanonConstraintKind::HierarchyLimit,
+                    summary: format!("{}不可{}", low_tier, high_action),
+                    trigger_terms: vec![low_tier.to_string()],
+                    forbidden_terms: vec![high_action.to_string()],
+                    required_terms: Vec::new(),
+                    severity: ConstraintSeverity::Hard,
+                    source_asset_id: "test-asset".to_string(),
+                    evidence: vec![EvidenceRef {
+                        source_id: "test".to_string(),
+                        source_path: None,
+                        start_line: None,
+                        end_line: None,
+                        excerpt: "test".to_string(),
+                        confidence: 0.95,
+                    }],
+                    applies_to: Vec::new(),
+                    expected_consequence: String::new(),
+                }
+            }
+            "RequiredCost" => {
+                let trigger_term = expected["trigger_term"].as_str().unwrap();
+                let required_term = expected["required_term"].as_str().unwrap();
+                CanonConstraint {
+                    id: "test-cost".to_string(),
+                    kind: CanonConstraintKind::RequiredCost,
+                    summary: format!("{}需要{}", trigger_term, required_term),
+                    trigger_terms: vec![trigger_term.to_string()],
+                    forbidden_terms: Vec::new(),
+                    required_terms: vec![required_term.to_string()],
+                    severity: ConstraintSeverity::Hard,
+                    source_asset_id: "test-asset".to_string(),
+                    evidence: vec![EvidenceRef {
+                        source_id: "test".to_string(),
+                        source_path: None,
+                        start_line: None,
+                        end_line: None,
+                        excerpt: "test".to_string(),
+                        confidence: 0.95,
+                    }],
+                    applies_to: Vec::new(),
+                    expected_consequence: String::new(),
+                }
+            }
+            _ => panic!("unknown constraint kind: {}", constraint_kind),
+        };
+
+        let contract = SceneContract {
+            chapter_id: task.chapter.clone(),
+            mission: "test".to_string(),
+            required_facts: Vec::new(),
+            active_constraints: vec![constraint],
+            required_state_deltas: Vec::new(),
+            allowed_reveals: Vec::new(),
+            blocked_reveals: Vec::new(),
+            evidence_refs: Vec::new(),
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
+        };
+        let assets = vec![WorldAsset {
+            id: "test-asset".to_string(),
+            kind: WorldAssetKind::Rule,
+            name: "test".to_string(),
+            summary: "test".to_string(),
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_string(),
+                source_path: None,
+                start_line: None,
+                end_line: None,
+                excerpt: "test".to_string(),
+                confidence: 0.95,
+            }],
+            approval_status: agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Approved,
+            tags: Vec::new(),
+        }];
+
+        let violations = validate_world_consistency(chapter_text, &contract, &assets);
+        let detected = !violations.is_empty();
+
+        assert_eq!(
+            detected, should_detect,
+            "canon_constraint task for chapter {} (kind={}): expected should_detect={}, got detected={}. text: {}",
+            task.chapter, constraint_kind, should_detect, detected, chapter_text
+        );
+    }
+}
+
+#[test]
+fn eval_canon_constraint_unapproved_source_is_warning_not_hard() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        validate_world_consistency, ApprovalStatus, CanonConstraint, CanonConstraintKind,
+        ConstraintSeverity, EvidenceRef, SceneContract, WorldAsset, WorldAssetKind,
+    };
+
+    let text = "林墨使用了禁忌法术。";
+    let constraint = CanonConstraint {
+        id: "c1".to_string(),
+        kind: CanonConstraintKind::ForbiddenAction,
+        summary: "禁止使用禁忌法术".to_string(),
+        trigger_terms: vec!["禁忌法术".to_string()],
+        forbidden_terms: vec!["禁忌法术".to_string()],
+        required_terms: Vec::new(),
+        severity: ConstraintSeverity::Hard,
+        source_asset_id: "proposed-asset".to_string(),
+        evidence: vec![EvidenceRef {
+            source_id: "test".to_string(),
+            source_path: None,
+            start_line: None,
+            end_line: None,
+            excerpt: "test".to_string(),
+            confidence: 0.95,
+        }],
+        applies_to: Vec::new(),
+        expected_consequence: String::new(),
+    };
+    let contract = SceneContract {
+        chapter_id: "ch1".to_string(),
+        mission: "test".to_string(),
+        required_facts: Vec::new(),
+        active_constraints: vec![constraint],
+        required_state_deltas: Vec::new(),
+        allowed_reveals: Vec::new(),
+        blocked_reveals: Vec::new(),
+        evidence_refs: Vec::new(),
+        continuity_anchors: Vec::new(),
+        required_costs: Vec::new(),
+    };
+    // Proposed asset → violation severity should be Warning, not Hard
+    let assets = vec![WorldAsset {
+        id: "proposed-asset".to_string(),
+        kind: WorldAssetKind::Rule,
+        name: "test".to_string(),
+        summary: "test".to_string(),
+        evidence: vec![EvidenceRef {
+            source_id: "test".to_string(),
+            source_path: None,
+            start_line: None,
+            end_line: None,
+            excerpt: "test".to_string(),
+            confidence: 0.95,
+        }],
+        approval_status: ApprovalStatus::Proposed,
+        tags: Vec::new(),
+    }];
+
+    let violations = validate_world_consistency(text, &contract, &assets);
+    assert!(!violations.is_empty(), "should detect violation");
+    assert_eq!(
+        violations[0].severity,
+        ConstraintSeverity::Warning,
+        "unapproved source should downgrade to Warning"
+    );
+}
+
+// ── P19: StateLedger gate report test ──
+
+#[test]
+fn gate_report_includes_state_delta_coverage() {
+    // Verify the thirty-chapter gate report JSON structure includes stateDeltaCoverage
+    let report_path = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../reports/real_author_session_thirty_chapter_gate.json"
+    ));
+    if !report_path.exists() {
+        // Skip if report not generated yet (real API tests not run)
+        return;
+    }
+    let data = std::fs::read_to_string(&report_path).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&data).unwrap();
+    let coverage = report.get("stateDeltaCoverage");
+    assert!(
+        coverage.is_some(),
+        "gate report should include stateDeltaCoverage"
+    );
+    let covered = coverage.unwrap()["covered"].as_u64().unwrap_or(0);
+    let weak = coverage.unwrap()["weak"].as_u64().unwrap_or(0);
+    let missing = coverage.unwrap()["missing"].as_u64().unwrap_or(0);
+    assert!(
+        covered + weak + missing > 0,
+        "stateDeltaCoverage should have non-zero total"
+    );
 }

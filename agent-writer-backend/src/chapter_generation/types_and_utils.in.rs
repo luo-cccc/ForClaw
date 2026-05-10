@@ -764,6 +764,10 @@ pub struct BuiltChapterContext {
     pub required_story_anchors: Vec<StoryAnchor>,
     #[serde(default)]
     pub required_state_deltas: Vec<StateDelta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_contract: Option<crate::writer_agent::world_bible::SceneContract>,
+    #[serde(default)]
+    pub world_assets: Vec<crate::writer_agent::world_bible::WorldAsset>,
 }
 
 #[derive(Debug, Clone)]
@@ -981,6 +985,12 @@ pub enum SaveDecision {
         conflict: SaveConflict,
     },
     Conflict(SaveConflict),
+    /// P17: Strict mode blocked save due to high-severity violations.
+    Blocked {
+        reason: String,
+        remediation: String,
+        violations: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1015,6 +1025,16 @@ pub enum GenerationQualityMode {
     #[default]
     Balanced,
     Strict,
+}
+
+impl GenerationQualityMode {
+    pub fn max_provider_calls(self) -> usize {
+        match self {
+            GenerationQualityMode::Fast => 3,
+            GenerationQualityMode::Balanced => 5,
+            GenerationQualityMode::Strict => 7,
+        }
+    }
 }
 
 pub fn char_count(text: &str) -> usize {

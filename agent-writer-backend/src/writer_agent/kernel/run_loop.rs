@@ -107,7 +107,7 @@ impl WriterAgentKernel {
         }
 
         let required_context_sources = required_context_sources_for_preflight(task.clone());
-        let packed_context = agent_harness_core::PackedContext {
+        let mut packed_context = agent_harness_core::PackedContext {
             text: context_pack
                 .sources
                 .iter()
@@ -166,6 +166,8 @@ impl WriterAgentKernel {
             },
             context_hash: String::new(),
         };
+        let context_hash = agent_harness_core::compute_context_hash(&packed_context.sources);
+        packed_context.context_hash = context_hash;
         let context_quality = agent_harness_core::evaluate_context_quality(
             &observation.id,
             &packed_context,
@@ -482,6 +484,36 @@ impl WriterAgentKernel {
             handler,
         );
         agent.messages.extend(request.manual_history.clone());
+
+        // Compute deterministic context hash from the assembled context pack.
+        let context_hash = {
+            let harness_sources: Vec<agent_harness_core::ContextSourceReport> = context_pack
+                .sources
+                .iter()
+                .map(|source| agent_harness_core::ContextSourceReport {
+                    source_type: context_quality_source_type(&source.source).to_string(),
+                    id: source
+                        .evidence_ref
+                        .clone()
+                        .unwrap_or_else(|| format!("{:?}", source.source)),
+                    label: format!("{:?}", source.source),
+                    original_chars: source.char_count,
+                    included_chars: source.char_count,
+                    truncated: source.truncated,
+                    score: None,
+                    taxonomy: taxonomy_for_source(&source.source).to_string(),
+                    role: role_for_source(&source.source).to_string(),
+                    elapsed_ms: source.elapsed_ms,
+                    retrieval_status: if source.retrieval_status.is_empty() {
+                        "sync".to_string()
+                    } else {
+                        source.retrieval_status.clone()
+                    },
+                })
+                .collect();
+            agent_harness_core::compute_context_hash(&harness_sources)
+        };
+        agent.context_hash = context_hash;
 
         Ok(WriterAgentPreparedRun {
             request,

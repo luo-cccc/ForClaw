@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::permission::{PermissionDecision, PermissionMode, PermissionPolicy};
-use crate::recovery::classify_failure_kind;
-use crate::tool_registry::ToolRegistry;
+use crate::recovery::{classify_failure_kind, FailureRemediation};
+use crate::tool_registry::{ToolRegistry, ToolSideEffectLevel};
 
 /// Callback trait for tool handlers.
 /// Implementations bridge to the application layer storage and domain tools.
@@ -28,6 +28,17 @@ pub struct ToolExecution {
     #[serde(default)]
     pub remediation: Vec<ToolExecutionRemediation>,
     pub duration_ms: u64,
+    /// A2: Approval context binding for write/proposal/approval tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_context: Option<ApprovalContext>,
+}
+
+/// A2: Approval context binding for write/proposal/approval tools.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalContext {
+    pub proposal_id: Option<String>,
+    pub approval_source: Option<String>,
 }
 
 impl ToolExecution {
@@ -37,6 +48,53 @@ impl ToolExecution {
         let code = self.remediation.first().map(|r| r.code.as_str());
         Some(classify_failure_kind(error, code))
     }
+}
+
+/// A2: Redact and summarize tool input before entering audit payload.
+/// - Truncates inputs longer than 200 chars
+/// - Masks API keys, secrets, tokens (regex for key=..., token=..., secret=...)
+/// - Keeps the first 100 chars of content as summary
+pub fn redact_tool_input(input: &str) -> String {
+    const MAX_LEN: usize = 200;
+    const SUMMARY_LEN: usize = 100;
+
+    if input.is_empty() {
+        return String::new();
+    }
+
+    // First apply regex-like masking for key=..., token=..., secret=...
+    let masked = mask_secrets_in_text(input);
+
+    if masked.len() <= MAX_LEN {
+        return masked;
+    }
+
+    // Truncate and keep first SUMMARY_LEN chars as summary
+    let summary: String = masked.chars().take(SUMMARY_LEN).collect();
+    format!("{}... [truncated {} chars]", summary, masked.len().saturating_sub(SUMMARY_LEN))
+}
+
+fn mask_secrets_in_text(text: &str) -> String {
+    use regex::Regex;
+    let mut result = text.to_string();
+
+    // Mask key=..., token=..., secret=..., password=..., api_key=...
+    let patterns = [
+        (Regex::new(r"(?i)(key\s*=\s*)[^\s,;\}\]]+").ok(), "key=***"),
+        (Regex::new(r"(?i)(token\s*=\s*)[^\s,;\}\]]+").ok(), "token=***"),
+        (Regex::new(r"(?i)(secret\s*=\s*)[^\s,;\}\]]+").ok(), "secret=***"),
+        (Regex::new(r"(?i)(password\s*=\s*)[^\s,;\}\]]+").ok(), "password=***"),
+        (Regex::new(r"(?i)(api_key\s*=\s*)[^\s,;\}\]]+").ok(), "api_key=***"),
+        (Regex::new(r"(?i)(auth\s*=\s*)[^\s,;\}\]]+").ok(), "auth=***"),
+    ];
+
+    for (maybe_re, replacement) in &patterns {
+        if let Some(re) = maybe_re {
+            result = re.replace_all(&result, *replacement).to_string();
+        }
+    }
+
+    result
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -159,6 +217,7 @@ impl<H: ToolHandler> ToolExecutor<H> {
                         ),
                     }],
                     duration_ms: start.elapsed().as_millis() as u64,
+                    approval_context: None,
                 });
             }
         }
@@ -175,6 +234,7 @@ impl<H: ToolHandler> ToolExecutor<H> {
                 error: Some(format!("Tool '{}' is not registered", tool_name)),
                 remediation: remediation_for_missing_tool(tool_name),
                 duration_ms: start.elapsed().as_millis() as u64,
+                approval_context: None,
             });
         };
 
@@ -209,8 +269,31 @@ impl<H: ToolHandler> ToolExecutor<H> {
                     ),
                     error: Some(reason),
                     duration_ms: start.elapsed().as_millis() as u64,
+                    approval_context: None,
                 });
             }
+        }
+
+        // A2: Approval context binding for write/proposal/approval tools.
+        // If a tool has side effect level >= Write and no approval_context or proposal_id
+        // in args, reject with remediation request_approval.
+        let approval_context = extract_approval_context(&args);
+        if descriptor.side_effect_level >= ToolSideEffectLevel::Write && approval_context.is_none() {
+            return self.emit_audit_end(ToolExecution {
+                tool_name: tool_name.to_string(),
+                input: args,
+                output: serde_json::Value::Null,
+                error: Some(format!(
+                    "Tool '{}' requires approval context (proposal_id or approval_source) for write-level side effects",
+                    tool_name
+                )),
+                remediation: vec![ToolExecutionRemediation {
+                    code: FailureRemediation::RequestApproval.code().to_string(),
+                    message: FailureRemediation::RequestApproval.message(tool_name),
+                }],
+                duration_ms: start.elapsed().as_millis() as u64,
+                approval_context: None,
+            });
         }
 
         // Doom loop check
@@ -245,6 +328,7 @@ impl<H: ToolHandler> ToolExecutor<H> {
             error: error_msg,
             remediation,
             duration_ms: start.elapsed().as_millis() as u64,
+            approval_context,
         })
     }
 
@@ -418,6 +502,28 @@ fn extract_command_from_args(args: &serde_json::Value) -> Option<String> {
         }
     }
     None
+}
+
+/// A2: Extract approval context from tool args.
+/// Looks for `proposal_id` or `approval_source` keys.
+fn extract_approval_context(args: &serde_json::Value) -> Option<ApprovalContext> {
+    let obj = args.as_object()?;
+    let proposal_id = obj
+        .get("proposal_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let approval_source = obj
+        .get("approval_source")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    if proposal_id.is_some() || approval_source.is_some() {
+        Some(ApprovalContext {
+            proposal_id,
+            approval_source,
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -659,6 +765,7 @@ mod tests {
             max_side_effect: ToolSideEffectLevel::Read,
             provider_allowed: false,
             success_evidence_required: vec![],
+            success_signals: vec![],
             failure_policy: crate::execution_plan::StepFailureAction::Stop,
         };
 
@@ -743,5 +850,122 @@ mod tests {
         );
         let kind = result.failure_kind();
         assert_eq!(kind, Some(crate::recovery::FailureKind::ToolPermission));
+    }
+
+    // ── A2: Tool Governance and Provider Governance unification tests ──
+
+    #[test]
+    fn redact_tool_input_truncates_long_input() {
+        let long = "a".repeat(300);
+        let redacted = redact_tool_input(&long);
+        assert!(redacted.len() < long.len(), "should truncate long input");
+        assert!(redacted.contains("truncated"), "should indicate truncation");
+    }
+
+    #[test]
+    fn redact_tool_input_masks_secrets() {
+        let input = "api_key=sk-live-1234567890abcdef token=bearer-abc secret=my-secret";
+        let redacted = redact_tool_input(input);
+        assert!(!redacted.contains("sk-live"), "should mask api key");
+        assert!(!redacted.contains("bearer-abc"), "should mask token");
+        assert!(!redacted.contains("my-secret"), "should mask secret");
+        assert!(redacted.contains("api_key=***"), "should replace with ***");
+        assert!(redacted.contains("token=***"), "should replace token with ***");
+    }
+
+    #[test]
+    fn redact_tool_input_keeps_short_input() {
+        let input = "query=hello world";
+        let redacted = redact_tool_input(input);
+        assert_eq!(redacted, input);
+    }
+
+    #[test]
+    fn redact_tool_input_empty() {
+        assert_eq!(redact_tool_input(""), "");
+    }
+
+    #[tokio::test]
+    async fn write_tool_without_approval_context_is_rejected() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        // write_tool has side_effect_level = Write and requires_approval = true
+        let result = executor
+            .execute("write_tool", serde_json::json!({"path": "/tmp/out.txt"}))
+            .await;
+
+        // Should be rejected either by permission policy (requires_approval=true)
+        // or by approval context binding (no proposal_id/approval_source)
+        assert!(
+            result.error.is_some(),
+            "expected write tool without approval context to be rejected, got: {:?}",
+            result
+        );
+        assert!(
+            result
+                .remediation
+                .iter()
+                .any(|r| r.code == "request_approval"),
+            "expected remediation code request_approval, got: {:?}",
+            result.remediation
+        );
+    }
+
+    #[tokio::test]
+    async fn write_tool_with_proposal_id_is_allowed() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        // write_tool with proposal_id should pass approval context binding
+        // but still blocked by permission policy (requires_approval=true)
+        let result = executor
+            .execute(
+                "write_tool",
+                serde_json::json!({"path": "/tmp/out.txt", "proposal_id": "proposal-123"}),
+            )
+            .await;
+
+        // The permission policy still blocks because requires_approval=true
+        // but the approval context binding check passes
+        assert!(
+            result.error.is_some(),
+            "expected blocked by permission policy, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn read_tool_without_approval_context_is_allowed() {
+        let mut executor = ToolExecutor::new(registry(), MockHandler);
+        // read_tool has side_effect_level = Read, so approval context not required
+        let result = executor
+            .execute("read_tool", serde_json::json!({"path": "/tmp/in.txt"}))
+            .await;
+
+        assert!(result.error.is_none(), "read tool should not require approval context");
+        assert!(result.approval_context.is_none());
+    }
+
+    #[test]
+    fn extract_approval_context_from_args() {
+        let args = serde_json::json!({"proposal_id": "p1", "path": "/tmp"});
+        let ctx = extract_approval_context(&args);
+        assert!(ctx.is_some());
+        assert_eq!(ctx.unwrap().proposal_id, Some("p1".to_string()));
+
+        let args2 = serde_json::json!({"approval_source": "user", "path": "/tmp"});
+        let ctx2 = extract_approval_context(&args2);
+        assert!(ctx2.is_some());
+        assert_eq!(ctx2.unwrap().approval_source, Some("user".to_string()));
+
+        let args3 = serde_json::json!({"path": "/tmp"});
+        assert!(extract_approval_context(&args3).is_none());
+    }
+
+    #[test]
+    fn failure_remediation_integration_in_tool_execution() {
+        let remediation = ToolExecutionRemediation {
+            code: FailureRemediation::AbortUnsafeWrite.code().to_string(),
+            message: FailureRemediation::AbortUnsafeWrite.message("write_file"),
+        };
+        assert_eq!(remediation.code, "abort_unsafe_write");
+        assert!(remediation.message.contains("write_file"));
     }
 }
