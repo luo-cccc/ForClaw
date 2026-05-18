@@ -1,16 +1,17 @@
 # Writing Eval Report
 
-**Run:** 2026-05-10T10:01:15.721393700+00:00
+**Run:** 2026-05-18T14:34:52.601058500+00:00
 **Mode:** full
-**Profiles:** scifi, xianxia
+**Profiles:** mystery, scifi, xianxia
 
 ## Summary
 
 | Profile | Tasks | Pass | Fail | Failing Tasks |
 |---------|-------|------|------|---------------|
-| scifi | 42 | 42 | 0 | - |
-| xianxia | 45 | 45 | 0 | - |
-| **Total** | **87** | **87** | **0** | |
+| mystery | 44 | 44 | 0 | - |
+| scifi | 44 | 44 | 0 | - |
+| xianxia | 53 | 53 | 0 | - |
+| **Total** | **141** | **141** | **0** | |
 
 ## Regressions
 
@@ -22,21 +23,24 @@ No regressions detected.
 
 ## World Consistency
 
-- **Total checks:** 38, **Hard violations:** 0, **Warnings:** 0
+- **Total checks:** 69, **Hard violations:** 0, **Warnings:** 0
 | Profile | Checks | Violations |
 |---------|--------|------------|
-| scifi | 19 | 0 |
-| xianxia | 19 | 0 |
+| mystery | 21 | 0 |
+| scifi | 21 | 0 |
+| xianxia | 27 | 0 |
 
 ## Long-Chain Quality
 
 | Profile | Min Chars | Max Chars | Avg Carry | Repair Rate | Dup Groups | Warnings | P50 (ms) | P90 (ms) | P95 (ms) |
 |---------|-----------|-----------|-----------|-------------|------------|----------|----------|----------|----------|
+| mystery | 299 | 434 | 0.20 | 0% | 0 | 1 | 86235 | 118348 | 206041 |
 | scifi | 294 | 379 | 0.29 | 0% | 0 | 1 | 86235 | 118348 | 206041 |
 | xianxia | 283 | 540 | 0.60 | 0% | 0 | 1 | 86235 | 118348 | 206041 |
 
 ## Quality Warnings
 
+- **[fail]** low_carry_rate: avg anchor_carry 0.20 below threshold
 - **[fail]** low_carry_rate: avg anchor_carry 0.29 below threshold
 - **[warning]** low_carry_rate: avg anchor_carry 0.60 below recommended
 
@@ -44,6 +48,7 @@ No regressions detected.
 
 | Profile | Rule | Avg Score Delta | Examples | Bad Patterns |
 |---------|------|-----------------|----------|--------------|
+| mystery | dialogue_function | +0.420 | 1 | 1 |
 | scifi | dialogue_function | +0.420 | 1 | 1 |
 | xianxia | dialogue_function | +0.420 | 1 | 2 |
 | xianxia | scene_objective | +0.400 | 0 | 0 |

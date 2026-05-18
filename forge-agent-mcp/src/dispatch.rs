@@ -233,6 +233,13 @@ pub(crate) async fn call_tool(
                 .map_err(|error| error.to_string())
         }
         "forge_craft_library" => backend.dispatch("craft_library", json!({})),
+        "forge_external_writing_db_status" => {
+            backend.dispatch("external_writing_db_status", json!({}))
+        }
+        "forge_external_writing_task_queries" => {
+            backend.dispatch("external_writing_task_queries", arguments)
+        }
+        "forge_external_writing_search" => backend.dispatch("external_writing_search", arguments),
         "forge_craft_memory_stats" => backend.dispatch("craft_memory_stats", json!({})),
         "forge_eval_trend_summary" => backend.dispatch("eval_trend_summary", json!({})),
         "forge_record_manual_craft_edit_feedback" => {

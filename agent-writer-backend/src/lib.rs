@@ -5,6 +5,7 @@ mod api_integration_tests;
 mod api_key;
 pub mod brain_service;
 pub mod chapter_generation;
+pub mod external_writing_db;
 pub mod headless;
 pub mod llm_runtime;
 mod storage;

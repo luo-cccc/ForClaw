@@ -66,6 +66,8 @@ pub struct HeadlessProjectPaths {
     pub project_data_dir: String,
     pub chapters_dir: String,
     pub writer_memory_db: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_writing_db: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -698,7 +700,30 @@ impl HeadlessBackend {
             project_data_dir: project_data_dir.to_string_lossy().to_string(),
             chapters_dir: chapters_dir.to_string_lossy().to_string(),
             writer_memory_db: writer_memory_db.to_string_lossy().to_string(),
+            external_writing_db: crate::external_writing_db::configured_db_path()
+                .map(|p| p.to_string_lossy().to_string()),
         })
+    }
+
+    pub fn external_writing_db_status(
+        &self,
+    ) -> crate::external_writing_db::ExternalWritingDbStatus {
+        crate::external_writing_db::external_writing_db_status()
+    }
+
+    pub fn external_writing_task_queries(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::external_writing_db::ExternalWritingTaskQuery>, String> {
+        crate::external_writing_db::load_task_queries(limit.unwrap_or(20))
+    }
+
+    pub fn external_writing_search(
+        &self,
+        query: String,
+        limit: Option<usize>,
+    ) -> Result<crate::external_writing_db::ExternalWritingContextBundle, String> {
+        crate::external_writing_db::search_context_bundle(&query, limit.unwrap_or(12))
     }
 
     pub fn status(&self) -> Result<HeadlessStatus, String> {
@@ -3174,10 +3199,25 @@ Output ONLY the JSON object, no explanation outside. Example:
             }
             "craft_library" => {
                 let rules = crate::chapter_generation::craft_library_for_stats();
-                to_value(
-                    serde_json::to_value(rules)
-                        .map_err(|e| format!("Failed to serialize craft library: {}", e))?,
-                )
+                let external_eval_signals =
+                    crate::external_writing_db::load_eval_signals(20).unwrap_or_default();
+                let external_prompt_templates =
+                    crate::external_writing_db::load_prompt_templates(10).unwrap_or_default();
+                to_value(serde_json::json!({
+                    "builtInRules": rules,
+                    "externalEvalSignals": external_eval_signals,
+                    "externalPromptTemplates": external_prompt_templates,
+                }))
+            }
+            "external_writing_db_status" => to_value(self.external_writing_db_status()),
+            "external_writing_task_queries" => {
+                let limit = optional_usize(&params, "limit");
+                to_value(self.external_writing_task_queries(limit)?)
+            }
+            "external_writing_search" => {
+                let query = required_string(&params, "query")?;
+                let limit = optional_usize(&params, "limit");
+                to_value(self.external_writing_search(query, limit)?)
             }
             "craft_memory_stats" => {
                 let memory_path = writer_memory_path(&self.config.data_dir, &self.project.id)?;
@@ -3244,10 +3284,12 @@ Output ONLY the JSON object, no explanation outside. Example:
                     min_chars,
                     max_chars,
                 );
-                to_value(
-                    serde_json::to_value(&report)
-                        .map_err(|e| format!("Failed to serialize quality report: {}", e))?,
-                )
+                let external_eval_signals =
+                    crate::external_writing_db::load_eval_signals(10).unwrap_or_default();
+                to_value(serde_json::json!({
+                    "report": report,
+                    "externalEvalSignals": external_eval_signals,
+                }))
             }
             "context_quality_report" => {
                 let chapter_title = required_string(&params, "chapterTitle")?;

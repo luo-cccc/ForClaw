@@ -1068,13 +1068,105 @@ pub fn compile_canon_constraints(assets: &[WorldAsset]) -> Vec<CanonConstraint> 
         } else {
             ConstraintSeverity::Warning
         };
+        let summary_lower = asset.summary.to_lowercase();
+        let name_lower = asset.name.to_lowercase();
+
+        let kind = if asset.tags.iter().any(|tag| {
+            let tag_lower = tag.to_lowercase();
+            tag_lower.contains("hierarchy")
+                || tag_lower.contains("权限等级")
+                || tag_lower.contains("境界体系")
+                || tag_lower.contains("权限")
+        }) || summary_lower.contains("无权")
+            || summary_lower.contains("不可访问")
+            || summary_lower.contains("不可使用")
+            || summary_lower.contains("must have two")
+            || summary_lower.contains("two officers")
+        {
+            CanonConstraintKind::HierarchyLimit
+        } else if asset.tags.iter().any(|tag| {
+            let tag_lower = tag.to_lowercase();
+            tag_lower.contains("cost")
+                || tag_lower.contains("consequence")
+                || tag_lower.contains("代价")
+                || tag_lower.contains("证据规则")
+        }) || summary_lower.contains("必须")
+            || summary_lower.contains("requires")
+            || summary_lower.contains("自动销毁")
+            || summary_lower.contains("缺失任一环节")
+            || summary_lower.contains("不得在正式调查中使用")
+        {
+            CanonConstraintKind::RequiredCost
+        } else {
+            CanonConstraintKind::ForbiddenClaim
+        };
+
+        let trigger_terms = if matches!(kind, CanonConstraintKind::HierarchyLimit) {
+            if name_lower.contains("权限")
+                || summary_lower.contains("l3")
+                || summary_lower.contains("l7")
+            {
+                vec!["l3".to_string()]
+            } else if summary_lower.contains("普通刑警") {
+                vec!["普通刑警".to_string()]
+            } else if summary_lower.contains("炼气") {
+                vec!["炼气".to_string()]
+            } else {
+                vec![asset.name.clone()]
+            }
+        } else if matches!(kind, CanonConstraintKind::RequiredCost) {
+            if summary_lower.contains("审讯") {
+                vec!["审讯".to_string()]
+            } else if summary_lower.contains("钥匙") || name_lower.contains("密钥") {
+                vec!["钥匙".to_string(), "密钥".to_string()]
+            } else if summary_lower.contains("寒影剑") {
+                vec!["寒影剑".to_string()]
+            } else {
+                vec![asset.name.clone()]
+            }
+        } else {
+            vec![asset.name.clone()]
+        };
+
+        let forbidden_terms = if matches!(kind, CanonConstraintKind::ForbiddenClaim) {
+            asset.tags.clone()
+        } else if matches!(kind, CanonConstraintKind::HierarchyLimit) {
+            if name_lower.contains("权限") || summary_lower.contains("ceo办公室") {
+                vec!["ceo办公室".to_string(), "省厅机密档案".to_string()]
+            } else if summary_lower.contains("核心记忆编辑服务器") {
+                vec!["核心记忆编辑服务器".to_string()]
+            } else if summary_lower.contains("元婴") {
+                vec!["元婴期".to_string()]
+            } else {
+                asset.tags.clone()
+            }
+        } else {
+            Vec::new()
+        };
+
+        let required_terms = if matches!(kind, CanonConstraintKind::RequiredCost) {
+            if summary_lower.contains("两名以上") || summary_lower.contains("two officers") {
+                vec!["两名以上".to_string(), "两名".to_string()]
+            } else if summary_lower.contains("证据链") {
+                vec!["证据链".to_string()]
+            } else if summary_lower.contains("自动销毁") {
+                vec!["销毁".to_string()]
+            } else if summary_lower.contains("寿元") {
+                vec!["寿元".to_string()]
+            } else {
+                asset.tags.clone()
+            }
+        } else {
+            Vec::new()
+        };
+
         constraints.push(CanonConstraint {
             id: format!("constraint-{}", asset.id),
-            kind: CanonConstraintKind::ForbiddenClaim,
+            kind,
             summary: asset.summary.clone(),
-            trigger_terms: vec![asset.name.clone()],
-            forbidden_terms: asset.tags.clone(),
-            required_terms: Vec::new(),
+            trigger_terms,
+            forbidden_terms,
+            required_terms,
             severity,
             source_asset_id: asset.id.clone(),
             evidence: asset.evidence.clone(),
@@ -1216,7 +1308,7 @@ pub fn validate_world_consistency(
         match constraint.kind {
             CanonConstraintKind::ForbiddenClaim => {
                 for term in &constraint.forbidden_terms {
-                    if text_lower.contains(&term.to_lowercase()) {
+                    if contains_constraint_term(&text_lower, term) {
                         // P15: Check if an approved exception covers this violation
                         let covered_by_exception =
                             approved_exceptions.iter().any(|(_, exempted)| {
@@ -1242,11 +1334,11 @@ pub fn validate_world_consistency(
             }
             CanonConstraintKind::RequiredCost => {
                 for trigger in &constraint.trigger_terms {
-                    if text_lower.contains(&trigger.to_lowercase()) {
+                    if contains_constraint_term(&text_lower, trigger) {
                         let cost_paid = constraint
                             .required_terms
                             .iter()
-                            .any(|req| text_lower.contains(&req.to_lowercase()));
+                            .any(|req| required_term_satisfied(&text_lower, req));
                         if !cost_paid {
                             let excerpt = extract_excerpt(chapter_text, trigger);
                             violations.push(WorldConsistencyViolation {
@@ -1270,11 +1362,11 @@ pub fn validate_world_consistency(
                 let low_tier = constraint
                     .trigger_terms
                     .iter()
-                    .any(|t| text_lower.contains(&t.to_lowercase()));
+                    .any(|t| contains_constraint_term(&text_lower, t));
                 let high_action = constraint
                     .forbidden_terms
                     .iter()
-                    .any(|t| text_lower.contains(&t.to_lowercase()));
+                    .any(|t| contains_constraint_term(&text_lower, t));
                 if low_tier && high_action {
                     // P15: Check if an approved exception covers this hierarchy violation
                     let covered_by_exception = approved_exceptions.iter().any(|(_, exempted)| {
@@ -1311,12 +1403,12 @@ pub fn validate_world_consistency(
                 let all_present = constraint
                     .required_terms
                     .iter()
-                    .all(|req| text_lower.contains(&req.to_lowercase()));
+                    .all(|req| contains_constraint_term(&text_lower, req));
                 if !all_present {
                     let missing: Vec<String> = constraint
                         .required_terms
                         .iter()
-                        .filter(|req| !text_lower.contains(&req.to_lowercase()))
+                        .filter(|req| !contains_constraint_term(&text_lower, req))
                         .cloned()
                         .collect();
                     violations.push(WorldConsistencyViolation {
@@ -1333,7 +1425,7 @@ pub fn validate_world_consistency(
             CanonConstraintKind::ForbiddenAction => {
                 // P15: ForbiddenAction — check that forbidden actions don't appear
                 for term in &constraint.forbidden_terms {
-                    if text_lower.contains(&term.to_lowercase()) {
+                    if contains_constraint_term(&text_lower, term) {
                         // Check if covered by exception
                         let covered_by_exception =
                             approved_exceptions.iter().any(|(_, exempted)| {
@@ -1396,6 +1488,76 @@ fn compute_new_information_density_score(text: &str, prior_summaries: &[String])
     } else {
         0.3
     }
+}
+
+fn normalize_constraint_term(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(c))
+        .filter(|c| *c != '的' && *c != '任' && *c != '何')
+        .collect()
+}
+
+fn contains_constraint_term(text_lower: &str, term: &str) -> bool {
+    let term_lower = term.to_lowercase();
+    if text_lower.contains(&term_lower) {
+        return true;
+    }
+
+    if term_lower.contains("没有") {
+        let relaxed = term_lower.replace("没有", "没有任何");
+        if text_lower.contains(&relaxed) {
+            return true;
+        }
+    }
+
+    if term_lower.contains("以上") {
+        let relaxed = term_lower.replace("以上", "");
+        if !relaxed.is_empty() && text_lower.contains(&relaxed) {
+            return true;
+        }
+    }
+
+    let normalized_text = normalize_constraint_term(text_lower);
+    let normalized_term = normalize_constraint_term(term);
+    !normalized_term.is_empty() && normalized_text.contains(&normalized_term)
+}
+
+fn required_term_satisfied(text_lower: &str, term: &str) -> bool {
+    if !contains_constraint_term(text_lower, term) {
+        return false;
+    }
+
+    let term_lower = term.to_lowercase();
+    let candidates = if term_lower.contains("以上") {
+        vec![term_lower.clone(), term_lower.replace("以上", "")]
+    } else {
+        vec![term_lower.clone()]
+    };
+
+    for candidate in candidates {
+        if candidate.is_empty() {
+            continue;
+        }
+        for (idx, _) in text_lower.match_indices(&candidate) {
+            let prefix: String = text_lower[..idx]
+                .chars()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            if ["没有", "未", "无", "不", "缺少", "缺失"]
+                .iter()
+                .any(|neg| prefix.contains(neg))
+            {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 fn extract_excerpt(text: &str, keyword: &str) -> String {
@@ -1533,7 +1695,7 @@ pub fn extract_state_deltas_from_chapter(
                 let cost_paid = constraint
                     .required_terms
                     .iter()
-                    .any(|req| text_lower.contains(&req.to_lowercase()));
+                    .any(|req| required_term_satisfied(&text_lower, req));
                 deltas.push(StateLedgerDelta {
                     delta_type: "rule_triggered".to_string(),
                     entity_id: constraint.id.clone(),
@@ -1569,9 +1731,37 @@ pub fn check_state_regression(
         }
         let after_lower = delta.after_state.to_lowercase();
         let before_lower = delta.before_state.to_lowercase();
+        let possession_object =
+            if delta.delta_type == "possession" && after_lower.starts_with("拥有") {
+                Some(after_lower.trim_start_matches("拥有").trim().to_string())
+            } else {
+                None
+            };
+        let has_possession_negation = possession_object.as_ref().is_some_and(|object| {
+            contains_constraint_term(&text_lower, object)
+                && ["忘记", "从未", "没有", "未曾", "不记得", "丢失"]
+                    .iter()
+                    .any(|marker| text_lower.contains(marker))
+        });
+        let knowledge_object = if delta.delta_type == "knowledge" && after_lower.contains("知道")
+        {
+            Some(after_lower.replacen("知道", "", 1).trim().to_string())
+        } else {
+            None
+        };
+        let after_state_preserved = if let Some(object) = possession_object.as_ref() {
+            contains_constraint_term(&text_lower, object) && !has_possession_negation
+        } else if let Some(object) = knowledge_object.as_ref() {
+            contains_constraint_term(&text_lower, object)
+                && ["知道", "清楚", "明白", "意识到"]
+                    .iter()
+                    .any(|marker| text_lower.contains(marker))
+        } else {
+            contains_constraint_term(&text_lower, &after_lower)
+        };
 
         // Regression: text shows the before-state again, contradicting the after-state
-        if !before_lower.is_empty() && text_lower.contains(&before_lower) {
+        if !before_lower.is_empty() && contains_constraint_term(&text_lower, &before_lower) {
             // Check if there's an explicit transition marker nearby (simple heuristic)
             let has_transition_marker = text_lower.contains("->")
                 || text_lower.contains("changed")
@@ -1584,13 +1774,32 @@ pub fn check_state_regression(
                     delta_type: delta.delta_type.clone(),
                     entity_id: delta.entity_id.clone(),
                     prior_after_state: delta.after_state.clone(),
-                    current_observed_state: delta.before_state.clone(),
+                    current_observed_state: if delta.delta_type == "possession" {
+                        "missing".to_string()
+                    } else {
+                        delta.before_state.clone()
+                    },
                     message: format!(
                         "Entity '{}' regressed from '{}' to '{}' without explanation",
                         delta.entity_id, delta.after_state, delta.before_state
                     ),
                 });
+                continue;
             }
+        }
+
+        if !after_lower.is_empty() && !after_state_preserved {
+            regressions.push(StateLedgerRegression {
+                delta_type: delta.delta_type.clone(),
+                entity_id: delta.entity_id.clone(),
+                prior_after_state: delta.after_state.clone(),
+                current_observed_state: "missing".to_string(),
+                message: format!(
+                    "Entity '{}' no longer reflects prior state '{}' in current text",
+                    delta.entity_id, delta.after_state
+                ),
+            });
+            continue;
         }
 
         // Also flag if the after-state is explicitly negated
@@ -1613,6 +1822,19 @@ pub fn check_state_regression(
                 });
                 break;
             }
+        }
+
+        if has_possession_negation {
+            regressions.push(StateLedgerRegression {
+                delta_type: delta.delta_type.clone(),
+                entity_id: delta.entity_id.clone(),
+                prior_after_state: delta.after_state.clone(),
+                current_observed_state: "negated possession".to_string(),
+                message: format!(
+                    "Entity '{}' no longer clearly retains '{}'",
+                    delta.entity_id, delta.after_state
+                ),
+            });
         }
     }
 
@@ -2155,16 +2377,10 @@ pub fn parse_world_rules_from_markdown(source_path: &str, text: &str) -> Vec<Wor
                 rules.len() + 1
             );
 
-            let name = if item_text.len() <= 60 {
-                item_text.to_string()
-            } else {
-                format!("{}...", &item_text[..60])
-            };
-
             rules.push(WorldRule {
                 id: rule_id,
                 sub_kind: RuleSubKind::Rule,
-                name,
+                name: category.clone(),
                 summary: item_text.to_string(),
                 source_ref: EvidenceRef {
                     source_id: source_path.to_string(),

@@ -1,4 +1,7 @@
-pub fn build_writing_checklist(memory: &crate::writer_agent::memory::WriterMemory, _chapter_title: &str) -> Vec<String> {
+pub fn build_writing_checklist(
+    memory: &crate::writer_agent::memory::WriterMemory,
+    chapter_title: &str,
+) -> Vec<String> {
     let mut items = Vec::new();
     if let Ok(promises) = memory.get_open_promise_summaries() {
         for p in promises.iter().filter(|p| p.priority >= 5).take(3) {
@@ -12,6 +15,20 @@ pub fn build_writing_checklist(memory: &crate::writer_agent::memory::WriterMemor
     }
     if items.is_empty() {
         items.push("推进主线剧情".to_string());
+    }
+    if let Ok(task_queries) = crate::external_writing_db::load_task_queries(5) {
+        for task in task_queries
+            .iter()
+            .filter(|t| {
+                t.task_name.contains(chapter_title)
+                    || t.problem_statement.contains("章节")
+                    || t.workflow_stage == "brief"
+                    || t.workflow_stage == "write"
+            })
+            .take(2)
+        {
+            items.push(format!("外部任务入口: {}", task.first_action));
+        }
     }
     items
 }
@@ -461,6 +478,24 @@ pub async fn build_chapter_context(
         );
     }
 
+    let external_db_t0 = std::time::Instant::now();
+    if let Ok(bundle) = crate::external_writing_db::search_context_bundle(&query, 8) {
+        let rendered = crate::external_writing_db::render_context_bundle(&bundle, 3_000);
+        let external_elapsed_ms = external_db_t0.elapsed().as_millis() as u64;
+        composer.add_source_with_meta(
+            "external_writing_db",
+            "writing_situation.db",
+            "External writing situation database",
+            &rendered,
+            input.budget.rag_chars.min(3_000),
+            None,
+            external_elapsed_ms,
+            if rendered.trim().is_empty() { "not_found" } else { "ok" },
+            agent_harness_core::TAXONOMY_PROJECT_BRAIN,
+            "reference",
+        );
+    }
+
     let (mut prompt_context, sources, budget_report) = composer.finish();
     let warnings = budget_report.warnings.clone();
     let quality_anchor_keywords =
@@ -723,6 +758,9 @@ pub async fn build_chapter_context(
             next_summary.as_deref(),
             &[],
             &packet,
+            crate::external_writing_db::search_context_bundle(&target.summary, 6)
+                .ok()
+                .as_ref(),
         ))
     };
     let required_state_deltas =

@@ -205,7 +205,8 @@ pub(crate) fn render_planning_review_run_system_prompt(
     format!(
         "你是 Forge 的小说 Planning / Review 只读 Agent。你的职责是帮助作者规划下一步和审查当前章节方向，不是代写正文，也不是修改项目状态。\n\
 硬约束：只读；不得输出可直接粘贴进正文的长段草稿；不得声称已经写入正文、Canon、Promise、Outline、Chapter Mission、Story Contract 或长期记忆；不得提出 typed write operation。\n\
-必须基于 Story Contract、Chapter Mission、Promise Ledger、Canon、Project Brain 和当前稿件证据给判断。如果证据不足，明确列出缺口。\n\
+必须基于 Story Contract、Chapter Mission、Promise Ledger、Canon、Project Brain、external_writing_db 和当前稿件证据给判断。如果证据不足，明确列出缺口。\n\
+如果 external_writing_db 中存在 gold reference 或 reference_rule_reading_view 结果，优先抽取其“目标 / 阻力 / 筹码 / 反转 / 代价 / 余波”结构，而不是照抄句子或设定。\n\
 输出结构必须包含：\n\
 1. Objective understanding\n\
 2. Evidence\n\

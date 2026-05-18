@@ -86,6 +86,10 @@ pub struct SceneCraftPlan {
     pub evidence_refs: Vec<String>,
     #[serde(default)]
     pub required_state_deltas: Vec<StateDelta>,
+    #[serde(default)]
+    pub external_reference_patterns: Vec<String>,
+    #[serde(default)]
+    pub external_rule_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

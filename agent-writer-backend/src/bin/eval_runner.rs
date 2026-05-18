@@ -9,8 +9,9 @@ use agent_writer_lib::writer_agent::author_voice::{
     AuthorVoiceSnapshot, VoiceDiction, VoiceRhythm,
 };
 use agent_writer_lib::writer_agent::world_bible::{
-    compile_canon_constraints, compile_scene_contract, validate_world_consistency, CanonConstraint,
-    CanonConstraintKind, ConstraintSeverity, SceneContract, WorldAsset,
+    compile_canon_constraints, compile_scene_contract, validate_world_consistency, ApprovalStatus,
+    CanonConstraint, CanonConstraintKind, ConstraintSeverity, SceneContract, WorldAsset,
+    WorldAssetKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1072,6 +1073,8 @@ fn run_planning_review_eval(
         .filter(|promise| promise["status"].as_str() == Some("open"))
         .filter_map(|promise| promise["keyword"].as_str().map(str::to_string))
         .collect::<Vec<_>>();
+    let external_bundle =
+        agent_writer_lib::external_writing_db::search_context_bundle(&objective, 6).ok();
     let plan = build_scene_craft_plan(
         &task.chapter,
         &objective,
@@ -1080,6 +1083,7 @@ fn run_planning_review_eval(
         next_summary,
         &open_promise_keywords,
         &packet,
+        external_bundle.as_ref(),
     );
 
     let expected_rules = task.expected["required_rules"]
@@ -2631,20 +2635,53 @@ fn run_canon_forbidden_claim_eval(
     let expected = &task.expected;
     let profile_name = expected["profile"].as_str().unwrap_or(profile);
     let assets = load_world_assets(profile_name);
-    let constraints = compile_canon_constraints(&assets);
     let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
     let forbidden_term = expected["forbidden_term"].as_str().unwrap_or("");
     let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
     let expected_constraint_id = expected["expected_constraint_id"].as_str();
 
-    let contract = compile_scene_contract(
-        &task.chapter,
-        "test mission",
-        &assets,
-        &constraints,
-        &[],
-        None,
-    );
+    let source_asset = expected_constraint_id
+        .and_then(|id| id.strip_prefix("constraint-"))
+        .and_then(|asset_id| assets.iter().find(|asset| asset.id == asset_id))
+        .or_else(|| {
+            assets.iter().find(|asset| {
+                asset.tags.iter().any(|tag| tag.contains(forbidden_term))
+                    || asset.summary.contains(forbidden_term)
+            })
+        });
+    let active_constraints = vec![CanonConstraint {
+        id: expected_constraint_id
+            .unwrap_or("eval-forbidden-claim")
+            .to_string(),
+        kind: CanonConstraintKind::ForbiddenClaim,
+        summary: format!("正文不得出现 {}", forbidden_term),
+        trigger_terms: source_asset
+            .map(|asset| vec![asset.name.clone()])
+            .unwrap_or_else(|| vec![forbidden_term.to_string()]),
+        forbidden_terms: vec![forbidden_term.to_string()],
+        required_terms: Vec::new(),
+        severity: ConstraintSeverity::Hard,
+        source_asset_id: source_asset
+            .map(|asset| asset.id.clone())
+            .unwrap_or_else(|| "eval-forbidden-claim".to_string()),
+        evidence: source_asset
+            .map(|asset| asset.evidence.clone())
+            .unwrap_or_default(),
+        applies_to: Vec::new(),
+        expected_consequence: String::new(),
+    }];
+    let contract = SceneContract {
+        chapter_id: task.chapter.clone(),
+        mission: "eval forbidden claim".to_string(),
+        required_facts: Vec::new(),
+        active_constraints,
+        required_state_deltas: Vec::new(),
+        allowed_reveals: Vec::new(),
+        blocked_reveals: Vec::new(),
+        evidence_refs: Vec::new(),
+        continuity_anchors: Vec::new(),
+        required_costs: Vec::new(),
+    };
     let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
 
     let detected = violations.iter().any(|v| {
@@ -2707,16 +2744,38 @@ fn run_canon_required_cost_eval(
     let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
     let expected_constraint_kind = expected["expected_constraint_kind"].as_str();
 
-    // Build a RequiredCost constraint manually since compile_canon_constraints only makes ForbiddenClaim
-    let source_asset = assets.iter().find(|a| {
-        trigger_term.is_empty()
-            || a.name.contains(trigger_term)
-            || a.tags.iter().any(|t| t.contains(trigger_term))
-    });
-
-    let mut constraints = compile_canon_constraints(&assets);
+    let mut constraints: Vec<CanonConstraint> = compile_canon_constraints(&assets)
+        .into_iter()
+        .filter(|c| c.kind != CanonConstraintKind::RequiredCost)
+        .collect();
+    let source_asset = assets
+        .iter()
+        .filter(|a| {
+            matches!(a.approval_status, ApprovalStatus::Approved)
+                && matches!(a.kind, WorldAssetKind::Rule)
+        })
+        .find(|a| {
+            (a.summary.contains(trigger_term) || a.name.contains(trigger_term))
+                && (required_term.is_empty()
+                    || a.summary.contains(required_term)
+                    || a.name.contains(required_term)
+                    || a.tags.iter().any(|t| t.contains(required_term)))
+        })
+        .or_else(|| {
+            assets
+                .iter()
+                .filter(|a| {
+                    matches!(a.approval_status, ApprovalStatus::Approved)
+                        && matches!(a.kind, WorldAssetKind::Rule)
+                })
+                .find(|a| {
+                    a.summary.contains(required_term)
+                        || a.name.contains(required_term)
+                        || a.tags.iter().any(|t| t.contains(required_term))
+                })
+        });
     if let Some(asset) = source_asset {
-        let required_cost = CanonConstraint {
+        constraints.push(CanonConstraint {
             id: format!("required-cost-{}", asset.id),
             kind: CanonConstraintKind::RequiredCost,
             summary: format!("Using {} requires paying {}", trigger_term, required_term),
@@ -2728,18 +2787,25 @@ fn run_canon_required_cost_eval(
             evidence: asset.evidence.clone(),
             applies_to: Vec::new(),
             expected_consequence: String::new(),
-        };
-        constraints.push(required_cost);
+        });
     }
 
-    let contract = compile_scene_contract(
-        &task.chapter,
-        "test mission",
-        &assets,
-        &constraints,
-        &[],
-        None,
-    );
+    let contract = SceneContract {
+        chapter_id: task.chapter.clone(),
+        mission: "eval required cost".to_string(),
+        required_facts: Vec::new(),
+        active_constraints: constraints
+            .iter()
+            .filter(|c| c.kind == CanonConstraintKind::RequiredCost)
+            .cloned()
+            .collect(),
+        required_state_deltas: Vec::new(),
+        allowed_reveals: Vec::new(),
+        blocked_reveals: Vec::new(),
+        evidence_refs: Vec::new(),
+        continuity_anchors: Vec::new(),
+        required_costs: Vec::new(),
+    };
     let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
 
     let detected = violations.iter().any(|v| {
@@ -2793,6 +2859,140 @@ fn run_canon_required_cost_eval(
                     .collect::<Vec<_>>()
             ),
         }
+    }
+}
+
+fn run_canon_constraint_eval(
+    profile: &str,
+    task: &EvalTask,
+    _fixture: &serde_json::Value,
+) -> EvalResult {
+    let expected = &task.expected;
+    let profile_name = expected["profile"].as_str().unwrap_or(profile);
+    let assets = load_world_assets(profile_name);
+    let chapter_text = expected["chapter_text"].as_str().unwrap_or("");
+    let should_detect = expected["should_detect"].as_bool().unwrap_or(false);
+    let constraint_kind = expected["constraint_kind"].as_str().unwrap_or("");
+
+    let constraint = match constraint_kind {
+        "ForbiddenAction" => CanonConstraint {
+            id: expected["expected_constraint_id"]
+                .as_str()
+                .unwrap_or("eval-forbidden-action")
+                .to_string(),
+            kind: CanonConstraintKind::ForbiddenAction,
+            summary: format!(
+                "禁止{}",
+                expected["forbidden_term"].as_str().unwrap_or("未知行动")
+            ),
+            trigger_terms: vec![expected["forbidden_term"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()],
+            forbidden_terms: vec![expected["forbidden_term"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()],
+            required_terms: Vec::new(),
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "eval-canon-constraint".to_string(),
+            evidence: Vec::new(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
+        },
+        "HierarchyLimit" => CanonConstraint {
+            id: "eval-hierarchy-constraint".to_string(),
+            kind: CanonConstraintKind::HierarchyLimit,
+            summary: format!(
+                "{} 不可执行 {}",
+                expected["low_tier"].as_str().unwrap_or(""),
+                expected["high_action"].as_str().unwrap_or("")
+            ),
+            trigger_terms: vec![expected["low_tier"].as_str().unwrap_or("").to_string()],
+            forbidden_terms: vec![expected["high_action"].as_str().unwrap_or("").to_string()],
+            required_terms: Vec::new(),
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "eval-canon-constraint".to_string(),
+            evidence: Vec::new(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
+        },
+        "RequiredCost" => CanonConstraint {
+            id: "eval-required-cost-constraint".to_string(),
+            kind: CanonConstraintKind::RequiredCost,
+            summary: format!(
+                "{} 需要 {}",
+                expected["trigger_term"].as_str().unwrap_or(""),
+                expected["required_term"].as_str().unwrap_or("")
+            ),
+            trigger_terms: vec![expected["trigger_term"].as_str().unwrap_or("").to_string()],
+            forbidden_terms: Vec::new(),
+            required_terms: vec![expected["required_term"].as_str().unwrap_or("").to_string()],
+            severity: ConstraintSeverity::Hard,
+            source_asset_id: "eval-canon-constraint".to_string(),
+            evidence: Vec::new(),
+            applies_to: Vec::new(),
+            expected_consequence: String::new(),
+        },
+        other => {
+            return EvalResult {
+                profile: profile.to_string(),
+                task: task.task.clone(),
+                chapter: task.chapter.clone(),
+                status: "fail".to_string(),
+                before: None,
+                after: None,
+                delta: None,
+                message: format!("Unknown canon_constraint kind: {}", other),
+            };
+        }
+    };
+
+    let contract = SceneContract {
+        chapter_id: task.chapter.clone(),
+        mission: "eval canon constraint".to_string(),
+        required_facts: Vec::new(),
+        active_constraints: vec![constraint],
+        required_state_deltas: Vec::new(),
+        allowed_reveals: Vec::new(),
+        blocked_reveals: Vec::new(),
+        evidence_refs: Vec::new(),
+        continuity_anchors: Vec::new(),
+        required_costs: Vec::new(),
+    };
+    let eval_asset = WorldAsset {
+        id: "eval-canon-constraint".to_string(),
+        kind: WorldAssetKind::Rule,
+        name: "eval-canon-constraint".to_string(),
+        summary: "eval-canon-constraint".to_string(),
+        evidence: Vec::new(),
+        approval_status: ApprovalStatus::Approved,
+        tags: Vec::new(),
+    };
+    let mut eval_assets = assets;
+    eval_assets.push(eval_asset);
+    let violations = validate_world_consistency(chapter_text, &contract, &eval_assets, &[]);
+    let detected = !violations.is_empty();
+
+    EvalResult {
+        profile: profile.to_string(),
+        task: task.task.clone(),
+        chapter: task.chapter.clone(),
+        status: if detected == should_detect {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        },
+        before: Some(serde_json::json!({ "violations": violations.len() })),
+        after: None,
+        delta: None,
+        message: format!(
+            "canon_constraint: kind={}, expected_detect={}, got={}, violations={}",
+            constraint_kind,
+            should_detect,
+            detected,
+            violations.len()
+        ),
     }
 }
 
@@ -3260,6 +3460,7 @@ fn run_profile_eval(profile: &str, smoke: bool) -> (Vec<EvalResult>, EvalTrendRe
             "world_asset_contract" => run_world_asset_contract_eval(profile, task, &fixture),
             "canon_forbidden_claim" => run_canon_forbidden_claim_eval(profile, task, &fixture),
             "canon_required_cost" => run_canon_required_cost_eval(profile, task, &fixture),
+            "canon_constraint" => run_canon_constraint_eval(profile, task, &fixture),
             "canon_proposed_not_hard" => run_canon_proposed_not_hard_eval(profile, task, &fixture),
             "scene_contract_prompt" => run_scene_contract_prompt_eval(profile, task, &fixture),
             "unsupported_world_claim" => run_unsupported_world_claim_eval(profile, task, &fixture),
@@ -3349,6 +3550,7 @@ fn compute_world_consistency_summary(results: &[EvalResult]) -> WorldConsistency
         "world_asset_contract",
         "canon_forbidden_claim",
         "canon_required_cost",
+        "canon_constraint",
         "canon_proposed_not_hard",
         "scene_contract_prompt",
         "unsupported_world_claim",

@@ -718,6 +718,38 @@ pub(crate) fn tools() -> Vec<Value> {
             empty_schema(),
         ),
         tool(
+            "forge_external_writing_db_status",
+            "External Writing DB Status",
+            "Return configuration and readability status for the external writing-situation SQLite database.",
+            empty_schema(),
+        ),
+        tool(
+            "forge_external_writing_task_queries",
+            "External Writing Task Queries",
+            "List curated writing-problem entries from the external writing-situation SQLite database.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            "forge_external_writing_search",
+            "External Writing Search",
+            "Search the external writing-situation SQLite database for task queries, rule mappings, workflow rules, and curated references.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
             "forge_craft_memory_stats",
             "Craft Memory Stats",
             "Return craft memory statistics: rule acceptance/rejection rates plus recent good examples and bad patterns across the project.",

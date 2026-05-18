@@ -220,6 +220,7 @@ pub fn build_scene_craft_plan(
     next_chapter_summary: Option<&str>,
     open_promise_keywords: &[String],
     packet: &EmpowermentPromptPacket,
+    external_bundle: Option<&crate::external_writing_db::ExternalWritingContextBundle>,
 ) -> SceneCraftPlan {
     let objective_text = if objective.trim().is_empty() {
         target_beat.to_string()
@@ -236,6 +237,47 @@ pub fn build_scene_craft_plan(
     let question_left_open = next_chapter_summary
         .map(|s| s.chars().take(80).collect::<String>())
         .unwrap_or_default();
+    let reference_pattern = external_bundle
+        .and_then(|bundle| bundle.references.first())
+        .map(|reference| {
+            let mut parts = Vec::new();
+            if let Some(goal) = reference.scene_goal.as_ref().filter(|s| !s.is_empty()) {
+                parts.push(format!("目标: {}", goal));
+            }
+            if let Some(opposition) = reference.opposition.as_ref().filter(|s| !s.is_empty()) {
+                parts.push(format!("阻力: {}", opposition));
+            }
+            if let Some(reversal) = reference.reversal.as_ref().filter(|s| !s.is_empty()) {
+                parts.push(format!("反转: {}", reversal));
+            }
+            if let Some(cost) = reference.cost.as_ref().filter(|s| !s.is_empty()) {
+                parts.push(format!("代价: {}", cost));
+            }
+            if let Some(aftereffect) = reference.aftereffect.as_ref().filter(|s| !s.is_empty()) {
+                parts.push(format!("余波: {}", aftereffect));
+            }
+            if parts.is_empty() {
+                format!("{} 第{}章: {}", reference.novel, reference.chapter_no, reference.why_selected)
+            } else {
+                format!(
+                    "{} 第{}章《{}》 | {}",
+                    reference.novel,
+                    reference.chapter_no,
+                    reference.chapter,
+                    parts.join(" | ")
+                )
+            }
+        });
+    let external_rule_notes: Vec<String> = external_bundle
+        .map(|bundle| {
+            bundle
+                .reference_rules
+                .iter()
+                .take(5)
+                .map(|rule| format!("{}:{} -> {}", rule.rule_type, rule.rule_code, rule.usage_note))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Derive conflict pressure from participants and objective
     let conflict_pressure = if !participants.is_empty() && !objective_text.is_empty() {
@@ -251,11 +293,28 @@ pub fn build_scene_craft_plan(
         ConflictPressure {
             source: conflict_source,
             escalation: objective_text.contains("升级") || objective_text.contains("加剧"),
-            cost_or_consequence: String::new(),
+            cost_or_consequence: external_bundle
+                .and_then(|bundle| bundle.references.first())
+                .and_then(|r| r.cost.clone().filter(|s| !s.is_empty()))
+                .unwrap_or_default(),
         }
     } else {
         ConflictPressure::default()
     };
+
+    let character_choice = external_bundle
+        .and_then(|bundle| bundle.references.first())
+        .map(|reference| CharacterChoice {
+            character: participants.first().cloned().unwrap_or_default(),
+            options: reference
+                .leverage
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| vec![s.clone()])
+                .unwrap_or_default(),
+            cost: reference.cost.clone().unwrap_or_default(),
+        })
+        .unwrap_or_default();
 
     // Basic emotional curve from scene type keywords
     let mut emotional_beats = Vec::new();
@@ -287,16 +346,29 @@ pub fn build_scene_craft_plan(
         objective: objective_text,
         participants: participants.to_vec(),
         conflict_pressure,
-        character_choice: CharacterChoice::default(),
+        character_choice,
         information_release: Vec::new(),
         withheld_information: Vec::new(),
         emotional_curve: emotional_beats,
         promise_or_anchor_payoff: promise_payoff,
         ending_hook: EndingHook {
-            consequence_delivered: String::new(),
+            consequence_delivered: external_bundle
+                .and_then(|bundle| bundle.references.first())
+                .and_then(|r| r.aftereffect.clone().filter(|s| !s.is_empty()))
+                .unwrap_or_default(),
             question_left_open,
         },
-        selected_craft_rules: packet.craft_rules.iter().map(|r| r.rule_id.clone()).collect(),
+        selected_craft_rules: {
+            let mut rules: Vec<String> = packet.craft_rules.iter().map(|r| r.rule_id.clone()).collect();
+            if let Some(bundle) = external_bundle {
+                for rule in bundle.reference_rules.iter().take(4) {
+                    if !rules.iter().any(|existing| existing == &rule.rule_code) {
+                        rules.push(rule.rule_code.clone());
+                    }
+                }
+            }
+            rules
+        },
         must_avoid: packet.must_avoid.clone(),
         evidence_refs: packet
             .craft_rules
@@ -304,6 +376,8 @@ pub fn build_scene_craft_plan(
             .flat_map(|r| r.evidence_refs.clone())
             .collect(),
         required_state_deltas: Vec::new(),
+        external_reference_patterns: reference_pattern.into_iter().collect(),
+        external_rule_notes,
     }
 }
 
@@ -507,6 +581,7 @@ mod craft_prompt_tests {
         };
         let plan = build_scene_craft_plan(
             "test-chapter", "objective", &[], "beat", None, &[], &packet,
+            None,
         );
         assert_eq!(plan.chapter_title, "test-chapter");
         assert!(plan.emotional_curve.is_empty());
