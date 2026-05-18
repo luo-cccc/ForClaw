@@ -7,8 +7,8 @@ This project follows a simple human-readable changelog. Versions are created whe
 ## Unreleased
 
 ### M1: Observability Baseline
-- Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
-- MCP process smoke tests (6 scenarios with isolated temp data dir).
+- Structured error kind classification (`backend` | `validation` | `provider` | `permission` | `budget` | `context_overflow` | `storage`).
+- MCP process smoke tests (7 scenarios with isolated temp data dir).
 - Real TTFT capture on first TextDelta in streaming callback.
 - AgentLoop trace events: `ToolInventory`, `ProviderGuard`, `ContextWindow`.
 - Per-call provider latency tracking (`first_provider_call_ms`, `last_provider_call_ms`).
@@ -51,7 +51,7 @@ This project follows a simple human-readable changelog. Versions are created whe
 ### M4: Recovery + Eval
 - `FailureBundle` with `classify_failure()` mapping errors to `RecoveryAction` (Retry/ShrinkContext/ApprovalRequired/Stop).
 - `FailureBundle` trace event emitted in `run_with_plan()` error paths.
-- Writing eval harness: fixture project (`project.json`), JSONL task definitions, 9 automated integration tests.
+- Writing eval harness: fixture project (`project.json`), JSONL task definitions, and regression assertions covering 39 `writing_eval_test` cases.
 
 ### Protocol & Entrypoint
 - `forge-agent-mcp/src/main.rs` split from 1963 → 627 lines. Extracted `dispatch.rs` (320 lines) and `tools.rs` (1034 lines).
@@ -61,5 +61,5 @@ This project follows a simple human-readable changelog. Versions are created whe
 - `build_chapter_context` converted to async for future parallelization.
 
 ### Test Coverage
-- 369 total tests (105 harness + 250 writer + 14 mcp + 6 smoke + 9 eval).
+- 656 total tests (`agent-harness-core` 239 + `agent-writer` lib 396 + `writing_eval_test` 39 + `forge-agent-mcp` 14 unit + 7 smoke).
 - Zero clippy warnings. Zero `unsafe` blocks. Zero regressions.

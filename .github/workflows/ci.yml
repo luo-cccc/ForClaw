@@ -26,8 +26,8 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
-      - name: Check MCP server
-        run: cargo check -p forge-agent-mcp
+      - name: Check workspace
+        run: cargo check --workspace
 
       - name: Test MCP server
         run: cargo test -p forge-agent-mcp
@@ -37,6 +37,9 @@ jobs:
 
       - name: Test writer backend
         run: cargo test -p agent-writer --lib
+
+      - name: Test writing eval matrix
+        run: cargo test -p agent-writer --test writing_eval_test
 
       - name: Clippy agent harness
         run: cargo clippy -p agent-harness-core --all-targets -- -D warnings

@@ -1,6 +1,7 @@
 /target/
 /.forge-agent-data/
 /.env
+/.claude/
 *.log
 reports/
 dist/

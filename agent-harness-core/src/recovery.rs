@@ -683,11 +683,20 @@ mod recovery_tests {
 
     #[test]
     fn failure_remediation_codes_match_spec() {
-        assert_eq!(FailureRemediation::RefreshInventory.code(), "refresh_inventory");
-        assert_eq!(FailureRemediation::RequestApproval.code(), "request_approval");
+        assert_eq!(
+            FailureRemediation::RefreshInventory.code(),
+            "refresh_inventory"
+        );
+        assert_eq!(
+            FailureRemediation::RequestApproval.code(),
+            "request_approval"
+        );
         assert_eq!(FailureRemediation::ShrinkContext.code(), "shrink_context");
         assert_eq!(FailureRemediation::RetryTransient.code(), "retry_transient");
-        assert_eq!(FailureRemediation::AbortUnsafeWrite.code(), "abort_unsafe_write");
+        assert_eq!(
+            FailureRemediation::AbortUnsafeWrite.code(),
+            "abort_unsafe_write"
+        );
     }
 
     #[test]

@@ -4,20 +4,20 @@ Multi-profile regression testing for Forge Agent writing quality.
 
 ## Profiles
 
-- `xianxia/` — Chinese xianxia novel (4 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, open promises, 18 eval tasks including negative cases)
-- `mystery/` — Detective/investigation story (3 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, open promises, 15 eval tasks including negative cases)
-- `scifi/` — Sci-fi corporate thriller (3 outline nodes, 2 drafted chapters, 5 lore entries, canon rules, open promises, 15 eval tasks including negative cases)
+- `xianxia/` — Chinese xianxia novel (4 outline nodes, drafted multi-chapter fixture, lorebook, canon rules, promises, 53 eval tasks)
+- `mystery/` — Detective/investigation story (drafted multi-chapter fixture, lorebook, canon rules, promises, 44 eval tasks)
+- `scifi/` — Sci-fi corporate thriller (drafted multi-chapter fixture, lorebook, canon rules, promises, 44 eval tasks)
 
 ## Total Coverage
 
-- **48 eval tasks** across 3 profiles
-- Task types: chapter_generation, quality_evaluation, quality_signals, targeted_revision, craft_memory, manual_craft_edit, craft_memory_prompt, canon_conflict, planning_review, promise_progression, continuity_diagnostic
-- Negative cases: missing_anchor, style_drift, promise_stalled, revision_no_change, craft_memory_injection
+- **141 eval tasks** across 3 profiles
+- Task types: chapter_generation, quality_evaluation, quality_signals, targeted_revision, craft_memory, manual_craft_edit, craft_memory_prompt, canon_conflict, canon_constraint, canon_forbidden_claim, canon_required_cost, canon_proposed_not_hard, continuity_diagnostic, extraction, hierarchy_confusion, planning_review, promise_progression, scene_contract_prompt, state_delta_trace, state_regression, unsupported_world_claim, world_asset_contract
+- Negative cases: `negative_missing_anchor`, `negative_style_drift`, `negative_plot_stalled`, `negative_promise_stalled`, `negative_revision_no_change`, `negative_craft_memory_injection`
 
 ## Running
 
 ```powershell
-# Full matrix (all 48 tasks)
+# Full matrix (all 141 tasks)
 .\scripts\run-writing-eval.cmd
 
 # Smoke mode (representative subset, faster feedback)

@@ -71,7 +71,11 @@ pub fn redact_tool_input(input: &str) -> String {
 
     // Truncate and keep first SUMMARY_LEN chars as summary
     let summary: String = masked.chars().take(SUMMARY_LEN).collect();
-    format!("{}... [truncated {} chars]", summary, masked.len().saturating_sub(SUMMARY_LEN))
+    format!(
+        "{}... [truncated {} chars]",
+        summary,
+        masked.len().saturating_sub(SUMMARY_LEN)
+    )
 }
 
 fn mask_secrets_in_text(text: &str) -> String {
@@ -81,11 +85,26 @@ fn mask_secrets_in_text(text: &str) -> String {
     // Mask key=..., token=..., secret=..., password=..., api_key=...
     let patterns = [
         (Regex::new(r"(?i)(key\s*=\s*)[^\s,;\}\]]+").ok(), "key=***"),
-        (Regex::new(r"(?i)(token\s*=\s*)[^\s,;\}\]]+").ok(), "token=***"),
-        (Regex::new(r"(?i)(secret\s*=\s*)[^\s,;\}\]]+").ok(), "secret=***"),
-        (Regex::new(r"(?i)(password\s*=\s*)[^\s,;\}\]]+").ok(), "password=***"),
-        (Regex::new(r"(?i)(api_key\s*=\s*)[^\s,;\}\]]+").ok(), "api_key=***"),
-        (Regex::new(r"(?i)(auth\s*=\s*)[^\s,;\}\]]+").ok(), "auth=***"),
+        (
+            Regex::new(r"(?i)(token\s*=\s*)[^\s,;\}\]]+").ok(),
+            "token=***",
+        ),
+        (
+            Regex::new(r"(?i)(secret\s*=\s*)[^\s,;\}\]]+").ok(),
+            "secret=***",
+        ),
+        (
+            Regex::new(r"(?i)(password\s*=\s*)[^\s,;\}\]]+").ok(),
+            "password=***",
+        ),
+        (
+            Regex::new(r"(?i)(api_key\s*=\s*)[^\s,;\}\]]+").ok(),
+            "api_key=***",
+        ),
+        (
+            Regex::new(r"(?i)(auth\s*=\s*)[^\s,;\}\]]+").ok(),
+            "auth=***",
+        ),
     ];
 
     for (maybe_re, replacement) in &patterns {
@@ -278,7 +297,8 @@ impl<H: ToolHandler> ToolExecutor<H> {
         // If a tool has side effect level >= Write and no approval_context or proposal_id
         // in args, reject with remediation request_approval.
         let approval_context = extract_approval_context(&args);
-        if descriptor.side_effect_level >= ToolSideEffectLevel::Write && approval_context.is_none() {
+        if descriptor.side_effect_level >= ToolSideEffectLevel::Write && approval_context.is_none()
+        {
             return self.emit_audit_end(ToolExecution {
                 tool_name: tool_name.to_string(),
                 input: args,
@@ -870,7 +890,10 @@ mod tests {
         assert!(!redacted.contains("bearer-abc"), "should mask token");
         assert!(!redacted.contains("my-secret"), "should mask secret");
         assert!(redacted.contains("api_key=***"), "should replace with ***");
-        assert!(redacted.contains("token=***"), "should replace token with ***");
+        assert!(
+            redacted.contains("token=***"),
+            "should replace token with ***"
+        );
     }
 
     #[test]
@@ -939,7 +962,10 @@ mod tests {
             .execute("read_tool", serde_json::json!({"path": "/tmp/in.txt"}))
             .await;
 
-        assert!(result.error.is_none(), "read tool should not require approval context");
+        assert!(
+            result.error.is_none(),
+            "read tool should not require approval context"
+        );
         assert!(result.approval_context.is_none());
     }
 

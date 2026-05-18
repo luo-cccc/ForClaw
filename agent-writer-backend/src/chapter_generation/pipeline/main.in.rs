@@ -151,6 +151,35 @@ where
     context.scene_contract = Some(scene_contract.clone());
     context.world_assets = world_assets.clone();
 
+    // P18: Add world bible assets as context sources with evidence-type taxonomy
+    for asset in &world_assets {
+        let taxonomy = match asset.approval_status {
+            crate::writer_agent::world_bible::ApprovalStatus::Proposed => {
+                agent_harness_core::TAXONOMY_WORLD_PROPOSED_RULE
+            }
+            crate::writer_agent::world_bible::ApprovalStatus::Approved => {
+                agent_harness_core::TAXONOMY_WORLD_APPROVED_RULE
+            }
+            crate::writer_agent::world_bible::ApprovalStatus::Rejected => {
+                agent_harness_core::TAXONOMY_WORLD_RAW_EVIDENCE
+            }
+        };
+        let content = format!("{}: {}", asset.name, asset.summary);
+        context.sources.push(crate::chapter_generation::ChapterContextSource {
+            source_type: "world_bible".to_string(),
+            id: asset.id.clone(),
+            label: format!("World Bible: {}", asset.name),
+            original_chars: content.chars().count(),
+            included_chars: content.chars().count(),
+            truncated: false,
+            score: None,
+            taxonomy: taxonomy.to_string(),
+            role: "grounding".to_string(),
+            elapsed_ms: 0,
+            retrieval_status: "ok".to_string(),
+        });
+    }
+
     let context_built_ms = context_t0.elapsed().as_millis() as u64;
 
     record_task_packet(&context);
@@ -878,27 +907,26 @@ where
         }
 
         // P17: new_information_density score < 0.5 in Strict mode triggers warning or block
-        let nid_metric = final_quality
-            .metric_results
+        // Check via the LOW_INFORMATION_DENSITY world consistency violation
+        let nid_violation = final_quality
+            .world_consistency_violations
             .iter()
-            .find(|m| m.metric == "new_information_density");
-        if let Some(nid) = nid_metric {
-            if nid.score < 0.5 {
-                let error = ChapterGenerationError::new(
-                    "STRICT_MODE_INFO_DENSITY_LOW",
-                    format!(
-                        "Strict mode blocked save: new_information_density score {:.2} is below threshold 0.5",
-                        nid.score
-                    ),
-                    true,
-                );
-                emit(ChapterGenerationEvent::failed(
-                    &request_id,
-                    error.clone(),
-                    Some(quality_mode),
-                ));
-                return PipelineTerminal::Failed(error);
-            }
+            .find(|v| v.constraint_id == "LOW_INFORMATION_DENSITY");
+        if let Some(v) = nid_violation {
+            let error = ChapterGenerationError::new(
+                "STRICT_MODE_INFO_DENSITY_LOW",
+                format!(
+                    "Strict mode blocked save: new_information_density violation — {}",
+                    v.message
+                ),
+                true,
+            );
+            emit(ChapterGenerationEvent::failed(
+                &request_id,
+                error.clone(),
+                Some(quality_mode),
+            ));
+            return PipelineTerminal::Failed(error);
         }
     }
 

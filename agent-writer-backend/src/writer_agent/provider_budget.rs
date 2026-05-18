@@ -212,11 +212,8 @@ pub fn evaluate_provider_budget(
         };
 
     let calibrated_total_tokens = calibrated_input.saturating_add(calibrated_output);
-    let calibrated_cost_micros = estimate_provider_cost_micros(
-        &request.model,
-        calibrated_input,
-        calibrated_output,
-    );
+    let calibrated_cost_micros =
+        estimate_provider_cost_micros(&request.model, calibrated_input, calibrated_output);
 
     // Use calibrated estimates for decision when confidence is sufficient;
     // otherwise fall back to static estimates (conservative).
@@ -542,13 +539,24 @@ mod tests {
         assert_eq!(report.decision, WriterProviderBudgetDecision::Allowed);
 
         let record = provider_call_record_from_budget_report(
-            "call-1", "step-0", &report, 1_000, 200, Some(50),
+            "call-1",
+            "step-0",
+            &report,
+            1_000,
+            200,
+            Some(50),
         );
         assert_eq!(record.call_id, "call-1");
         assert_eq!(record.step_id, "step-0");
-        assert_eq!(record.call_type, agent_harness_core::RuntimeCallType::ProviderCall);
+        assert_eq!(
+            record.call_type,
+            agent_harness_core::RuntimeCallType::ProviderCall
+        );
         assert!(
-            matches!(record.status, agent_harness_core::RuntimeCallStatus::Success),
+            matches!(
+                record.status,
+                agent_harness_core::RuntimeCallStatus::Success
+            ),
             "expected success for allowed budget, got: {:?}",
             record.status
         );
@@ -567,11 +575,13 @@ mod tests {
         );
         request.max_total_tokens_without_approval = 10_000;
         let report = evaluate_provider_budget(request);
-        assert_eq!(report.decision, WriterProviderBudgetDecision::ApprovalRequired);
-
-        let record = provider_call_record_from_budget_report(
-            "call-2", "step-1", &report, 2_000, 300, None,
+        assert_eq!(
+            report.decision,
+            WriterProviderBudgetDecision::ApprovalRequired
         );
+
+        let record =
+            provider_call_record_from_budget_report("call-2", "step-1", &report, 2_000, 300, None);
         assert!(
             matches!(
                 record.status,
@@ -596,9 +606,18 @@ mod tests {
         );
         let report = evaluate_provider_budget(request);
         let record = provider_call_record_from_budget_report(
-            "call-3", "step-2", &report, 3_000, 400, Some(80),
+            "call-3",
+            "step-2",
+            &report,
+            3_000,
+            400,
+            Some(80),
         );
         assert!(record.task_id.is_some());
-        assert!(record.task_id.as_ref().unwrap().contains("ExternalResearch"));
+        assert!(record
+            .task_id
+            .as_ref()
+            .unwrap()
+            .contains("ExternalResearch"));
     }
 }

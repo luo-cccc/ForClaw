@@ -43,6 +43,11 @@ pub const TAXONOMY_APPROVED_RULE: &str = "approved_rule";
 pub const TAXONOMY_PROPOSED_RULE: &str = "proposed_rule";
 pub const TAXONOMY_AUTHOR_INSTRUCTION: &str = "author_instruction";
 
+// P18: world-bible evidence-type taxonomy constants
+pub const TAXONOMY_WORLD_RAW_EVIDENCE: &str = "world_raw_evidence";
+pub const TAXONOMY_WORLD_APPROVED_RULE: &str = "world_approved_rule";
+pub const TAXONOMY_WORLD_PROPOSED_RULE: &str = "world_proposed_rule";
+
 /// Priority for deterministic source ordering (lower = higher priority).
 /// Core grounding sources first, volatile/auxiliary sources last.
 pub fn source_priority(source_type: &str) -> usize {

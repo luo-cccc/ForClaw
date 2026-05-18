@@ -2094,7 +2094,9 @@ fn compute_latency_percentiles_from_report(gate_report_path: &std::path::Path) -
     )
 }
 
-fn compute_state_delta_coverage_from_report(gate_report_path: &std::path::Path) -> (usize, usize, usize) {
+fn compute_state_delta_coverage_from_report(
+    gate_report_path: &std::path::Path,
+) -> (usize, usize, usize) {
     let Ok(data) = std::fs::read_to_string(gate_report_path) else {
         return (0, 0, 0);
     };
@@ -2643,7 +2645,7 @@ fn run_canon_forbidden_claim_eval(
         &[],
         None,
     );
-    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
 
     let detected = violations.iter().any(|v| {
         v.kind == CanonConstraintKind::ForbiddenClaim
@@ -2738,7 +2740,7 @@ fn run_canon_required_cost_eval(
         &[],
         None,
     );
-    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
 
     let detected = violations.iter().any(|v| {
         v.kind == CanonConstraintKind::RequiredCost
@@ -2816,7 +2818,7 @@ fn run_canon_proposed_not_hard_eval(
         &[],
         None,
     );
-    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
 
     let detected = violations
         .iter()
@@ -3037,7 +3039,7 @@ fn run_hierarchy_confusion_eval(
         continuity_anchors: Vec::new(),
         required_costs: Vec::new(),
     };
-    let violations = validate_world_consistency(chapter_text, &contract, &assets);
+    let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
 
     let detected = violations
         .iter()
@@ -3121,35 +3123,70 @@ fn run_state_regression_eval(
     }
 }
 
-fn run_extraction_eval(
-    profile: &str,
-    task: &EvalTask,
-    _fixture: &serde_json::Value,
-) -> EvalResult {
-    use agent_writer_lib::writer_agent::world_bible::parse_world_rules_from_markdown;
+fn run_extraction_eval(profile: &str, task: &EvalTask, _fixture: &serde_json::Value) -> EvalResult {
+    use agent_writer_lib::writer_agent::world_bible::{
+        create_llm_proposal, parse_world_rules_from_markdown, TypedWorldAsset,
+    };
 
     let expected = &task.expected;
     let source_md = expected["source_markdown"].as_str().unwrap_or("");
-    let expected_asset_count_min = expected["expected_asset_count_min"].as_u64().unwrap_or(0) as usize;
+    let expected_asset_count_min =
+        expected["expected_asset_count_min"].as_u64().unwrap_or(0) as usize;
     let expected_rule_names: Vec<String> = expected["expected_rule_names"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
-    let expected_source_ref_non_empty = expected["expected_source_ref_non_empty"].as_bool().unwrap_or(false);
+    let expected_source_ref_non_empty = expected["expected_source_ref_non_empty"]
+        .as_bool()
+        .unwrap_or(false);
 
     let rules = parse_world_rules_from_markdown("test.md", source_md);
 
     let asset_count_ok = rules.len() >= expected_asset_count_min;
     let names_ok = expected_rule_names.iter().all(|expected_name| {
-        rules.iter().any(|r| r.name.contains(expected_name) || r.summary.contains(expected_name))
+        rules
+            .iter()
+            .any(|r| r.name.contains(expected_name) || r.summary.contains(expected_name))
     });
-    let source_ref_ok = !expected_source_ref_non_empty || rules.iter().all(|r| {
-        !r.source_ref.excerpt.is_empty() && !r.source_ref.source_id.is_empty()
-    });
+    let source_ref_ok = !expected_source_ref_non_empty
+        || rules
+            .iter()
+            .all(|r| !r.source_ref.excerpt.is_empty() && !r.source_ref.source_id.is_empty());
 
-    let status = if asset_count_ok && names_ok && source_ref_ok {
+    // P20: Test create_llm_proposal produces proposed WorldAsset::Rule with valid source_ref and confidence
+    let typed_assets: Vec<TypedWorldAsset> = rules.into_iter().map(TypedWorldAsset::Rule).collect();
+    let proposal = create_llm_proposal(
+        &format!("extraction-{}", task.chapter),
+        "test.md",
+        typed_assets,
+        12345,
+    );
+    let proposed_rules: Vec<_> = proposal
+        .proposed_assets
+        .iter()
+        .filter_map(|a| match a {
+            TypedWorldAsset::Rule(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    let has_proposed_rule = !proposed_rules.is_empty();
+    let all_proposed = proposed_rules.iter().all(|r| {
+        matches!(
+            r.approval_status,
+            agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Proposed
+        )
+    });
+    let all_source_ref_ok = proposed_rules
+        .iter()
+        .all(|r| !r.source_ref.excerpt.is_empty() && !r.source_ref.source_id.is_empty());
+    let all_confidence_positive = proposed_rules.iter().all(|r| r.confidence > 0.0);
+
+    let proposal_ok =
+        has_proposed_rule && all_proposed && all_source_ref_ok && all_confidence_positive;
+
+    let status = if asset_count_ok && names_ok && source_ref_ok && proposal_ok {
         "pass"
     } else {
         "fail"
@@ -3161,11 +3198,20 @@ fn run_extraction_eval(
         chapter: task.chapter.clone(),
         status: status.to_string(),
         before: Some(serde_json::json!({ "expected_assets": expected_asset_count_min })),
-        after: Some(serde_json::json!({ "extracted_rules": rules.len() })),
+        after: Some(serde_json::json!({
+            "extracted_rules": proposed_rules.len(),
+            "proposal_ok": proposal_ok,
+            "all_proposed": all_proposed,
+            "all_source_ref_ok": all_source_ref_ok,
+            "all_confidence_positive": all_confidence_positive,
+        })),
         delta: None,
         message: format!(
-            "extraction: assets={}, names_ok={}, source_ref_ok={}",
-            rules.len(), names_ok, source_ref_ok
+            "extraction: assets={}, names_ok={}, source_ref_ok={}, proposal_ok={}",
+            proposed_rules.len(),
+            names_ok,
+            source_ref_ok,
+            proposal_ok
         ),
     }
 }

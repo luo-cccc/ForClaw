@@ -250,7 +250,9 @@ impl TypedWorldAsset {
 
     /// Returns true if approved AND has source_ref AND confidence >= threshold.
     pub fn can_enter_approved_canon(&self, min_confidence: f32) -> bool {
-        self.approval_status().is_approved() && self.has_source_ref() && self.confidence() >= min_confidence
+        self.approval_status().is_approved()
+            && self.has_source_ref()
+            && self.confidence() >= min_confidence
     }
 
     /// Convert to the legacy WorldAsset representation for constraint compilation.
@@ -486,7 +488,10 @@ pub fn validate_term_misuse(text: &str, canon_terms: &[CanonTerm]) -> Vec<TermMi
                 let opposite_lower = opposite.to_lowercase();
 
                 // If definition expects a property but text shows the opposite
-                if canon_term.definition.to_lowercase().contains(&expected_lower)
+                if canon_term
+                    .definition
+                    .to_lowercase()
+                    .contains(&expected_lower)
                     && sentence_lower.contains(&opposite_lower)
                 {
                     detected_contradiction = true;
@@ -497,7 +502,8 @@ pub fn validate_term_misuse(text: &str, canon_terms: &[CanonTerm]) -> Vec<TermMi
             // Also check for direct negation of the definition
             let negation_prefixes = ["不是", "并非", "没有", "不曾", "不像", "不同于"];
             for prefix in &negation_prefixes {
-                if sentence_lower.contains(&format!("{}{}", prefix, canon_term.term.to_lowercase())) {
+                if sentence_lower.contains(&format!("{}{}", prefix, canon_term.term.to_lowercase()))
+                {
                     detected_contradiction = true;
                     observed_signals.push(format!("{}{}", prefix, canon_term.term));
                 }
@@ -688,7 +694,11 @@ pub fn build_conflict_set(constraints: &[CanonConstraint]) -> Vec<ConflictSetEnt
             let overlap: Vec<String> = a
                 .trigger_terms
                 .iter()
-                .filter(|ta| b.trigger_terms.iter().any(|tb| ta.to_lowercase() == tb.to_lowercase()))
+                .filter(|ta| {
+                    b.trigger_terms
+                        .iter()
+                        .any(|tb| ta.to_lowercase() == tb.to_lowercase())
+                })
                 .cloned()
                 .collect();
 
@@ -698,16 +708,24 @@ pub fn build_conflict_set(constraints: &[CanonConstraint]) -> Vec<ConflictSetEnt
 
             // Check for contradictory forbidden/required terms
             let a_forbids_b_requires = a.forbidden_terms.iter().any(|fa| {
-                b.required_terms.iter().any(|rb| fa.to_lowercase() == rb.to_lowercase())
+                b.required_terms
+                    .iter()
+                    .any(|rb| fa.to_lowercase() == rb.to_lowercase())
             });
             let b_forbids_a_requires = b.forbidden_terms.iter().any(|fb| {
-                a.required_terms.iter().any(|ra| fb.to_lowercase() == ra.to_lowercase())
+                a.required_terms
+                    .iter()
+                    .any(|ra| fb.to_lowercase() == ra.to_lowercase())
             });
             let a_b_forbid_same = a.forbidden_terms.iter().any(|fa| {
-                b.forbidden_terms.iter().any(|fb| fa.to_lowercase() == fb.to_lowercase())
+                b.forbidden_terms
+                    .iter()
+                    .any(|fb| fa.to_lowercase() == fb.to_lowercase())
             });
             let _a_b_require_same = a.required_terms.iter().any(|ra| {
-                b.required_terms.iter().any(|rb| ra.to_lowercase() == rb.to_lowercase())
+                b.required_terms
+                    .iter()
+                    .any(|rb| ra.to_lowercase() == rb.to_lowercase())
             });
 
             if a_forbids_b_requires || b_forbids_a_requires {
@@ -748,6 +766,16 @@ pub fn build_conflict_set(constraints: &[CanonConstraint]) -> Vec<ConflictSetEnt
     conflicts
 }
 
+/// P18: Evidence type breakdown for preflight canon analysis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceTypeBreakdown {
+    pub raw_evidence: usize,
+    pub approved_rule: usize,
+    pub proposed_rule: usize,
+    pub author_instruction: usize,
+}
+
 /// P15: Structured result from preflight canon analysis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -758,6 +786,8 @@ pub struct PreflightCanonResult {
     pub rule_conflicts: Vec<String>,
     /// P18: structured conflict set for contradictory constraints
     pub conflict_set: Vec<ConflictSetEntry>,
+    /// P18: evidence type breakdown by approval status
+    pub evidence_type_breakdown: EvidenceTypeBreakdown,
 }
 
 /// Run preflight checks before chapter generation.
@@ -888,15 +918,20 @@ pub fn preflight_canon_constraints(
     // but contradictory forbidden/required terms
     for (i, a) in constraints.iter().enumerate() {
         for b in constraints.iter().skip(i + 1) {
-            let overlap = a
-                .trigger_terms
-                .iter()
-                .any(|ta| b.trigger_terms.iter().any(|tb| ta.to_lowercase() == tb.to_lowercase()));
+            let overlap = a.trigger_terms.iter().any(|ta| {
+                b.trigger_terms
+                    .iter()
+                    .any(|tb| ta.to_lowercase() == tb.to_lowercase())
+            });
             if overlap {
                 let contradictory = a.forbidden_terms.iter().any(|fa| {
-                    b.required_terms.iter().any(|rb| fa.to_lowercase() == rb.to_lowercase())
+                    b.required_terms
+                        .iter()
+                        .any(|rb| fa.to_lowercase() == rb.to_lowercase())
                 }) || b.forbidden_terms.iter().any(|fb| {
-                    a.required_terms.iter().any(|ra| fb.to_lowercase() == ra.to_lowercase())
+                    a.required_terms
+                        .iter()
+                        .any(|ra| fb.to_lowercase() == ra.to_lowercase())
                 });
                 if contradictory {
                     rule_conflicts.push(format!("{} vs {}", a.id, b.id));
@@ -925,12 +960,39 @@ pub fn preflight_canon_constraints(
     // P18: Build structured conflict set
     let conflict_set = build_conflict_set(constraints);
 
+    // P18: Build evidence type breakdown from assets
+    let mut raw_evidence = 0usize;
+    let mut approved_rule = 0usize;
+    let mut proposed_rule = 0usize;
+    let mut author_instruction = 0usize;
+    for asset in assets {
+        match asset.approval_status {
+            ApprovalStatus::Proposed => proposed_rule += 1,
+            ApprovalStatus::Approved => approved_rule += 1,
+            ApprovalStatus::Rejected => raw_evidence += 1,
+        }
+    }
+    // Count author instructions from memory canon entities if any
+    // (this is a placeholder; actual author instructions would come from a separate source)
+    // For now, we count constraints that have no matching asset as potential instructions
+    for constraint in constraints {
+        if !assets.iter().any(|a| a.id == constraint.source_asset_id) {
+            author_instruction += 1;
+        }
+    }
+
     PreflightCanonResult {
         warnings,
         action_codes,
         missing_key_canon,
         rule_conflicts,
         conflict_set,
+        evidence_type_breakdown: EvidenceTypeBreakdown {
+            raw_evidence,
+            approved_rule,
+            proposed_rule,
+            author_instruction,
+        },
     }
 }
 
@@ -1100,13 +1162,34 @@ pub fn compile_scene_contract(
 /// Check chapter text against world consistency constraints.
 /// Returns violations for forbidden claims, skipped required costs, hierarchy limits,
 /// and exception rules that are violated without justification.
+/// P17: Also checks new_information_density against prior summaries.
 pub fn validate_world_consistency(
     chapter_text: &str,
     contract: &SceneContract,
     assets: &[WorldAsset],
+    prior_summaries: &[String],
 ) -> Vec<WorldConsistencyViolation> {
     let mut violations = Vec::new();
     let text_lower = chapter_text.to_lowercase();
+
+    // P17: New information density bound to world consistency
+    if !prior_summaries.is_empty() {
+        let nid_score = compute_new_information_density_score(chapter_text, prior_summaries);
+        if nid_score < 0.5 {
+            violations.push(WorldConsistencyViolation {
+                constraint_id: "LOW_INFORMATION_DENSITY".to_string(),
+                severity: ConstraintSeverity::Warning,
+                kind: CanonConstraintKind::ForbiddenClaim,
+                message: format!(
+                    "新信息密度 {:.2} 低于阈值 0.5：章节大量重复前序内容而未提供新证据/选择/后果",
+                    nid_score
+                ),
+                text_excerpt: chapter_text.chars().take(120).collect(),
+                evidence: Vec::new(),
+                suggested_fix: "增加具体的新信息、角色决定或后果，减少纯回顾性叙述".to_string(),
+            });
+        }
+    }
 
     // P15: First pass — collect all exception rules and their justifications
     let mut approved_exceptions: Vec<(String, Vec<String>)> = Vec::new();
@@ -1117,10 +1200,8 @@ pub fn validate_world_consistency(
                 .iter()
                 .any(|req| text_lower.contains(&req.to_lowercase()));
             if exception_justified {
-                approved_exceptions.push((
-                    constraint.id.clone(),
-                    constraint.forbidden_terms.clone(),
-                ));
+                approved_exceptions
+                    .push((constraint.id.clone(), constraint.forbidden_terms.clone()));
             }
         }
     }
@@ -1137,9 +1218,12 @@ pub fn validate_world_consistency(
                 for term in &constraint.forbidden_terms {
                     if text_lower.contains(&term.to_lowercase()) {
                         // P15: Check if an approved exception covers this violation
-                        let covered_by_exception = approved_exceptions.iter().any(|(_, exempted)| {
-                            exempted.iter().any(|e| term.to_lowercase().contains(&e.to_lowercase()))
-                        });
+                        let covered_by_exception =
+                            approved_exceptions.iter().any(|(_, exempted)| {
+                                exempted
+                                    .iter()
+                                    .any(|e| term.to_lowercase().contains(&e.to_lowercase()))
+                            });
                         if covered_by_exception {
                             continue;
                         }
@@ -1195,9 +1279,10 @@ pub fn validate_world_consistency(
                     // P15: Check if an approved exception covers this hierarchy violation
                     let covered_by_exception = approved_exceptions.iter().any(|(_, exempted)| {
                         exempted.iter().any(|e| {
-                            constraint.forbidden_terms.iter().any(|ft| {
-                                ft.to_lowercase().contains(&e.to_lowercase())
-                            })
+                            constraint
+                                .forbidden_terms
+                                .iter()
+                                .any(|ft| ft.to_lowercase().contains(&e.to_lowercase()))
                         })
                     });
                     if covered_by_exception {
@@ -1250,9 +1335,12 @@ pub fn validate_world_consistency(
                 for term in &constraint.forbidden_terms {
                     if text_lower.contains(&term.to_lowercase()) {
                         // Check if covered by exception
-                        let covered_by_exception = approved_exceptions.iter().any(|(_, exempted)| {
-                            exempted.iter().any(|e| term.to_lowercase().contains(&e.to_lowercase()))
-                        });
+                        let covered_by_exception =
+                            approved_exceptions.iter().any(|(_, exempted)| {
+                                exempted
+                                    .iter()
+                                    .any(|e| term.to_lowercase().contains(&e.to_lowercase()))
+                            });
                         if covered_by_exception {
                             continue;
                         }
@@ -1273,6 +1361,41 @@ pub fn validate_world_consistency(
     }
 
     violations
+}
+
+/// P17: Compute new information density score without creating a full metric result.
+/// Duplicates the core logic from craft_quality::metric_new_information_density
+/// to avoid circular dependencies.
+fn compute_new_information_density_score(text: &str, prior_summaries: &[String]) -> f32 {
+    let prior_text = prior_summaries.join(" ");
+    let prior_words: std::collections::HashSet<String> = prior_text
+        .split(|c: char| c.is_whitespace() || c == '，' || c == '。' || c == '、')
+        .filter(|w| w.chars().count() >= 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    let current_words: Vec<String> = text
+        .split(|c: char| c.is_whitespace() || c == '，' || c == '。' || c == '、')
+        .filter(|w| w.chars().count() >= 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    if current_words.is_empty() {
+        return 0.0;
+    }
+
+    let novel_count = current_words
+        .iter()
+        .filter(|w| !prior_words.contains(*w))
+        .count();
+    let ratio = novel_count as f32 / current_words.len() as f32;
+    if ratio >= 0.5 {
+        0.9
+    } else if ratio >= 0.3 {
+        0.6
+    } else {
+        0.3
+    }
 }
 
 fn extract_excerpt(text: &str, keyword: &str) -> String {
@@ -1582,7 +1705,11 @@ pub fn extract_markdown_lists(text: &str) -> Vec<(String, String, u32)> {
             .or_else(|| trimmed.strip_prefix("* "))
             .or_else(|| trimmed.strip_prefix("+ "))
         {
-            items.push(("-".to_string(), stripped.trim().to_string(), (line_num + 1) as u32));
+            items.push((
+                "-".to_string(),
+                stripped.trim().to_string(),
+                (line_num + 1) as u32,
+            ));
         }
         // Ordered lists: 1., 2., etc.
         else if let Some(pos) = trimmed.find(". ") {
@@ -1778,10 +1905,7 @@ pub fn merge_typed_asset(
             t.confidence = i.confidence;
         }
         _ => {
-            return Err(format!(
-                "Cannot merge: kind mismatch for '{}'",
-                asset_id
-            ));
+            return Err(format!("Cannot merge: kind mismatch for '{}'", asset_id));
         }
     }
     Ok(ApprovalActionResult {
@@ -1998,10 +2122,7 @@ pub fn create_llm_proposal(
 ///
 /// No work-specific terminology is hardcoded; the rules are taken verbatim
 /// from the Markdown text.
-pub fn parse_world_rules_from_markdown(
-    source_path: &str,
-    text: &str,
-) -> Vec<WorldRule> {
+pub fn parse_world_rules_from_markdown(source_path: &str, text: &str) -> Vec<WorldRule> {
     let mut rules = Vec::new();
     let mut current_category: Option<String> = None;
 
@@ -2025,7 +2146,9 @@ pub fn parse_world_rules_from_markdown(
                 continue;
             }
 
-            let category = current_category.clone().unwrap_or_else(|| "General".to_string());
+            let category = current_category
+                .clone()
+                .unwrap_or_else(|| "General".to_string());
             let rule_id = format!(
                 "rule-{}-{}",
                 sanitize_id_fragment(&category),
@@ -2143,9 +2266,16 @@ mod tests {
     fn forbidden_claim_detected() {
         let asset = sample_asset("forbidden", WorldAssetKind::Rule, true);
         let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
-        let contract =
-            compile_scene_contract("ch1", "test", std::slice::from_ref(&asset), &constraints, &[], None);
-        let violations = validate_world_consistency("this text contains tag1", &contract, &[asset]);
+        let contract = compile_scene_contract(
+            "ch1",
+            "test",
+            std::slice::from_ref(&asset),
+            &constraints,
+            &[],
+            None,
+        );
+        let violations =
+            validate_world_consistency("this text contains tag1", &contract, &[asset], &[]);
         assert!(!violations.is_empty());
         assert_eq!(violations[0].kind, CanonConstraintKind::ForbiddenClaim);
     }
@@ -2154,9 +2284,16 @@ mod tests {
     fn proposed_rule_never_hard_violation() {
         let asset = sample_asset("proposed_rule", WorldAssetKind::Rule, false);
         let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
-        let contract =
-            compile_scene_contract("ch1", "test", std::slice::from_ref(&asset), &constraints, &[], None);
-        let violations = validate_world_consistency("this text contains tag1", &contract, &[asset]);
+        let contract = compile_scene_contract(
+            "ch1",
+            "test",
+            std::slice::from_ref(&asset),
+            &constraints,
+            &[],
+            None,
+        );
+        let violations =
+            validate_world_consistency("this text contains tag1", &contract, &[asset], &[]);
         assert!(!violations.is_empty());
         assert_eq!(violations[0].severity, ConstraintSeverity::Warning);
     }
@@ -2189,13 +2326,18 @@ mod tests {
             continuity_anchors: Vec::new(),
             required_costs: Vec::new(),
         };
-        let violations = validate_world_consistency("he used fire", &contract, std::slice::from_ref(&asset));
+        let violations = validate_world_consistency(
+            "he used fire",
+            &contract,
+            std::slice::from_ref(&asset),
+            &[],
+        );
         assert!(!violations.is_empty());
         assert_eq!(violations[0].kind, CanonConstraintKind::RequiredCost);
 
         // When cost is paid, no violation
         let no_violations =
-            validate_world_consistency("he used fire and paid mana", &contract, &[asset]);
+            validate_world_consistency("he used fire and paid mana", &contract, &[asset], &[]);
         assert!(no_violations.is_empty());
     }
 
@@ -2231,6 +2373,7 @@ mod tests {
             "他只是一个炼气期弟子，却催动了金丹法宝",
             &contract,
             &[asset],
+            &[],
         );
         assert!(!violations.is_empty());
         assert_eq!(violations[0].kind, CanonConstraintKind::HierarchyLimit);
@@ -2240,10 +2383,20 @@ mod tests {
     fn violation_includes_source_evidence() {
         let asset = sample_asset("forbidden", WorldAssetKind::Rule, true);
         let constraints = compile_canon_constraints(std::slice::from_ref(&asset));
-        let contract =
-            compile_scene_contract("ch1", "test", std::slice::from_ref(&asset), &constraints, &[], None);
-        let violations =
-            validate_world_consistency("this text contains tag1", &contract, std::slice::from_ref(&asset));
+        let contract = compile_scene_contract(
+            "ch1",
+            "test",
+            std::slice::from_ref(&asset),
+            &constraints,
+            &[],
+            None,
+        );
+        let violations = validate_world_consistency(
+            "this text contains tag1",
+            &contract,
+            std::slice::from_ref(&asset),
+            &[],
+        );
         assert!(!violations.is_empty());
         // Evidence should be preserved from constraint -> violation
         assert!(
@@ -2466,7 +2619,10 @@ Normal paragraph.
         assert_eq!(items[2], ("-".to_string(), "Star item".to_string(), 3));
         assert_eq!(items[3], ("-".to_string(), "Plus item".to_string(), 4));
         assert_eq!(items[4], ("1.".to_string(), "Ordered first".to_string(), 5));
-        assert_eq!(items[5], ("2.".to_string(), "Ordered second".to_string(), 6));
+        assert_eq!(
+            items[5],
+            ("2.".to_string(), "Ordered second".to_string(), 6)
+        );
     }
 
     #[test]
@@ -2710,8 +2866,12 @@ Some text.
         let approved_high = sample_entity("hero", true, 0.9);
         let approved_low = sample_entity("npc", true, 0.5);
         let proposed = sample_entity("ghost", false, 0.9);
-        index.add_asset(TypedWorldAsset::Entity(approved_high)).unwrap();
-        index.add_asset(TypedWorldAsset::Entity(approved_low)).unwrap();
+        index
+            .add_asset(TypedWorldAsset::Entity(approved_high))
+            .unwrap();
+        index
+            .add_asset(TypedWorldAsset::Entity(approved_low))
+            .unwrap();
         index.add_asset(TypedWorldAsset::Entity(proposed)).unwrap();
 
         let approved = index.approved_canon_assets(0.7);
@@ -2901,9 +3061,7 @@ Some text.
 
     #[test]
     fn pipeline_loads_world_bible_index_and_produces_scene_contract() {
-        use crate::writer_agent::world_bible::{
-            compile_scene_contract, compile_canon_constraints,
-        };
+        use crate::writer_agent::world_bible::{compile_canon_constraints, compile_scene_contract};
 
         let mut index = WorldBibleIndex::new("pipeline-test");
 
@@ -2938,17 +3096,15 @@ Some text.
             }
         }
 
-        let world_assets: Vec<crate::writer_agent::world_bible::WorldAsset> = index
-            .assets
-            .iter()
-            .map(|a| a.to_world_asset())
-            .collect();
+        let world_assets: Vec<crate::writer_agent::world_bible::WorldAsset> =
+            index.assets.iter().map(|a| a.to_world_asset()).collect();
 
-        let constraints = compile_canon_constraints(&world_assets
-            .iter()
-            .filter(|a| a.approval_status.is_approved())
-            .cloned()
-            .collect::<Vec<_>>()
+        let constraints = compile_canon_constraints(
+            &world_assets
+                .iter()
+                .filter(|a| a.approval_status.is_approved())
+                .cloned()
+                .collect::<Vec<_>>(),
         );
 
         let scene_contract = compile_scene_contract(
@@ -2993,7 +3149,10 @@ Some text.
             required_terms: vec!["远古长老特许令".to_string()],
             severity: ConstraintSeverity::Hard,
             source_asset_id: "exception-asset-001".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#exception", "特许令可豁免禁术")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#exception",
+                "特许令可豁免禁术",
+            )],
             applies_to: vec!["林墨".to_string()],
             expected_consequence: String::new(),
         };
@@ -3006,7 +3165,10 @@ Some text.
             required_terms: Vec::new(),
             severity: ConstraintSeverity::Hard,
             source_asset_id: "forbidden-asset-001".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#taboo", "禁忌法术不可使用")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#taboo",
+                "禁忌法术不可使用",
+            )],
             applies_to: Vec::new(),
             expected_consequence: "世界崩溃".to_string(),
         };
@@ -3042,7 +3204,7 @@ Some text.
                 tags: Vec::new(),
             },
         ];
-        let violations = validate_world_consistency(text, &contract, &assets);
+        let violations = validate_world_consistency(text, &contract, &assets, &[]);
         assert!(
             violations.is_empty(),
             "exception rule should suppress forbidden claim violation, got: {:?}",
@@ -3062,7 +3224,10 @@ Some text.
             required_terms: vec!["远古长老特许令".to_string()],
             severity: ConstraintSeverity::Hard,
             source_asset_id: "exception-asset-001".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#exception", "特许令可豁免禁术")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#exception",
+                "特许令可豁免禁术",
+            )],
             applies_to: vec!["林墨".to_string()],
             expected_consequence: String::new(),
         };
@@ -3075,7 +3240,10 @@ Some text.
             required_terms: Vec::new(),
             severity: ConstraintSeverity::Hard,
             source_asset_id: "forbidden-asset-001".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#taboo", "禁忌法术不可使用")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#taboo",
+                "禁忌法术不可使用",
+            )],
             applies_to: Vec::new(),
             expected_consequence: "世界崩溃".to_string(),
         };
@@ -3111,7 +3279,7 @@ Some text.
                 tags: Vec::new(),
             },
         ];
-        let violations = validate_world_consistency(text, &contract, &assets);
+        let violations = validate_world_consistency(text, &contract, &assets, &[]);
         assert!(
             !violations.is_empty(),
             "without justification, forbidden claim should still be a violation"
@@ -3131,7 +3299,10 @@ Some text.
             required_terms: vec!["代价".to_string(), "寿元".to_string()],
             severity: ConstraintSeverity::Hard,
             source_asset_id: "required-asset-001".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#cost", "寒影剑出鞘必噬寿元")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#cost",
+                "寒影剑出鞘必噬寿元",
+            )],
             applies_to: Vec::new(),
             expected_consequence: String::new(),
         };
@@ -3156,8 +3327,11 @@ Some text.
             approval_status: ApprovalStatus::Approved,
             tags: Vec::new(),
         }];
-        let violations = validate_world_consistency(text, &contract, &assets);
-        assert!(!violations.is_empty(), "required fact violation should be detected");
+        let violations = validate_world_consistency(text, &contract, &assets, &[]);
+        assert!(
+            !violations.is_empty(),
+            "required fact violation should be detected"
+        );
         assert_eq!(violations[0].kind, CanonConstraintKind::RequiredFact);
         assert!(
             violations[0].message.contains("代价") || violations[0].message.contains("寿元"),
@@ -3177,7 +3351,10 @@ Some text.
             required_terms: vec!["代价".to_string(), "寿元".to_string()],
             severity: ConstraintSeverity::Hard,
             source_asset_id: "required-asset-001".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#cost", "寒影剑出鞘必噬寿元")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#cost",
+                "寒影剑出鞘必噬寿元",
+            )],
             applies_to: Vec::new(),
             expected_consequence: String::new(),
         };
@@ -3202,8 +3379,11 @@ Some text.
             approval_status: ApprovalStatus::Approved,
             tags: Vec::new(),
         }];
-        let violations = validate_world_consistency(text, &contract, &assets);
-        assert!(violations.is_empty(), "all required terms present → no violation");
+        let violations = validate_world_consistency(text, &contract, &assets, &[]);
+        assert!(
+            violations.is_empty(),
+            "all required terms present → no violation"
+        );
     }
 
     #[test]
@@ -3218,7 +3398,10 @@ Some text.
             required_terms: Vec::new(),
             severity: ConstraintSeverity::Hard,
             source_asset_id: "proposed-ancient-pill".to_string(),
-            evidence: vec![sample_evidence("src://world_bible.md#pill", "古籍残卷记载逆转寿元")],
+            evidence: vec![sample_evidence(
+                "src://world_bible.md#pill",
+                "古籍残卷记载逆转寿元",
+            )],
             applies_to: Vec::new(),
             expected_consequence: String::new(),
         };
@@ -3244,7 +3427,7 @@ Some text.
             approval_status: ApprovalStatus::Proposed,
             tags: Vec::new(),
         }];
-        let violations = validate_world_consistency(text, &contract, &assets);
+        let violations = validate_world_consistency(text, &contract, &assets, &[]);
         assert!(!violations.is_empty(), "violation should be detected");
         assert_eq!(
             violations[0].severity,
@@ -3287,13 +3470,11 @@ Some text.
                 expected_consequence: String::new(),
             },
         ];
-        let result = preflight_canon_constraints(
-            &assets,
-            &constraints,
-            "test proposed mission",
-        );
+        let result = preflight_canon_constraints(&assets, &constraints, "test proposed mission");
         assert!(
-            result.action_codes.contains(&"approve_world_rule".to_string()),
+            result
+                .action_codes
+                .contains(&"approve_world_rule".to_string()),
             "should suggest approving world rule for proposed constraint"
         );
         assert!(
@@ -3333,17 +3514,18 @@ Some text.
                 expected_consequence: String::new(),
             },
         ];
-        let result = preflight_canon_constraints(
-            &assets,
-            &constraints,
-            "test fire mission",
-        );
+        let result = preflight_canon_constraints(&assets, &constraints, "test fire mission");
         assert!(
-            result.action_codes.contains(&"resolve_rule_conflict".to_string()),
+            result
+                .action_codes
+                .contains(&"resolve_rule_conflict".to_string()),
             "should detect conflict between c-a and c-b"
         );
         assert!(
-            result.rule_conflicts.iter().any(|c| c.contains("c-a") && c.contains("c-b")),
+            result
+                .rule_conflicts
+                .iter()
+                .any(|c| c.contains("c-a") && c.contains("c-b")),
             "should report c-a vs c-b conflict"
         );
     }
@@ -3385,7 +3567,9 @@ Some text.
         assert_eq!(conflict_set[0].constraint_a_id, "c-forbid");
         assert_eq!(conflict_set[0].constraint_b_id, "c-require");
         assert!(
-            conflict_set[0].overlapping_terms.contains(&"fire".to_string()),
+            conflict_set[0]
+                .overlapping_terms
+                .contains(&"fire".to_string()),
             "should record overlapping trigger terms"
         );
         assert!(
@@ -3425,7 +3609,10 @@ Some text.
             },
         ];
         let conflict_set = build_conflict_set(&constraints);
-        assert!(conflict_set.is_empty(), "no overlapping triggers → no conflicts");
+        assert!(
+            conflict_set.is_empty(),
+            "no overlapping triggers → no conflicts"
+        );
     }
 
     #[test]
@@ -3462,12 +3649,12 @@ Some text.
                 expected_consequence: String::new(),
             },
         ];
-        let result = preflight_canon_constraints(
-            &assets,
-            &constraints,
-            "test fire mission",
+        let result = preflight_canon_constraints(&assets, &constraints, "test fire mission");
+        assert_eq!(
+            result.conflict_set.len(),
+            1,
+            "preflight should populate conflict_set"
         );
-        assert_eq!(result.conflict_set.len(), 1, "preflight should populate conflict_set");
         assert_eq!(result.conflict_set[0].constraint_a_id, "c-forbid");
         assert_eq!(result.conflict_set[0].constraint_b_id, "c-require");
     }
@@ -3530,7 +3717,10 @@ Some text.
     fn term_misuse_empty_when_no_terms() {
         let canon_terms: Vec<CanonTerm> = vec![];
         let violations = validate_term_misuse("some random text", &canon_terms);
-        assert!(violations.is_empty(), "no canon terms → no misuse violations");
+        assert!(
+            violations.is_empty(),
+            "no canon terms → no misuse violations"
+        );
     }
 
     #[test]

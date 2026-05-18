@@ -157,22 +157,31 @@ impl From<&LongTaskCheckpoint> for agent_harness_core::execution_plan::AgentChec
 
 impl From<agent_harness_core::execution_plan::AgentCheckpoint> for LongTaskCheckpoint {
     fn from(cp: agent_harness_core::execution_plan::AgentCheckpoint) -> Self {
-        let mut payload = cp.safe_resume_payload.unwrap_or_else(|| serde_json::json!({}));
+        let mut payload = cp
+            .safe_resume_payload
+            .unwrap_or_else(|| serde_json::json!({}));
         if let serde_json::Value::Object(ref mut map) = payload {
-            map.insert("chapter_title".to_string(), serde_json::json!(cp.task_id.clone()));
+            map.insert(
+                "chapter_title".to_string(),
+                serde_json::json!(cp.task_id.clone()),
+            );
             map.insert("request_id".to_string(), serde_json::json!(cp.task_id));
             map.insert("step".to_string(), serde_json::json!(cp.step_id));
         }
         Self {
             checkpoint_id: cp.checkpoint_id,
             task_id: cp.task_id,
-            task_kind: cp.task_kind.unwrap_or_else(|| "agent_checkpoint".to_string()),
+            task_kind: cp
+                .task_kind
+                .unwrap_or_else(|| "agent_checkpoint".to_string()),
             current_step: cp.step_id,
             safe_resume_payload: payload,
             budget_spent_micros: cp.budget_spent,
             artifact_refs: cp.artifact_refs,
             source: cp.source.unwrap_or_default(),
-            created_at_ms: cp.created_at_ms.unwrap_or_else(crate::agent_runtime::now_ms),
+            created_at_ms: cp
+                .created_at_ms
+                .unwrap_or_else(crate::agent_runtime::now_ms),
         }
     }
 }
@@ -803,7 +812,9 @@ mod tests {
         assert_eq!(lt.created_at_ms, 1_700_000_000_000);
         // safe_resume_payload should have merged fields
         assert_eq!(
-            lt.safe_resume_payload.get("chapter_title").and_then(|v| v.as_str()),
+            lt.safe_resume_payload
+                .get("chapter_title")
+                .and_then(|v| v.as_str()),
             Some("task-1")
         );
         assert_eq!(

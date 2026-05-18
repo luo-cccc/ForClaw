@@ -203,7 +203,10 @@ All `tools/call` structured errors include an `error.kind` field for programmati
 | `validation` | Invalid parameters or missing required fields | `chapterTitle is required` |
 | `provider` | LLM provider failure (HTTP errors, rate limits, timeouts) | `LLM call failed (429)` |
 | `permission` | Tool denied by permission policy | `Tool requires explicit approval` |
-| `backend` | All other internal errors | `Storage read failed` |
+| `budget` | Budget ceiling or approval limit exceeded | `Provider budget exceeded` |
+| `context_overflow` | Request would exceed model context window | `Context overflow after tool schema expansion` |
+| `storage` | Durable project storage failure | `Storage read failed` |
+| `backend` | All other internal errors | `Internal dispatch failed` |
 
 Callers should use `error.kind` (not `error.message`) for retry/recovery logic.
 

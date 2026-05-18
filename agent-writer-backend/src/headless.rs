@@ -938,12 +938,14 @@ impl HeadlessBackend {
                 if path.extension().and_then(|s| s.to_str()) == Some("md") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         let content_lower = content.to_lowercase();
-                        let has_trigger = constraint.trigger_terms.iter().any(|t| {
-                            content_lower.contains(&t.to_lowercase())
-                        });
-                        let has_forbidden = constraint.forbidden_terms.iter().any(|t| {
-                            content_lower.contains(&t.to_lowercase())
-                        });
+                        let has_trigger = constraint
+                            .trigger_terms
+                            .iter()
+                            .any(|t| content_lower.contains(&t.to_lowercase()));
+                        let has_forbidden = constraint
+                            .forbidden_terms
+                            .iter()
+                            .any(|t| content_lower.contains(&t.to_lowercase()));
                         if has_trigger || has_forbidden {
                             let title = path
                                 .file_stem()
@@ -2273,20 +2275,18 @@ Output ONLY the JSON object, no explanation outside. Example:
 
     pub fn resume_sprint(&self) -> Result<Option<SprintProgress>, String> {
         // Look up the latest batch_sprint checkpoint before acquiring the sprint lock.
-        let maybe_checkpoint = self
-            .lock_kernel()
-            .ok()
-            .and_then(|kernel| {
-                kernel
-                    .memory
-                    .read_latest_checkpoint(&self.project.id, "batch_sprint")
-                    .ok()
-                    .flatten()
-            });
+        let maybe_checkpoint = self.lock_kernel().ok().and_then(|kernel| {
+            kernel
+                .memory
+                .read_latest_checkpoint(&self.project.id, "batch_sprint")
+                .ok()
+                .flatten()
+        });
         self.mutate_sprint(|plan| {
             if let Some(checkpoint) = maybe_checkpoint {
                 crate::writer_agent::supervised_sprint::skip_saved_chapters_from_checkpoint(
-                    plan, &checkpoint,
+                    plan,
+                    &checkpoint,
                 );
             }
             resume_sprint(plan);
@@ -2481,11 +2481,7 @@ Output ONLY the JSON object, no explanation outside. Example:
             }
             CheckpointPhase::StepCompleted => {
                 if checkpoint.resume_policy == ResumePolicy::Rerun {
-                    (
-                        vec!["context_built".to_string()],
-                        "draft".to_string(),
-                        true,
-                    )
+                    (vec!["context_built".to_string()], "draft".to_string(), true)
                 } else {
                     (
                         vec!["context_built".to_string(), "draft_produced".to_string()],
@@ -6244,9 +6240,14 @@ mod tests {
     use super::*;
 
     fn temp_backend() -> HeadlessBackend {
+        let thread_id = format!("{:?}", std::thread::current().id())
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>();
         let temp_dir = std::env::temp_dir().join(format!(
-            "forge-test-{}-{}",
+            "forge-test-{}-{}-{}",
             std::process::id(),
+            thread_id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -6256,8 +6257,9 @@ mod tests {
         let config = HeadlessConfig {
             data_dir: temp_dir,
             project_id: Some(format!(
-                "test-proj-{}-{}",
+                "test-proj-{}-{}-{}",
                 std::process::id(),
+                thread_id,
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -6406,9 +6408,7 @@ mod tests {
     #[test]
     fn resume_agent_checkpoint_skip_policy() {
         let backend = temp_backend();
-        use agent_harness_core::execution_plan::{
-            AgentCheckpoint, CheckpointPhase, ResumePolicy,
-        };
+        use agent_harness_core::execution_plan::{AgentCheckpoint, CheckpointPhase, ResumePolicy};
         let cp = AgentCheckpoint {
             checkpoint_id: "acp-skip".to_string(),
             task_id: "task-skip".to_string(),
@@ -6429,10 +6429,15 @@ mod tests {
             created_at_ms: None,
         };
         let kernel = backend.lock_kernel().unwrap();
-        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        kernel
+            .memory
+            .insert_agent_checkpoint(&backend.project.id, &cp)
+            .unwrap();
         drop(kernel);
 
-        let plan = backend.resume_chapter_generation("acp-skip".to_string()).unwrap();
+        let plan = backend
+            .resume_chapter_generation("acp-skip".to_string())
+            .unwrap();
         assert!(plan.can_resume);
         assert_eq!(plan.checkpoint_id, "acp-skip");
         assert_eq!(plan.resume_from_step, "quality_report");
@@ -6442,9 +6447,7 @@ mod tests {
     #[test]
     fn resume_agent_checkpoint_rerun_policy() {
         let backend = temp_backend();
-        use agent_harness_core::execution_plan::{
-            AgentCheckpoint, CheckpointPhase, ResumePolicy,
-        };
+        use agent_harness_core::execution_plan::{AgentCheckpoint, CheckpointPhase, ResumePolicy};
         let cp = AgentCheckpoint {
             checkpoint_id: "acp-rerun".to_string(),
             task_id: "task-rerun".to_string(),
@@ -6465,10 +6468,15 @@ mod tests {
             created_at_ms: None,
         };
         let kernel = backend.lock_kernel().unwrap();
-        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        kernel
+            .memory
+            .insert_agent_checkpoint(&backend.project.id, &cp)
+            .unwrap();
         drop(kernel);
 
-        let plan = backend.resume_chapter_generation("acp-rerun".to_string()).unwrap();
+        let plan = backend
+            .resume_chapter_generation("acp-rerun".to_string())
+            .unwrap();
         assert!(plan.can_resume);
         assert_eq!(plan.checkpoint_id, "acp-rerun");
         // Rerun policy on save_prepared should re-do conflict check
@@ -6479,9 +6487,7 @@ mod tests {
     #[test]
     fn resume_agent_checkpoint_require_approval_policy() {
         let backend = temp_backend();
-        use agent_harness_core::execution_plan::{
-            AgentCheckpoint, CheckpointPhase, ResumePolicy,
-        };
+        use agent_harness_core::execution_plan::{AgentCheckpoint, CheckpointPhase, ResumePolicy};
         let cp = AgentCheckpoint {
             checkpoint_id: "acp-approval".to_string(),
             task_id: "task-approval".to_string(),
@@ -6502,10 +6508,15 @@ mod tests {
             created_at_ms: None,
         };
         let kernel = backend.lock_kernel().unwrap();
-        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        kernel
+            .memory
+            .insert_agent_checkpoint(&backend.project.id, &cp)
+            .unwrap();
         drop(kernel);
 
-        let plan = backend.resume_chapter_generation("acp-approval".to_string()).unwrap();
+        let plan = backend
+            .resume_chapter_generation("acp-approval".to_string())
+            .unwrap();
         assert!(plan.can_resume);
         assert_eq!(plan.checkpoint_id, "acp-approval");
         assert!(plan.warnings.iter().any(|w| w.contains("approval")));
@@ -6514,9 +6525,7 @@ mod tests {
     #[test]
     fn resume_agent_checkpoint_abort_policy() {
         let backend = temp_backend();
-        use agent_harness_core::execution_plan::{
-            AgentCheckpoint, CheckpointPhase, ResumePolicy,
-        };
+        use agent_harness_core::execution_plan::{AgentCheckpoint, CheckpointPhase, ResumePolicy};
         let cp = AgentCheckpoint {
             checkpoint_id: "acp-abort".to_string(),
             task_id: "task-abort".to_string(),
@@ -6537,10 +6546,15 @@ mod tests {
             created_at_ms: None,
         };
         let kernel = backend.lock_kernel().unwrap();
-        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        kernel
+            .memory
+            .insert_agent_checkpoint(&backend.project.id, &cp)
+            .unwrap();
         drop(kernel);
 
-        let plan = backend.resume_chapter_generation("acp-abort".to_string()).unwrap();
+        let plan = backend
+            .resume_chapter_generation("acp-abort".to_string())
+            .unwrap();
         assert!(!plan.can_resume);
         assert!(plan.warnings.iter().any(|w| w.contains("not recoverable")));
     }
@@ -6548,9 +6562,7 @@ mod tests {
     #[test]
     fn resume_agent_checkpoint_provider_call_before_rerun() {
         let backend = temp_backend();
-        use agent_harness_core::execution_plan::{
-            AgentCheckpoint, CheckpointPhase, ResumePolicy,
-        };
+        use agent_harness_core::execution_plan::{AgentCheckpoint, CheckpointPhase, ResumePolicy};
         let cp = AgentCheckpoint {
             checkpoint_id: "acp-provider-rerun".to_string(),
             task_id: "task-provider".to_string(),
@@ -6571,10 +6583,15 @@ mod tests {
             created_at_ms: None,
         };
         let kernel = backend.lock_kernel().unwrap();
-        kernel.memory.insert_agent_checkpoint(&backend.project.id, &cp).unwrap();
+        kernel
+            .memory
+            .insert_agent_checkpoint(&backend.project.id, &cp)
+            .unwrap();
         drop(kernel);
 
-        let plan = backend.resume_chapter_generation("acp-provider-rerun".to_string()).unwrap();
+        let plan = backend
+            .resume_chapter_generation("acp-provider-rerun".to_string())
+            .unwrap();
         assert!(plan.can_resume);
         assert_eq!(plan.checkpoint_id, "acp-provider-rerun");
         // Rerun policy on ProviderCallBefore should resume from draft
@@ -6585,9 +6602,7 @@ mod tests {
     #[test]
     fn resume_sprint_skips_saved_chapters_from_checkpoint() {
         let backend = temp_backend();
-        let titles: Vec<String> = (1..=5)
-            .map(|i| format!("Chapter {}", i))
-            .collect();
+        let titles: Vec<String> = (1..=5).map(|i| format!("Chapter {}", i)).collect();
         let plan = backend
             .start_sprint(StartSprintRequest {
                 chapter_titles: titles.clone(),

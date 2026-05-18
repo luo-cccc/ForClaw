@@ -674,8 +674,12 @@ fn eval_matrix_has_30_plus_world_tasks() {
 
 #[test]
 fn eval_mystery_world_assets_fixture_loads() {
-    use agent_writer_lib::writer_agent::world_bible::{compile_canon_constraints, WorldAsset, WorldAssetKind};
-    let path = fixture_dir().join("mystery_world").join("world_assets.json");
+    use agent_writer_lib::writer_agent::world_bible::{
+        compile_canon_constraints, WorldAsset, WorldAssetKind,
+    };
+    let path = fixture_dir()
+        .join("mystery_world")
+        .join("world_assets.json");
     let text = std::fs::read_to_string(path).unwrap();
     let assets: Vec<WorldAsset> = serde_json::from_str(&text).unwrap();
     assert!(
@@ -689,17 +693,30 @@ fn eval_mystery_world_assets_fixture_loads() {
         "should compile at least one constraint from mystery rules"
     );
     // At least 5 typed rules
-    let rules: Vec<_> = assets.iter().filter(|a| a.kind == WorldAssetKind::Rule).collect();
-    assert!(rules.len() >= 5, "mystery should have at least 5 rules, got {}", rules.len());
+    let rules: Vec<_> = assets
+        .iter()
+        .filter(|a| a.kind == WorldAssetKind::Rule)
+        .collect();
+    assert!(
+        rules.len() >= 5,
+        "mystery should have at least 5 rules, got {}",
+        rules.len()
+    );
     // At least 3 entities
-    let entities: Vec<_> = assets.iter().filter(|a| a.kind == WorldAssetKind::Entity).collect();
+    let entities: Vec<_> = assets
+        .iter()
+        .filter(|a| a.kind == WorldAssetKind::Entity)
+        .collect();
     assert!(
         entities.len() >= 3,
         "mystery should have at least 3 entities, got {}",
         entities.len()
     );
     // At least 2 relations
-    let relations: Vec<_> = assets.iter().filter(|a| a.kind == WorldAssetKind::Relation).collect();
+    let relations: Vec<_> = assets
+        .iter()
+        .filter(|a| a.kind == WorldAssetKind::Relation)
+        .collect();
     assert!(
         relations.len() >= 2,
         "mystery should have at least 2 relations, got {}",
@@ -745,7 +762,10 @@ fn run_extraction_eval_validates_markdown_to_world_asset() {
     for rule in &rules {
         assert!(!rule.source_ref.source_id.is_empty());
         assert!(!rule.source_ref.excerpt.is_empty());
-        assert_eq!(rule.approval_status, agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Proposed);
+        assert_eq!(
+            rule.approval_status,
+            agent_writer_lib::writer_agent::world_bible::ApprovalStatus::Proposed
+        );
     }
 }
 
@@ -838,10 +858,7 @@ fn eval_canon_constraint_detects_forbidden_action_violation() {
         .into_iter()
         .filter(|t| t.task == "canon_constraint")
         .collect();
-    assert!(
-        !tasks.is_empty(),
-        "should have canon_constraint tasks"
-    );
+    assert!(!tasks.is_empty(), "should have canon_constraint tasks");
 
     for task in tasks {
         let expected = &task.expected;
@@ -854,7 +871,10 @@ fn eval_canon_constraint_detects_forbidden_action_violation() {
             "ForbiddenAction" => {
                 let forbidden_term = expected["forbidden_term"].as_str().unwrap();
                 CanonConstraint {
-                    id: expected["expected_constraint_id"].as_str().unwrap_or("test").to_string(),
+                    id: expected["expected_constraint_id"]
+                        .as_str()
+                        .unwrap_or("test")
+                        .to_string(),
                     kind: CanonConstraintKind::ForbiddenAction,
                     summary: format!("禁止{}", forbidden_term),
                     trigger_terms: vec![forbidden_term.to_string()],
@@ -954,7 +974,7 @@ fn eval_canon_constraint_detects_forbidden_action_violation() {
             tags: Vec::new(),
         }];
 
-        let violations = validate_world_consistency(chapter_text, &contract, &assets);
+        let violations = validate_world_consistency(chapter_text, &contract, &assets, &[]);
         let detected = !violations.is_empty();
 
         assert_eq!(
@@ -1023,12 +1043,217 @@ fn eval_canon_constraint_unapproved_source_is_warning_not_hard() {
         tags: Vec::new(),
     }];
 
-    let violations = validate_world_consistency(text, &contract, &assets);
+    let violations = validate_world_consistency(text, &contract, &assets, &[]);
     assert!(!violations.is_empty(), "should detect violation");
     assert_eq!(
         violations[0].severity,
         ConstraintSeverity::Warning,
         "unapproved source should downgrade to Warning"
+    );
+}
+
+// ── P18: Context Pack Evidence-Type Taxonomy ──
+
+#[test]
+fn context_pack_tags_proposed_rule_correctly() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        ApprovalStatus, EvidenceRef, WorldAsset, WorldAssetKind,
+    };
+    let asset = WorldAsset {
+        id: "proposed-rule-001".to_string(),
+        kind: WorldAssetKind::Rule,
+        name: "Proposed Rule".to_string(),
+        summary: "A proposed world rule".to_string(),
+        evidence: vec![EvidenceRef {
+            source_id: "test".to_string(),
+            source_path: None,
+            start_line: None,
+            end_line: None,
+            excerpt: "test".to_string(),
+            confidence: 0.95,
+        }],
+        approval_status: ApprovalStatus::Proposed,
+        tags: Vec::new(),
+    };
+    // Proposed asset should map to TAXONOMY_WORLD_PROPOSED_RULE
+    let taxonomy = match asset.approval_status {
+        ApprovalStatus::Proposed => agent_harness_core::TAXONOMY_WORLD_PROPOSED_RULE,
+        ApprovalStatus::Approved => agent_harness_core::TAXONOMY_WORLD_APPROVED_RULE,
+        ApprovalStatus::Rejected => agent_harness_core::TAXONOMY_WORLD_RAW_EVIDENCE,
+    };
+    assert_eq!(taxonomy, agent_harness_core::TAXONOMY_WORLD_PROPOSED_RULE);
+}
+
+#[test]
+fn context_pack_tags_approved_rule_correctly() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        ApprovalStatus, EvidenceRef, WorldAsset, WorldAssetKind,
+    };
+    let asset = WorldAsset {
+        id: "approved-rule-001".to_string(),
+        kind: WorldAssetKind::Rule,
+        name: "Approved Rule".to_string(),
+        summary: "An approved world rule".to_string(),
+        evidence: vec![EvidenceRef {
+            source_id: "test".to_string(),
+            source_path: None,
+            start_line: None,
+            end_line: None,
+            excerpt: "test".to_string(),
+            confidence: 0.95,
+        }],
+        approval_status: ApprovalStatus::Approved,
+        tags: Vec::new(),
+    };
+    let taxonomy = match asset.approval_status {
+        ApprovalStatus::Proposed => agent_harness_core::TAXONOMY_WORLD_PROPOSED_RULE,
+        ApprovalStatus::Approved => agent_harness_core::TAXONOMY_WORLD_APPROVED_RULE,
+        ApprovalStatus::Rejected => agent_harness_core::TAXONOMY_WORLD_RAW_EVIDENCE,
+    };
+    assert_eq!(taxonomy, agent_harness_core::TAXONOMY_WORLD_APPROVED_RULE);
+}
+
+#[test]
+fn preflight_shows_evidence_type_breakdown() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        compile_canon_constraints, preflight_canon_constraints, ApprovalStatus, EvidenceRef,
+        WorldAsset, WorldAssetKind,
+    };
+    let assets = vec![
+        WorldAsset {
+            id: "approved-1".to_string(),
+            kind: WorldAssetKind::Rule,
+            name: "Approved Rule".to_string(),
+            summary: "summary".to_string(),
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_string(),
+                source_path: None,
+                start_line: None,
+                end_line: None,
+                excerpt: "test".to_string(),
+                confidence: 0.95,
+            }],
+            approval_status: ApprovalStatus::Approved,
+            tags: Vec::new(),
+        },
+        WorldAsset {
+            id: "proposed-1".to_string(),
+            kind: WorldAssetKind::Rule,
+            name: "Proposed Rule".to_string(),
+            summary: "summary".to_string(),
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_string(),
+                source_path: None,
+                start_line: None,
+                end_line: None,
+                excerpt: "test".to_string(),
+                confidence: 0.95,
+            }],
+            approval_status: ApprovalStatus::Proposed,
+            tags: Vec::new(),
+        },
+        WorldAsset {
+            id: "rejected-1".to_string(),
+            kind: WorldAssetKind::Entity,
+            name: "Rejected Entity".to_string(),
+            summary: "summary".to_string(),
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_string(),
+                source_path: None,
+                start_line: None,
+                end_line: None,
+                excerpt: "test".to_string(),
+                confidence: 0.95,
+            }],
+            approval_status: ApprovalStatus::Rejected,
+            tags: Vec::new(),
+        },
+    ];
+    let constraints = compile_canon_constraints(&assets);
+    let result = preflight_canon_constraints(&assets, &constraints, "test mission");
+
+    assert_eq!(
+        result.evidence_type_breakdown.approved_rule, 1,
+        "should count 1 approved rule"
+    );
+    assert_eq!(
+        result.evidence_type_breakdown.proposed_rule, 1,
+        "should count 1 proposed rule"
+    );
+    assert_eq!(
+        result.evidence_type_breakdown.raw_evidence, 1,
+        "should count 1 raw evidence (rejected)"
+    );
+}
+
+// ── P20: Extraction Eval Task ──
+
+#[test]
+fn eval_extraction_produces_proposed_world_assets() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        create_llm_proposal, parse_world_rules_from_markdown, ApprovalStatus, TypedWorldAsset,
+    };
+    let md = r#"# Test Rules
+
+## Section A
+- Rule one about detectives.
+- Rule two about evidence.
+
+## Section B
+- Rule three about suspects.
+"#;
+    let rules = parse_world_rules_from_markdown("test.md", md);
+    assert!(rules.len() >= 3, "should extract at least 3 rules");
+
+    let typed_assets: Vec<TypedWorldAsset> = rules.into_iter().map(TypedWorldAsset::Rule).collect();
+    let proposal = create_llm_proposal("ext-test", "test.md", typed_assets, 12345);
+
+    // Verify at least one WorldAsset::Rule
+    let proposed_rules: Vec<_> = proposal
+        .proposed_assets
+        .iter()
+        .filter_map(|a| match a {
+            TypedWorldAsset::Rule(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !proposed_rules.is_empty(),
+        "create_llm_proposal should produce at least one Rule asset"
+    );
+
+    // Verify all rules have Proposed approval_status
+    for rule in &proposed_rules {
+        assert_eq!(
+            rule.approval_status,
+            ApprovalStatus::Proposed,
+            "all LLM-extracted rules should be Proposed"
+        );
+        assert!(
+            !rule.source_ref.source_id.is_empty(),
+            "source_ref.source_id should not be empty"
+        );
+        assert!(
+            !rule.source_ref.excerpt.is_empty(),
+            "source_ref.excerpt should not be empty"
+        );
+        assert!(rule.confidence > 0.0, "confidence should be > 0");
+    }
+}
+
+#[test]
+fn eval_extraction_rejects_empty_markdown() {
+    use agent_writer_lib::writer_agent::world_bible::{
+        create_llm_proposal, parse_world_rules_from_markdown, TypedWorldAsset,
+    };
+    let rules = parse_world_rules_from_markdown("empty.md", "");
+    assert!(rules.is_empty(), "empty markdown should produce no rules");
+
+    let typed_assets: Vec<TypedWorldAsset> = rules.into_iter().map(TypedWorldAsset::Rule).collect();
+    let proposal = create_llm_proposal("ext-empty", "empty.md", typed_assets, 12345);
+    assert!(
+        proposal.proposed_assets.is_empty(),
+        "empty input should produce no assets"
     );
 }
 

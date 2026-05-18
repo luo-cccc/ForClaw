@@ -193,9 +193,7 @@ pub type ProviderCallGuard = Arc<dyn Fn(ProviderCallContext) -> Result<(), Strin
 
 /// Callback for writing durable checkpoints during plan execution.
 /// The host runtime supplies this to persist checkpoints to storage.
-pub type CheckpointWriter = Arc<
-    dyn Fn(&AgentCheckpoint) -> Result<(), String> + Send + Sync,
->;
+pub type CheckpointWriter = Arc<dyn Fn(&AgentCheckpoint) -> Result<(), String> + Send + Sync>;
 
 /// The core agent execution loop.
 /// Generic over Provider and ToolHandler — fully testable with mocks.
@@ -937,9 +935,12 @@ impl<P: Provider, H: ToolHandler> AgentLoop<P, H> {
                     if let Some(ref contract) = step.contract {
                         let mut missing_evidence: Vec<String> = Vec::new();
                         for required in &contract.success_evidence_required {
-                            let has_evidence = evidence
-                                .artifact_refs.iter().any(|a| a.contains(required))
-                                    || evidence.tool_executions.iter().any(|t| t.contains(required))
+                            let has_evidence =
+                                evidence.artifact_refs.iter().any(|a| a.contains(required))
+                                    || evidence
+                                        .tool_executions
+                                        .iter()
+                                        .any(|t| t.contains(required))
                                     || evidence.context_refs.iter().any(|c| c.contains(required));
                             if !has_evidence {
                                 missing_evidence.push(required.clone());

@@ -8,7 +8,7 @@ The repository is designed as a headless backend runtime. MCP clients and schedu
 
 ## Features
 
-- **MCP Server** — 86 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission`).
+- **MCP Server** — 91 tools over newline-delimited JSON-RPC 2.0 stdio. Structured error kind classification (`backend` | `validation` | `provider` | `permission` | `budget` | `context_overflow` | `storage`).
 - **Writer Agent Kernel** — Story ledger, proposals, typed operations, canon, promises, chapter missions, reader compensation, decision tracking, trace history.
 - **Chapter Generation Pipeline** — Context assembly → provider-budget checks → craft prompt injection → draft → quality evaluation → targeted revision → repair/compression → revision-safe save → settlement → artifact persistence.
 - **Writing Empowerment Engine** — 8-rule craft library, Prompt Compiler with scene-type inference, SceneCraftPlan artifact generation, 8-metric ChapterQualityReport with evidence gating, targeted revision with before/after quality comparison.
@@ -33,7 +33,7 @@ agent-writer-backend/     Forge writer backend — HeadlessBackend, chapter gene
                            memory (canon, promises, craft feedback), brain service,
                            supervised sprint, storage
 forge-agent-mcp/          MCP stdio server — main.rs (JSON-RPC core), dispatch.rs
-                           (tool dispatch), tools.rs (86 tool definitions), smoke tests
+                           (tool dispatch), tools.rs (91 tool definitions), smoke tests
 plugins/forge-writer-agent/ Codex plugin bundle and skill metadata
 scripts/                  Windows launchers and eval runner
 docs/                     Protocol contract (CONTEXT_CONTRACT.md), design specs, plans
@@ -101,20 +101,22 @@ Use `initialize`, then `tools/list`, then `tools/call` from an MCP client. `forg
 
 ### Tool Categories
 
-86 MCP tools across 12 categories:
+91 MCP tools across 13 categories:
 
 | Category | Tools |
 |----------|-------|
 | Protocol/project | `forge_manifest`, `forge_project_manifest`, `forge_project_paths` |
-| Agent/kernel | `forge_ask_agent`, `forge_agent_tools`, `forge_agent_kernel_status`, `forge_agent_domain_profile`, `forge_status` |
+| Agent/kernel | `forge_ask_agent`, `forge_agent_tools`, `forge_effective_tool_inventory`, `forge_agent_kernel_status`, `forge_agent_domain_profile`, `forge_status` |
 | Chapters/generation | `forge_list_chapters`, `forge_create_chapter`, `forge_load_chapter`, `forge_save_chapter`, `forge_chapter_revision`, `forge_rename_chapter_file`, `forge_generate_chapter_autonomous`, `forge_batch_generate_chapter`, `forge_repair_chapter_state` |
+| Generation resume | `forge_latest_chapter_generation_checkpoint`, `forge_chapter_generation_resume_candidates`, `forge_resume_chapter_generation` |
 | Lore/outline/book | `forge_lorebook`, `forge_save_lore_entry`, `forge_delete_lore_entry`, `forge_outline`, `forge_save_outline_node`, `forge_delete_outline_node`, `forge_update_outline_status`, `forge_reorder_outline_nodes`, `forge_list_volumes`, `forge_save_volume`, `forge_delete_volume`, `forge_get_volume_snapshot`, `forge_save_volume_snapshot`, `forge_get_book_state`, `forge_save_book_state` |
 | Writer memory | `forge_observe`, `forge_ledger`, `forge_today_five`, `forge_pending_proposals`, `forge_story_review_queue`, `forge_story_debt`, `forge_reader_compensation_review_chain`, `forge_trace`, `forge_inspector_timeline`, `forge_companion_timeline_summary` |
 | Proposals/operations | `forge_apply_feedback`, `forge_record_implicit_ghost_rejection`, `forge_approve_writer_operation`, `forge_record_writer_operation_durable_save`, `forge_ambient_entity_hints` |
 | Model-backed helpers | `forge_analyze_chapter`, `forge_generate_parallel_drafts`, `forge_analyze_pacing`, `forge_ask_project_brain`, `forge_run_metacognitive_recovery` |
 | Project Brain | `forge_project_brain_knowledge_graph`, `forge_compare_project_brain_source_revisions`, `forge_restore_project_brain_source_revision`, `forge_cross_reference_brain_nodes`, `forge_ingest_external_research` |
 | Supervised sprint | `forge_start_sprint`, `forge_sprint_plan`, `forge_sprint_progress`, `forge_pause_sprint`, `forge_resume_sprint`, `forge_cancel_sprint`, `forge_checkpoint_sprint`, `forge_record_sprint_budget_usage`, `forge_set_sprint_quality_gate` |
-| Quality & craft (new) | `forge_craft_library`, `forge_craft_memory_stats`, `forge_eval_trend_summary`, `forge_chapter_quality_report`, `forge_context_quality_report`, `forge_budget_calibration`, `forge_execution_plan` |
+| Quality & craft | `forge_craft_library`, `forge_craft_memory_stats`, `forge_eval_trend_summary`, `forge_record_manual_craft_edit_feedback`, `forge_chapter_quality_report`, `forge_context_quality_report`, `forge_budget_calibration`, `forge_execution_plan` |
+| World bible | `forge_list_world_assets`, `forge_approve_world_asset`, `forge_reject_world_asset`, `forge_world_bible_constraint_query` |
 | Diagnostics | `forge_project_graph_data`, `forge_project_storage_diagnostics`, `forge_export_writer_agent_trajectory`, `forge_export_diagnostic_logs`, `forge_list_file_backups`, `forge_restore_file_backup` |
 | Settings | `forge_set_api_key`, `forge_check_api_key` |
 
@@ -130,7 +132,7 @@ All `tools/call` responses use the stable Forge envelope in `result.structuredCo
 }
 ```
 
-Backend failures return `ok: false` with `error.kind` (`backend` | `validation` | `provider` | `permission`) and `error.message`. JSON-RPC parse, invalid request, and unknown method failures use standard JSON-RPC error responses.
+Backend failures return `ok: false` with `error.kind` (`backend` | `validation` | `provider` | `permission` | `budget` | `context_overflow` | `storage`) and `error.message`. JSON-RPC parse, invalid request, and unknown method failures use standard JSON-RPC error responses.
 
 For caller context requirements, budget approval rules, revision safety, error classification, quality pipeline details, and write-sensitive scheduling, see [docs/CONTEXT_CONTRACT.md](docs/CONTEXT_CONTRACT.md).
 
@@ -139,7 +141,7 @@ For caller context requirements, budget approval rules, revision safety, error c
 ### Crate Map
 
 ```
-agent-harness-core (122 tests)
+agent-harness-core (239 tests)
 ├── AgentLoop (run + run_with_plan with plan/step events)
 ├── ExecutionPlan (compile_plan, Stop/Retry/Skip)
 ├── Intent Router (weighted scoring + confidence + fallback)
@@ -151,7 +153,7 @@ agent-harness-core (122 tests)
 ├── VectorDB (BM25 + cosine hybrid search)
 └── Provider (OpenAI-compat streaming + retry)
 
-agent-writer-backend (273 tests)
+agent-writer-backend (396 lib tests + 39 eval tests)
 ├── HeadlessBackend (all MCP action dispatch)
 ├── Chapter Generation Pipeline
 │   ├── Context assembly (async, parallelization-ready)
@@ -165,11 +167,11 @@ agent-writer-backend (273 tests)
 ├── Brain Service (embedding, retrieval, graph)
 └── Storage (SQLite project persistence)
 
-forge-agent-mcp (20 tests + 6 smoke)
+forge-agent-mcp (14 unit tests + 7 smoke tests)
 ├── main.rs (JSON-RPC core, 627 lines)
 ├── dispatch.rs (call_tool + call_backend_action, 320 lines)
-├── tools.rs (86 tool definitions, 1034 lines)
-└── smoke_test.rs (6 process-level integration tests)
+├── tools.rs (91 tool definitions, 1034 lines)
+└── smoke_test.rs (7 process-level integration tests)
 ```
 
 ## Development
@@ -186,10 +188,10 @@ cargo test --workspace
 Individual crate checks:
 
 ```powershell
-cargo test -p agent-harness-core        # 122 tests
-cargo test -p agent-writer --lib        # 273 tests
-cargo test -p agent-writer --test writing_eval_test  # 19 eval tests
-cargo test -p forge-agent-mcp           # 14 unit + 6 smoke
+cargo test -p agent-harness-core        # 239 tests
+cargo test -p agent-writer --lib        # 396 lib tests
+cargo test -p agent-writer --test writing_eval_test  # 39 eval tests
+cargo test -p forge-agent-mcp           # 14 unit + 7 smoke
 ```
 
 The headless path does not require Tauri config, icons, generated desktop schemas, renderer assets, or desktop runtime dependencies.

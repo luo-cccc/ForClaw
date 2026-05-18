@@ -72,7 +72,7 @@ pub fn evaluate_chapter_quality_with_signals(
         metric_plot_progression(chapter_text),
         metric_new_information_density(chapter_text, &signals.prior_chapter_summaries),
         metric_state_delta_coverage(chapter_text, &signals.required_state_deltas),
-        metric_world_consistency(chapter_text, signals.scene_contract.as_ref(), &signals.world_assets, &signals.canon_constraints),
+        metric_world_consistency(chapter_text, signals.scene_contract.as_ref(), &signals.world_assets, &signals.canon_constraints, &signals.prior_chapter_summaries),
         metric_term_misuse(chapter_text, &signals.canon_terms),
     ];
 
@@ -127,7 +127,12 @@ pub fn evaluate_chapter_quality_with_signals(
     let no_fatal_issue = fatal_issues.is_empty();
 
     let world_consistency_violations = if let Some(contract) = signals.scene_contract.as_ref() {
-        crate::writer_agent::world_bible::validate_world_consistency(chapter_text, contract, &signals.world_assets)
+        crate::writer_agent::world_bible::validate_world_consistency(
+            chapter_text,
+            contract,
+            &signals.world_assets,
+            &signals.prior_chapter_summaries,
+        )
     } else {
         Vec::new()
     };
@@ -921,6 +926,7 @@ fn metric_world_consistency(
     scene_contract: Option<&crate::writer_agent::world_bible::SceneContract>,
     world_assets: &[crate::writer_agent::world_bible::WorldAsset],
     canon_constraints: &[crate::writer_agent::world_bible::CanonConstraint],
+    prior_summaries: &[String],
 ) -> QualityMetricResult {
     let Some(contract) = scene_contract else {
         return gated_metric(
@@ -948,6 +954,7 @@ fn metric_world_consistency(
         text,
         &effective_contract,
         world_assets,
+        prior_summaries,
     );
     if violations.is_empty() {
         return gated_metric(
@@ -2253,7 +2260,7 @@ mod craft_quality_tests {
             approval_status: ApprovalStatus::Approved,
             tags: vec!["散修".to_string(), "上古封印".to_string()],
         }];
-        let result = metric_world_consistency(text, Some(&contract), &assets, &[]);
+        let result = metric_world_consistency(text, Some(&contract), &assets, &[], &[]);
 
         assert!(result.score < 1.0, "hierarchy violation should reduce score, got {}", result.score);
         assert!(
@@ -2305,7 +2312,7 @@ mod craft_quality_tests {
             approval_status: ApprovalStatus::Approved,
             tags: vec!["召唤远古邪神".to_string()],
         }];
-        let result = metric_world_consistency(text, Some(&contract), &assets, &[]);
+        let result = metric_world_consistency(text, Some(&contract), &assets, &[], &[]);
 
         assert!(result.score < 1.0, "forbidden action should reduce score, got {}", result.score);
         assert!(
@@ -2342,7 +2349,7 @@ mod craft_quality_tests {
             expected_consequence: "封印反噬".to_string(),
         };
         let contract = make_scene_contract_with_constraints(vec![hierarchy_constraint]);
-        let result = metric_world_consistency(text, Some(&contract), &[], &[]);
+        let result = metric_world_consistency(text, Some(&contract), &[], &[], &[]);
 
         assert_eq!(result.score, 1.0, "no violation should yield perfect score");
         assert!(
@@ -2391,7 +2398,7 @@ mod craft_quality_tests {
         let contract = make_scene_contract_with_constraints(Vec::new());
 
         // When canon_constraints are provided directly, they take priority
-        let result = metric_world_consistency(text, Some(&contract), &assets, &canon_constraints);
+        let result = metric_world_consistency(text, Some(&contract), &assets, &canon_constraints, &[]);
 
         assert!(result.score < 1.0, "violation should be detected via canon_constraints, got score={}", result.score);
         assert!(
@@ -2486,5 +2493,74 @@ mod craft_quality_tests {
         let result = metric_new_information_density(text, &prior);
         // High repetition → low new info density
         assert!(result.score < 0.5, "high repetition should yield low new_information_density, got {}", result.score);
+    }
+
+    // ──── P17: New information density bound to world consistency ────
+
+    #[test]
+    fn strict_mode_warns_low_information_density() {
+        let prior = vec!["林墨在茶馆遇到了张三。".to_string()];
+        // 90% recap text — almost all words appear in prior summary
+        let text = "林墨在茶馆遇到了张三。林墨在茶馆遇到了张三。林墨在茶馆遇到了张三。";
+
+        let contract = crate::writer_agent::world_bible::SceneContract {
+            chapter_id: "ch1".to_string(),
+            mission: "test".to_string(),
+            required_facts: Vec::new(),
+            active_constraints: Vec::new(),
+            required_state_deltas: Vec::new(),
+            allowed_reveals: Vec::new(),
+            blocked_reveals: Vec::new(),
+            evidence_refs: Vec::new(),
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
+        };
+        let violations = crate::writer_agent::world_bible::validate_world_consistency(
+            text, &contract, &[], &prior,
+        );
+        let nid_violation = violations.iter().find(|v| v.constraint_id == "LOW_INFORMATION_DENSITY");
+        assert!(
+            nid_violation.is_some(),
+            "low information density should produce LOW_INFORMATION_DENSITY violation, got: {:?}",
+            violations
+        );
+        if let Some(v) = nid_violation {
+            assert!(
+                matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Warning),
+                "LOW_INFORMATION_DENSITY should have Warning severity"
+            );
+            assert!(v.message.contains("0."), "violation message should contain score");
+        }
+    }
+
+    #[test]
+    fn balanced_mode_does_not_block_on_low_information_density() {
+        let prior = vec!["林墨在茶馆遇到了张三。".to_string()];
+        let text = "林墨在茶馆遇到了张三。林墨在茶馆遇到了张三。林墨在茶馆遇到了张三。";
+
+        let contract = crate::writer_agent::world_bible::SceneContract {
+            chapter_id: "ch1".to_string(),
+            mission: "test".to_string(),
+            required_facts: Vec::new(),
+            active_constraints: Vec::new(),
+            required_state_deltas: Vec::new(),
+            allowed_reveals: Vec::new(),
+            blocked_reveals: Vec::new(),
+            evidence_refs: Vec::new(),
+            continuity_anchors: Vec::new(),
+            required_costs: Vec::new(),
+        };
+        let violations = crate::writer_agent::world_bible::validate_world_consistency(
+            text, &contract, &[], &prior,
+        );
+        let nid_violation = violations.iter().find(|v| v.constraint_id == "LOW_INFORMATION_DENSITY");
+        // The violation should exist (as a Warning) but not block in balanced mode
+        assert!(nid_violation.is_some(), "violation should be produced for observability");
+        if let Some(v) = nid_violation {
+            assert!(
+                !matches!(v.severity, crate::writer_agent::world_bible::ConstraintSeverity::Hard),
+                "LOW_INFORMATION_DENSITY should never be Hard"
+            );
+        }
     }
 }

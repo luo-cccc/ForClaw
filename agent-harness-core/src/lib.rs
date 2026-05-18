@@ -34,6 +34,7 @@ pub use context_pack::{
     ContextPacker, ContextSourceReport, PackedContext, TAXONOMY_AUTHOR_VOICE, TAXONOMY_CANON,
     TAXONOMY_INSTRUCTION, TAXONOMY_LORE, TAXONOMY_MEMORY, TAXONOMY_OUTLINE, TAXONOMY_PRIOR_CHAPTER,
     TAXONOMY_PROJECT_BRAIN, TAXONOMY_PROMISE, TAXONOMY_SCENE_PLAN, TAXONOMY_UNKNOWN,
+    TAXONOMY_WORLD_APPROVED_RULE, TAXONOMY_WORLD_PROPOSED_RULE, TAXONOMY_WORLD_RAW_EVIDENCE,
 };
 pub use context_quality::{
     evaluate_context_quality, ContextQualityRecommendation, ContextQualityReport,
@@ -50,10 +51,10 @@ pub use execution_plan::{
 pub use permission::{PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule};
 pub use prompt_cache::{PromptCache, PromptCacheConfig, PromptCacheStats};
 pub use recovery::{
-    classify_failure, classify_failure_kind, map_failure_to_recovery, redact_sensitive,
-    FailureBundle, FailureKind, FailureRemediation, RecoveryAction, RecoveryBundle, RecoveryContext,
-    RecoveryDecision, RetryParams, RuntimeCallRecord, RuntimeCallStatus, RuntimeCallType,
-    parse_failure_remediation,
+    classify_failure, classify_failure_kind, map_failure_to_recovery, parse_failure_remediation,
+    redact_sensitive, FailureBundle, FailureKind, FailureRemediation, RecoveryAction,
+    RecoveryBundle, RecoveryContext, RecoveryDecision, RetryParams, RuntimeCallRecord,
+    RuntimeCallStatus, RuntimeCallType,
 };
 pub use router::{
     classify_intent, classify_intent_simple, ClassificationSource, Intent, IntentClassification,
@@ -68,8 +69,8 @@ pub use task_packet::{
     TaskPacketValidationError, TaskScope, ToolPolicyContract,
 };
 pub use tool_executor::{
-    ApprovalContext, DoomLoopDetector, ToolExecution, ToolExecutionAuditEvent, ToolExecutionAuditSink,
-    ToolExecutionRemediation, ToolExecutor, ToolHandler, redact_tool_input,
+    redact_tool_input, ApprovalContext, DoomLoopDetector, ToolExecution, ToolExecutionAuditEvent,
+    ToolExecutionAuditSink, ToolExecutionRemediation, ToolExecutor, ToolHandler,
 };
 pub use tool_registry::{
     default_writing_tool_registry, EffectiveToolEntry, EffectiveToolInventory, EffectiveToolStatus,

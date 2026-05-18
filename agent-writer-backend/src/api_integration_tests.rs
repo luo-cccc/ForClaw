@@ -817,12 +817,25 @@ async fn real_author_session_thirty_chapter_gate() {
     let mut state_delta_missing = 0usize;
     for report in &chapter_reports {
         let ch = report["chapter"].as_u64().unwrap_or(0) as usize;
-        let draft_text = drafts.get(ch.saturating_sub(1)).map(|s| s.as_str()).unwrap_or("");
+        let draft_text = drafts
+            .get(ch.saturating_sub(1))
+            .map(|s| s.as_str())
+            .unwrap_or("");
         // Heuristic: count state-change markers in draft text
-        let has_state_change = ["发现", "知道", "变成", "失去", "得到", "改变", "意识到", "决定"]
-            .iter()
-            .any(|marker| draft_text.contains(marker));
-        let has_transition = draft_text.contains("->") || draft_text.contains("不再") || draft_text.contains("已经");
+        let has_state_change = [
+            "发现",
+            "知道",
+            "变成",
+            "失去",
+            "得到",
+            "改变",
+            "意识到",
+            "决定",
+        ]
+        .iter()
+        .any(|marker| draft_text.contains(marker));
+        let has_transition =
+            draft_text.contains("->") || draft_text.contains("不再") || draft_text.contains("已经");
         if has_state_change && has_transition {
             state_delta_covered += 1;
         } else if has_state_change || has_transition {
